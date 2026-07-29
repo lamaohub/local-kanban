@@ -1,0 +1,285 @@
+#!/usr/bin/env node
+// kb — the token-efficient CLI for the kanban board (localhost:3100).
+// Tasks are addressed by key (TIC-3) or by global id. One line of output per action.
+
+const BASE = process.env.KB_URL || 'http://127.0.0.1:3100';
+const PRI = { 0: '', 1: 'p1', 2: 'p2', 3: 'p3' };
+const PRI_BY_NAME = { none: 0, low: 1, med: 2, medium: 2, high: 3, p0: 0, p1: 1, p2: 2, p3: 3 };
+const ST_ALIAS = {
+  b: 'backlog', backlog: 'backlog', t: 'todo', todo: 'todo',
+  pp: 'prep', prep: 'prep', d: 'doing', doing: 'doing',
+  dp: 'deploy', deploy: 'deploy', r: 'review', review: 'review', dn: 'done', done: 'done',
+  c: 'cancelled', cancelled: 'cancelled', cancel: 'cancelled',
+};
+
+// Exit codes are a contract for automation (scripts gate their moves on them):
+// 0 — success, 1 — the board is not responding, 2 — the request was rejected (4xx or an
+// unknown command), 3 — kb itself broke. Previously an exception exited with 1 as well,
+// so "the board is down" was indistinguishable from "kb is broken".
+const EXIT = { DOWN: 1, REJECTED: 2, INTERNAL: 3 };
+
+function die(msg, code = EXIT.REJECTED) { process.stderr.write(msg + '\n'); process.exit(code); }
+
+async function api(method, path, body) {
+  let res;
+  try {
+    res = await fetch(BASE + path, {
+      method,
+      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    die('kb: board is not responding — pm2 restart kanban', EXIT.DOWN);
+  }
+  if (res.status === 204) return null;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) die(`kb: ${data.error || res.status}`);
+  return data;
+}
+
+function taskLine(t) {
+  const flags = [t.blocked ? '!' : '', PRI[t.priority] || ''].filter(Boolean).join(' ');
+  const labels = (t.labels || []).length ? ` [${t.labels.join(',')}]` : '';
+  return `${t.key} ${t.status}${flags ? ' ' + flags : ''} ${t.title}${labels}`;
+}
+
+const [cmd, ...args] = process.argv.slice(2);
+
+const commands = {
+  async p() {
+    const ps = await api('GET', '/api/projects');
+    if (!ps.length) return console.log('no projects');
+    for (const p of ps) {
+      console.log(`${p.slug} (${p.prefix}) b${p.c_backlog || 0} t${p.c_todo || 0} pp${p.c_prep || 0} d${p.c_doing || 0} dp${p.c_deploy || 0} r${p.c_review || 0} ✓${p.c_done || 0}${p.c_blocked ? ` !${p.c_blocked}` : ''}`);
+    }
+  },
+
+  async ls() {
+    const [proj] = args.filter((a) => !a.startsWith('-'));
+    if (!proj) die('kb ls <project> [-s status] [-a]');
+    const si = args.indexOf('-s');
+    const q = new URLSearchParams({ project: proj });
+    if (si >= 0) q.set('status', ST_ALIAS[args[si + 1]] || args[si + 1]);
+    if (args.includes('-a')) q.set('all', '1');
+    const ts = await api('GET', `/api/tasks?${q}`);
+    if (!ts.length) return console.log('empty');
+    for (const t of ts) console.log(taskLine(t));
+  },
+
+  async next() {
+    const [proj] = args;
+    if (!proj) die('kb next <project>');
+    const ts = await api('GET', `/api/tasks?${new URLSearchParams({ project: proj, status: 'todo' })}`);
+    const free = ts.filter((t) => !t.blocked);
+    console.log(free.length ? taskLine(free[0]) : 'empty');
+  },
+
+  // take the next task and put it straight into prep (study before code); prints the last
+  // comment from the human (notes from a send-back). Writing code → kb mv <key> doing.
+  async take() {
+    const [proj] = args;
+    if (!proj) die('kb take <project>');
+    const ts = await api('GET', `/api/tasks?${new URLSearchParams({ project: proj, status: 'todo' })}`);
+    const free = ts.filter((t) => !t.blocked);
+    if (!free.length) return console.log('empty');
+    const t = await api('PATCH', `/api/tasks/${free[0].id}`, { status: 'prep' });
+    console.log(taskLine({ ...t, labels: t.labels }));
+    if (t.description) console.log(t.description);
+    if (t.gh_issue_number) console.log(`issue: ${t.gh_issue_number}`);
+    const atts = await api('GET', `/api/tasks/${t.id}/attachments`);
+    for (const a of atts) console.log(`📎 screenshot (open it with Read): ${a.path}`);
+    const cs = await api('GET', `/api/tasks/${t.id}/comments`);
+    const lastHuman = cs.filter((c) => c.author === 'me' && c.body).pop();
+    if (lastHuman) console.log(`> 👤 ${lastHuman.body}`);
+    // comments often carry corrections — print the paths of the latest images so they get opened
+    for (const c of cs.filter((c) => c.image_path).slice(-3)) console.log(`📎 image from a comment (open it with Read): ${c.image_path}`);
+  },
+
+  // leave a note and move to review in one command
+  async review() {
+    const [id, note] = args;
+    if (!id || !note) die('kb review <key> "note"');
+    await api('POST', `/api/tasks/${id}/comments`, { body: note, author: 'claude' });
+    const t = await api('PATCH', `/api/tasks/${id}`, { status: 'review' });
+    console.log(`${t.key} review 📝`);
+  },
+
+  async show() {
+    const [id] = args;
+    if (!id) die('kb show <key>');
+    const t = await api('GET', `/api/tasks/${id}`);
+    console.log(`${t.key} ${t.project} ${t.status}${t.blocked ? ` blocked: ${t.blocked_reason || ''}` : ''}${PRI[t.priority] ? ' ' + PRI[t.priority] : ''}${t.labels.length ? ' [' + t.labels.join(',') + ']' : ''}`);
+    console.log(t.title);
+    if (t.description) console.log(t.description);
+    if (t.gh_issue_url) console.log(`issue: ${t.gh_issue_url}`);
+    for (const a of (t.attachments || [])) console.log(`📎 screenshot (open it with Read): ${a.path}`);
+    const cs = await api('GET', `/api/tasks/${id}/comments`);
+    for (const c of cs.slice(-5)) {
+      if (c.body) console.log(`> ${c.author === 'claude' ? '🤖' : '👤'} ${c.body}`);
+      if (c.image_path) console.log(`📎 image from a comment (open it with Read): ${c.image_path}`);
+    }
+  },
+
+  async add() {
+    const flagVals = new Set();
+    ['-d', '-p', '-s'].forEach((f) => { const i = args.indexOf(f); if (i >= 0) flagVals.add(i + 1); });
+    const pos = args.filter((a, i) => !a.startsWith('-') && !flagVals.has(i));
+    const [proj, title] = pos;
+    if (!proj || !title) die('kb add <project> "title" [-d "description"] [-p high|med|low] [-s todo]');
+    const di = args.indexOf('-d');
+    const pi = args.indexOf('-p');
+    const si = args.indexOf('-s');
+    const body = { project: proj, title };
+    if (di >= 0) body.description = args[di + 1] || '';
+    if (pi >= 0) {
+      const pr = PRI_BY_NAME[args[pi + 1]];
+      if (pr === undefined) die('kb: priority high|med|low|none');
+      body.priority = pr;
+    }
+    if (si >= 0) {
+      body.status = ST_ALIAS[args[si + 1]];
+      if (!body.status) die('kb: status backlog|todo|prep|doing|deploy|review|done');
+    }
+    const t = await api('POST', '/api/tasks', body);
+    console.log(`${t.key} ${t.status} ${t.project}`);
+  },
+
+  async mv() {
+    const [id, st] = args;
+    const status = ST_ALIAS[st];
+    if (!id || !status) die('kb mv <key> backlog|todo|prep|doing|deploy|review|done|cancelled');
+    const t = await api('PATCH', `/api/tasks/${id}`, { status });
+    console.log(`${t.key} ${t.status}`);
+  },
+
+  async done() {
+    const [id] = args;
+    if (!id) die('kb done <key>');
+    const t = await api('PATCH', `/api/tasks/${id}`, { status: 'done' });
+    console.log(`${t.key} done`);
+  },
+
+  async cancel() {
+    const [id] = args;
+    if (!id) die('kb cancel <key>');
+    const t = await api('PATCH', `/api/tasks/${id}`, { status: 'cancelled' });
+    console.log(`${t.key} cancelled`);
+  },
+
+  async pri() {
+    const [id, p] = args;
+    const pr = PRI_BY_NAME[p];
+    if (!id || pr === undefined) die('kb pri <key> high|med|low|none');
+    const t = await api('PATCH', `/api/tasks/${id}`, { priority: pr });
+    console.log(`${t.key} ${PRI[t.priority] || 'p0'}`);
+  },
+
+  async lbl() {
+    const [id, ...ops] = args;
+    if (!id || !ops.length) die('kb lbl <key> +bug -ui  (+ to add, - to remove)');
+    const t = await api('GET', `/api/tasks/${id}`);
+    const labels = new Set(t.labels);
+    for (const op of ops) {
+      if (op.startsWith('+')) labels.add(op.slice(1));
+      else if (op.startsWith('-')) labels.delete(op.slice(1));
+    }
+    const fresh = await api('PATCH', `/api/tasks/${id}`, { labels: [...labels] });
+    console.log(`${fresh.key} [${fresh.labels.join(',')}]`);
+  },
+
+  async desc() {
+    const [id, text] = args;
+    if (!id || text === undefined) die('kb desc <key> "description"  (set or overwrite the description)');
+    const t = await api('PATCH', `/api/tasks/${id}`, { description: text });
+    console.log(`${t.key} 📝 description updated`);
+  },
+
+  async note() {
+    const [id, body] = args;
+    if (!id || !body) die('kb note <key> "text"');
+    await api('POST', `/api/tasks/${id}/comments`, { body, author: 'claude' });
+    const t = await api('GET', `/api/tasks/${id}`);
+    console.log(`${t.key} 📝`);
+  },
+
+  async link() {
+    const [id, other] = args;
+    if (!id || !other) die('kb link <key> <key>  (link two tasks)');
+    const links = await api('POST', `/api/tasks/${id}/links`, { key: other });
+    console.log(`${id} ↔ ${links.map((l) => l.key).join(', ') || '—'}`);
+  },
+
+  async unlink() {
+    const [id, other] = args;
+    if (!id || !other) die('kb unlink <key> <key>');
+    const links = await api('DELETE', `/api/tasks/${id}/links/${other}`);
+    console.log(`${id} ↔ ${links.map((l) => l.key).join(', ') || '—'}`);
+  },
+
+  async block() {
+    const [id, reason] = args;
+    if (!id) die('kb block <key> ["reason"]');
+    const t = await api('PATCH', `/api/tasks/${id}`, { blocked: true, blocked_reason: reason || '' });
+    console.log(`${t.key} blocked${t.blocked_reason ? ': ' + t.blocked_reason : ''}`);
+  },
+
+  async unblock() {
+    const [id] = args;
+    if (!id) die('kb unblock <key>');
+    const t = await api('PATCH', `/api/tasks/${id}`, { blocked: false });
+    console.log(`${t.key} unblocked`);
+  },
+
+  async rm() {
+    const [id] = args;
+    if (!id) die('kb rm <key>');
+    await api('DELETE', `/api/tasks/${id}`);
+    console.log(`${id} deleted`);
+  },
+
+  async info() {
+    const [proj] = args;
+    if (!proj) die('kb info <project>');
+    const p = await api('GET', `/api/projects/${proj}`);
+    const out = [`${p.slug} (${p.prefix}): ${p.name}`];
+    if (p.path) out.push(`path: ${p.path}`);
+    if (p.deploy_skill) out.push(`deploy_skill: ${p.deploy_skill}${p.deploy_skill_path ? ` (${p.deploy_skill_path})` : ''}`);
+    if (p.server) out.push(`server: ${p.server}${p.server_path ? ':' + p.server_path : ''}`);
+    if (p.pm2_services) out.push(`pm2: ${JSON.parse(p.pm2_services).join(', ')}`);
+    if (p.domain) out.push(`domain: ${p.domain}`);
+    console.log(out.join('\n'));
+  },
+
+  async svc() {
+    const [proj] = args;
+    if (!proj) die('kb svc <project>');
+    const list = await api('GET', `/api/projects/${proj}/status`);
+    for (const s of list) {
+      if (s.status === 'not found') { console.log(`${s.name}: not found in pm2`); continue; }
+      console.log(`${s.name}: ${s.status} | up ${s.uptime_h}h | rst ${s.restarts} | ${s.mem_mb}MB | cpu ${s.cpu}%`);
+    }
+  },
+
+  async sync() {
+    const s = await api('GET', '/api/sync');
+    if (s.configured === false) { console.log('sync is off (local-only) — set owner/repo in the board settings or via KB_GH_OWNER/KB_GH_REPO'); return; }
+    let line = `queue:${s.pending}`;
+    if (s.failed.length) line += ` failed:${s.failed.length} (${s.failed[0].op}: ${(s.failed[0].last_error || '').slice(0, 80)})`;
+    if (s.gh === false) line += ' [gh unavailable: gh auth login && gh auth refresh -s project]';
+    console.log(line);
+  },
+
+  async retry() {
+    await api('POST', '/api/sync/retry');
+    console.log('ok');
+  },
+};
+
+if (!cmd || !commands[cmd]) {
+  die('kb p|ls|next|take|show|add|mv|review|done|cancel|pri|lbl|desc|note|link|unlink|block|unblock|rm|info|svc|sync|retry');
+}
+commands[cmd]().catch((e) => {
+  // die() inside a command already exited the process — only real exceptions reach here.
+  if (process.env.KB_DEBUG) process.stderr.write((e && e.stack) || String(e));
+  die(`kb: internal error — ${(e && e.message) || e} (stack trace: KB_DEBUG=1)`, EXIT.INTERNAL);
+});

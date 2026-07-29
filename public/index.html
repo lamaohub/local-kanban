@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en" class="booting">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kanban</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#e8704e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Kanban">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+<link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png">
+<link rel="apple-touch-icon" href="/favicon-180.png">
+<link rel="stylesheet" href="/style.css">
+<script src="/boot-fallback.js"></script>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-head">Projects</div>
+    <div id="projects"><div class="boot-side" aria-hidden="true">
+      <span class="boot-line"></span><span class="boot-line short"></span>
+      <span class="boot-line"></span><span class="boot-line short"></span>
+      <span class="boot-line"></span>
+    </div></div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="topbar-left">
+        <h1 id="project-title">—</h1>
+        <button id="project-menu" class="btn-icon" title="Project settings">⋯</button>
+        <span id="project-meta" class="muted"></span>
+      </div>
+      <div class="topbar-right">
+        <span id="week-stats" class="muted" title="Done in the last 7 days"></span>
+        <button id="sound-badge" class="sound-badge hidden" title="The browser blocked sound until the first click — click to enable">sound off</button>
+        <span id="sync-badge" class="sync-badge" title="GitHub sync queue"></span>
+      </div>
+    </header>
+    <div id="toolbar" class="toolbar">
+      <input id="search" class="search" placeholder="Search tasks…">
+      <button id="new-task" class="btn-primary">New task +</button>
+    </div>
+    <div id="board" class="board"></div>
+    <svg id="link-lines" class="link-lines" aria-hidden="true"></svg>
+    <div id="dashboard" class="dashboard hidden"></div>
+    <div id="settings" class="settings hidden"></div>
+    <div id="horizon" class="horizon-view hidden"></div>
+    <div id="calendar" class="calendar-view hidden"></div>
+    <div id="chaos" class="chaos-view hidden"></div>
+
+    <div id="boot" class="boot" aria-hidden="true">
+      <div class="boot-col"><span class="boot-head"></span>
+        <div class="boot-card"><span class="boot-line"></span><span class="boot-line short"></span></div>
+        <div class="boot-card"><span class="boot-line"></span></div>
+        <div class="boot-card"><span class="boot-line"></span><span class="boot-line short"></span></div>
+      </div>
+      <div class="boot-col"><span class="boot-head"></span>
+        <div class="boot-card"><span class="boot-line"></span></div>
+        <div class="boot-card"><span class="boot-line"></span><span class="boot-line short"></span></div>
+      </div>
+      <div class="boot-col"><span class="boot-head"></span>
+        <div class="boot-card"><span class="boot-line"></span><span class="boot-line short"></span></div>
+      </div>
+      <div class="boot-col"><span class="boot-head"></span>
+        <div class="boot-card"><span class="boot-line"></span></div>
+        <div class="boot-card"><span class="boot-line"></span><span class="boot-line short"></span></div>
+      </div>
+    </div>
+  </main>
+
+  <aside id="drawer" class="drawer hidden">
+    <div class="drawer-head">
+      <span id="drawer-id" class="drawer-key"></span>
+      <div class="drawer-head-actions">
+        <button id="d-return-icon" class="btn-icon hidden" title="Return to work">↩</button>
+        <button id="drawer-menu" class="btn-icon hidden" title="Card actions">⋯</button>
+        <button id="drawer-close" class="btn-icon" title="Close">✕</button>
+      </div>
+    </div>
+
+    <div id="drawer-empty" class="drawer-empty">Select a task — details will show up here</div>
+
+    <div id="drawer-multi" class="drawer-multi"></div>
+
+    <div id="drawer-content">
+      <div id="d-lock-note" class="lock-note hidden">Claude is working on this task — fields are locked, comments are open</div>
+
+      <div class="chip-row">
+        <div class="kbsel chip-sel hidden" id="d-project"></div>
+        <div class="kbsel chip-sel" id="d-status"></div>
+        <div class="kbsel chip-sel" id="d-priority"></div>
+      </div>
+
+      <div class="meta-row">
+        <div id="d-labels" class="labels-row"></div>
+        <div id="d-links" class="links-row hidden"></div>
+      </div>
+
+      <textarea id="d-title" class="d-title" rows="1" placeholder="Task title"></textarea>
+      <div class="desc-wrap">
+        <textarea id="d-desc" class="d-desc" placeholder="Description…"></textarea>
+        <button id="d-checklist-add" class="desc-menu-btn" title="Add checklist item" aria-label="Add checklist item">
+          <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none"/></svg>
+        </button>
+      </div>
+
+      <div id="d-checklist" class="checklist hidden"></div>
+
+      <div id="d-attachments" class="attachments hidden"></div>
+
+      <div class="d-row" id="d-issue-row"></div>
+
+      <div id="d-timeline" class="timeline hidden"></div>
+
+      <div id="d-return" class="return-block hidden">
+        <button id="d-accept-btn" class="btn-accept hidden">✓ Accept task</button>
+      </div>
+
+      <div class="comments" id="comments-block">
+        <div id="comments"></div>
+        <div class="comment-form">
+          <textarea id="c-input" placeholder="Comment…" rows="1" autocomplete="off"></textarea>
+          <button id="c-send" class="btn-primary">↑</button>
+        </div>
+      </div>
+    </div>
+  </aside>
+</div>
+<script src="/drawer-sync.js"></script>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

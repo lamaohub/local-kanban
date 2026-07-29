@@ -1,0 +1,193 @@
+#!/usr/bin/env node
+// The install and setup wizard. `npx local-kanban` is the only command a newcomer needs to
+// know: Enter-Enter-Enter and the board is running on http://localhost:3100.
+// Principles:
+//  - zero dependencies (the project has three in total; pulling in a prompts library for a
+//    wizard is not worth it);
+//  - EVERY question has a default, so the wizard can be walked through blind;
+//  - without a TTY (a pipe, CI, `npx … < /dev/null`) no questions are asked at all and the
+//    defaults are used — otherwise the install would silently hang waiting for an answer;
+//  - nothing happens quietly: every step prints what it wrote and where.
+import { createInterface } from 'node:readline/promises';
+import { execFileSync } from 'node:child_process';
+import { existsSync, writeFileSync, mkdirSync, symlinkSync, cpSync, readFileSync } from 'node:fs';
+import { join, dirname, resolve, sep } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { homedir } from 'node:os';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+// The binary has subcommands. Without one it runs the wizard; `start` runs the board.
+// `npm start` is unavailable from an installed package — package.json scripts only exist in a
+// clone of the repository — yet the wizard used to recommend exactly that, which left nothing
+// to start the board with after `npx local-kanban`.
+const argv = process.argv.slice(2).filter((a) => a !== '--yes');
+const cmd = argv[0] && !argv[0].startsWith('-') ? argv[0] : '';
+const flag = (name) => {
+  const i = argv.indexOf(`--${name}`);
+  if (i >= 0 && argv[i + 1] && !argv[i + 1].startsWith('-')) return argv[i + 1];
+  const eq = argv.find((a) => a.startsWith(`--${name}=`));
+  return eq ? eq.slice(name.length + 3) : '';
+};
+
+// code inside node_modules means an npm/npx install: no package.json scripts and no git there,
+// so the advice at the end of the wizard has to be different
+const packaged = ROOT.split(sep).includes('node_modules');
+
+const interactive = process.stdin.isTTY && process.stdout.isTTY && !process.argv.includes('--yes') && !cmd;
+const rl = interactive ? createInterface({ input: process.stdin, output: process.stdout }) : null;
+
+const say = (s = '') => process.stdout.write(s + '\n');
+const done = (s) => say(`  ✓ ${s}`);
+const skip = (s) => say(`  · ${s}`);
+
+async function ask(question, def) {
+  if (!interactive) return def;
+  const a = (await rl.question(`${question} [${def}]: `)).trim();
+  return a || def;
+}
+async function confirm(question, def = true) {
+  if (!interactive) return def;
+  const a = (await rl.question(`${question} [${def ? 'Y/n' : 'y/N'}]: `)).trim().toLowerCase();
+  if (!a) return def;
+  return ['y', 'yes'].includes(a);
+}
+
+function ghReady() {
+  // the sync needs more than authentication: without the project scope create_issue succeeds
+  // but the card never lands on the Projects v2 board, and the user hunts for the cause
+  try {
+    const out = execFileSync('gh', ['auth', 'status'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    return { ok: true, project: /\bproject\b/.test(out) };
+  } catch {
+    return { ok: false, project: false };
+  }
+}
+
+const usage = () => say(`
+  local-kanban            install and setup wizard
+  local-kanban start      run the board
+      --port <N>          port (defaults to 3100, or PORT)
+      --data <dir>        data directory (defaults to whatever the board resolves on its own)
+  local-kanban help       this help
+`);
+
+if (cmd === 'start') {
+  if (flag('port')) process.env.PORT = flag('port');
+  if (flag('data')) process.env.KB_DATA_DIR = resolve(flag('data'));
+  // the server prints its address and backup path itself; the data directory is resolved by config.js
+  await import(pathToFileURL(join(ROOT, 'src', 'server.js')).href);
+  // the wizard follows below and must not run under `start`; the listening socket holds the process
+  await new Promise(() => {});
+}
+
+if (cmd === 'help' || argv.includes('--help') || argv.includes('-h')) { usage(); process.exit(0); }
+if (cmd && cmd !== 'setup') {
+  say(`\n  unknown command: ${cmd}`);
+  usage();
+  process.exit(2);
+}
+
+say('\n  local-kanban — install\n');
+
+/* ── 1. port and data directory ─────────────────────────────────────────── */
+// imported here rather than at the top: a static import would run BEFORE the `start` branch,
+// which sets KB_DATA_DIR from --data, and the server would receive a stale cached value
+const { DATA_DIR } = await import(pathToFileURL(join(ROOT, 'src', 'config.js')).href);
+const port = await ask('Board port (listens on 127.0.0.1 only)', '3100');
+// the default comes from config.js, the single place that decides where data lives — otherwise
+// the wizard would offer a directory inside the package and the board would open a different one
+const dataDir = await ask('Data directory (SQLite, attachments, backups)', DATA_DIR);
+
+/* ── 2. GitHub sync ─────────────────────────────────────────────────────── */
+let ghOwner = '';
+let ghRepo = '';
+say('\n  GitHub sync is optional: without it the board is fully functional, just local-only.');
+if (await confirm('  Mirror tasks to GitHub?', false)) {
+  const gh = ghReady();
+  if (!gh.ok) {
+    skip('gh is not authenticated — skipping. Later: gh auth login && gh auth refresh -s project,');
+    skip('  then set owner/repo under Settings → Sync on the board');
+  } else {
+    if (!gh.project) skip('the token has no project scope — run: gh auth refresh -s project');
+    ghOwner = await ask('  GitHub owner', '');
+    ghRepo = await ask('  Repository for issues (owner/repo)', ghOwner ? `${ghOwner}/tasks` : '');
+  }
+}
+
+/* ── 3. pm2 config ──────────────────────────────────────────────────────── */
+// for an npm install the package directory belongs to the package manager, so a config written
+// there lives until the first update. Keep it next to the data, which does survive updates.
+const cfgDir = packaged ? dataDir : ROOT;
+const cfgPath = join(cfgDir, 'ecosystem.config.cjs');
+say('');
+if (existsSync(cfgPath)) {
+  skip(`${cfgPath} already exists — leaving it alone`);
+} else if (await confirm('Create ecosystem.config.cjs for autostart under pm2?', true)) {
+  mkdirSync(cfgDir, { recursive: true });
+  const env = [
+    `        PORT: '${port}',`,
+    "        NODE_ENV: 'production',",
+    `        KB_DATA_DIR: '${dataDir}',`,
+    ghOwner ? `        KB_GH_OWNER: '${ghOwner}',` : null,
+    ghRepo ? `        KB_GH_REPO: '${ghRepo}',` : null,
+  ].filter(Boolean).join('\n');
+  writeFileSync(cfgPath, `// Created by the local-kanban wizard. Git-ignored, so local paths never leave your machine.
+module.exports = {
+  apps: [
+    {
+      name: 'kanban',
+      script: 'src/server.js',
+      cwd: '${ROOT}',
+      env: {
+${env}
+      },
+      max_memory_restart: '200M',
+      merge_logs: true,
+    },
+  ],
+};
+`);
+  done(`wrote ${cfgPath}`);
+  say(`    start it:  pm2 start ${cfgPath} && pm2 save`);
+  say('    start on login:  pm2 startup  (prints a command you then have to run)');
+} else {
+  skip(`without pm2 — start it manually: ${packaged ? 'local-kanban start' : 'npm start'}`);
+}
+
+/* ── 4. Claude Code skills ──────────────────────────────────────────────── */
+const skillsDir = join(homedir(), '.claude', 'skills');
+say('');
+if (await confirm('Install the Claude Code skills (kanban, deploy) into ~/.claude/skills?', true)) {
+  mkdirSync(skillsDir, { recursive: true });
+  for (const name of ['kanban', 'deploy']) {
+    const target = join(skillsDir, name);
+    if (existsSync(target)) { skip(`${target} already exists — leaving it alone`); continue; }
+    // from a package this is a COPY. A symlink would point inside node_modules, and updating or
+    // removing the package would silently take the skill away from Claude. From a clone a link is
+    // better: edits to the skill apply immediately and the directory is not going anywhere.
+    try {
+      if (packaged) { cpSync(join(ROOT, 'skills', name), target, { recursive: true }); done(`${target} (copy)`); }
+      else { symlinkSync(join(ROOT, 'skills', name), target); done(`${target} → skills/${name}`); }
+    } catch (e) { skip(`could not install the skill ${target}: ${e.message}`); }
+  }
+} else {
+  skip('skills not installed — later: ln -s "$(pwd)/skills/kanban" ~/.claude/skills/kanban');
+}
+
+/* ── 5. the kb command ──────────────────────────────────────────────────── */
+say('');
+say(packaged
+  ? '  The kb command (the one Claude calls) is already installed with the package.'
+  : '  The kb command (the one Claude calls): npm link  — or npm install -g .');
+if (port !== '3100') say(`  Non-default port, so kb needs the address: export KB_URL=http://127.0.0.1:${port}`);
+
+/* ── 6. first run ───────────────────────────────────────────────────────── */
+say('');
+say(`  Done. The board will be at http://localhost:${port}`);
+say('  The first run shows a wizard: language, sync, demo project.');
+  // the most useful thing at the end is not a list of commands but a ready prompt for Claude;
+  // worth mentioning before the user even opens the browser
+  say('  It ends with a ready prompt for Claude — it finishes the setup and asks what it needs.');
+say(`  Start it now:  ${packaged ? 'local-kanban start' : 'npm start'}\n`);
+rl?.close();

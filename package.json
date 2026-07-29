@@ -1,0 +1,54 @@
+{
+  "name": "local-kanban",
+  "version": "1.0.0",
+  "license": "MIT",
+  "author": "Dannylamao",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lamaohub/local-kanban.git"
+  },
+  "homepage": "https://github.com/lamaohub/local-kanban#readme",
+  "bugs": "https://github.com/lamaohub/local-kanban/issues",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "npm@10.0.0",
+  "bin": {
+    "kb": "bin/kb",
+    "local-kanban": "bin/local-kanban"
+  },
+  "description": "A local kanban board for working in tandem with Claude Code: the kb CLI plus a web board, with an optional GitHub mirror (issues + Projects v2)",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test",
+    "update": "node scripts/update.js",
+    "bootstrap": "node contrib/bootstrap.js",
+    "seed:panel": "node contrib/seed-from-panel.js"
+  },
+  "dependencies": {
+    "@fastify/static": "^7.0.4",
+    "better-sqlite3": "^11.3.0",
+    "fastify": "^4.28.1"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "public/",
+    "skills/",
+    "scripts/",
+    "ecosystem.example.cjs",
+    "README.md",
+    "README.ru.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "kanban",
+    "claude",
+    "claude-code",
+    "tasks",
+    "local-first",
+    "sqlite",
+    "cli"
+  ]
+}

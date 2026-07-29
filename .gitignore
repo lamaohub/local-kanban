@@ -1,0 +1,25 @@
+node_modules/
+data/
+.DS_Store
+# personal Claude Code permissions (allow git push) — not for the mirror
+.claude/settings.local.json
+
+# personal pm2 config (paths, env); the public example is ecosystem.example.cjs
+ecosystem.config.cjs
+# generated from a private monitoring panel, contains personal paths — not public
+contrib/seed-projects.json
+contrib/seed-from-panel.js
+# local notes of whoever runs this board
+CLAUDE.local.md
+# site-specific leak patterns used by scripts/release.js
+.release-private.json
+
+# one package manager: npm. CI runs `npm ci`, the README and scripts/update.js call npm,
+# and package.json pins packageManager. A second lock file next to it is an ambiguity for a
+# newcomer ("which one installs this?") and two diverging sources of versions on every update.
+pnpm-lock.yaml
+yarn.lock
+bun.lockb
+
+# local notes, not part of the public project
+CLAUDE.md
