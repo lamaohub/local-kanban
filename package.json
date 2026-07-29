@@ -1,6 +1,6 @@
 {
   "name": "local-kanban",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "license": "MIT",
   "author": "Dannylamao",
   "repository": {
@@ -22,9 +22,7 @@
   "scripts": {
     "start": "node src/server.js",
     "test": "node --test",
-    "update": "node scripts/update.js",
-    "bootstrap": "node contrib/bootstrap.js",
-    "seed:panel": "node contrib/seed-from-panel.js"
+    "update": "node scripts/update.js"
   },
   "dependencies": {
     "@fastify/static": "^7.0.4",

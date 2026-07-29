@@ -7,4 +7,10 @@ private monitoring panel and are kept as an example of "how to register projects
 - `bootstrap.js` — idempotent upsert of the registry from `seed-projects.json` into the board's DB.
 - `seed-projects.json` — generated, git-ignored.
 
+Run them from a clone with `node contrib/bootstrap.js`. They are deliberately not `npm run`
+scripts and not part of the published package: `package.json` is the public interface of the
+package, and a script listed there that cannot run from an install — because this directory is
+not shipped, or because the file it points at was never in git — is a promise to a stranger that
+breaks the moment it is taken up.
+
 The normal way to add a project is the board's own "Add project" wizard.

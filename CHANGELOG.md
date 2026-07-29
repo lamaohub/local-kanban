@@ -3,6 +3,21 @@
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [semantic versioning](https://semver.org/).
 
+## [1.0.2]
+
+### Fixed
+
+- **The bundled Raycast command did not work.** `scripts/raycast/open-kanban.sh` ships in the
+  package, and the export step removed its `@raycast.title` and `@raycast.description` lines as
+  if they were prose. They are not — Raycast parses them, and without a title it never registers
+  the command. The script is now written in English and the export refuses to drop a directive.
+
+### Changed
+
+- `package.json` no longer advertises `bootstrap` and `seed:panel`. Neither could run from an
+  installed package: one points into a directory that is not shipped, the other at a file that
+  was never in the repository. The `contrib/` helpers are run directly from a clone.
+
 ## [1.0.1]
 
 ### Fixed
