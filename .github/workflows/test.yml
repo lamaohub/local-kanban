@@ -19,3 +19,40 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+
+  # What a stranger runs is not this repository but a package: dependencies come from the
+  # lockfile, the contents from `files`, the entry points from `bin`. Both failures this project
+  # actually shipped lived in that gap — a board with nothing to start it, and data written
+  # inside the package directory — and a green `npm test` said nothing about either.
+  install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: pack, install and boot the package
+        run: |
+          set -euo pipefail
+          tgz=$(npm pack --silent | tail -1)
+          npm install -g --prefix "$RUNNER_TEMP/prefix" "./$tgz"
+
+          "$RUNNER_TEMP/prefix/bin/local-kanban" start --port 3199 --data "$RUNNER_TEMP/data" &
+          pid=$!
+
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:3199/api/projects >/dev/null 2>&1; then up=1; break; fi
+            sleep 0.5
+          done
+          test "${up:-}" = 1 || { echo "the installed package never answered"; kill -9 "$pid"; exit 1; }
+
+          # and it must also stop the way a person stops it: a listener registered on import once
+          # cancelled Node's default terminate, and the board survived both Ctrl+C and SIGTERM
+          kill "$pid"
+          for _ in $(seq 1 20); do
+            kill -0 "$pid" 2>/dev/null || { stopped=1; break; }
+            sleep 0.5
+          done
+          test "${stopped:-}" = 1 || { echo "the board ignored SIGTERM"; kill -9 "$pid"; exit 1; }

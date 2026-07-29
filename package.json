@@ -1,6 +1,6 @@
 {
   "name": "local-kanban",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "license": "MIT",
   "author": "Dannylamao",
   "repository": {
@@ -40,6 +40,7 @@
     "ecosystem.example.cjs",
     "README.md",
     "README.ru.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "keywords": [

@@ -560,17 +560,14 @@ function openOnboarding() {
     };
   };
 
-  const stepDone = () => {
+  const stepDone = async () => {
     dots('done'); err('');
     title.textContent = tr('All set!');
+    let packaged = false;
+    try { packaged = !!(await api('GET', '/api/about', null, { quiet: true })).packaged; } catch {  }
     body.innerHTML = `<div class="muted">${tr('Claude can finish the setup for you — copy this and paste it into its chat:')}</div>`
       + setupPromptBlockHTML()
-      + `<div class="muted onb-manual-h">${tr('Or do it by hand. Install the kb command for Claude like this:')}</div>
-      <pre class="onb-code">npm link</pre>
-      <div class="muted">${tr('Claude Code skills live in skills/ — symlink or copy them into ~/.claude/skills:')}</div>
-      <pre class="onb-code">ln -s "$(pwd)/skills/kanban" ~/.claude/skills/kanban
-ln -s "$(pwd)/skills/deploy" ~/.claude/skills/deploy</pre>
-      <div class="muted">${tr('Details are in the README. Enjoy!')}</div>`;
+      + manualSetupHTML(packaged);
     wireSetupPrompt(body);
     actions.innerHTML = `<button class="btn-primary" id="onb-finish">${tr('Start working')}</button>`;
     $('onb-finish').onclick = () => finish(demoCreated);
@@ -607,6 +604,20 @@ export function renderTopbar() {
 export function setupPromptBlockHTML() {
   return `<div class="setup-prompt"><pre class="onb-code setup-prompt-text">${esc(setupPrompt())}</pre>`
     + `<button class="btn-primary setup-prompt-copy">${ic('copy', 13)} ${tr('Copy the prompt')}</button></div>`;
+}
+export function manualSetupHTML(packaged) {
+  if (packaged) {
+    return `<div class="muted onb-manual-h">${tr('Or do it by hand. Everything is already installed with the package:')}</div>`
+      + `<div class="muted">${tr('the kb command came with it, and the wizard copied the Claude Code skills into ~/.claude/skills. To update later:')}</div>`
+      + '<pre class="onb-code">npm i -g local-kanban@latest</pre>'
+      + `<div class="muted">${tr('Details are in the README. Enjoy!')}</div>`;
+  }
+  return `<div class="muted onb-manual-h">${tr('Or do it by hand. Install the kb command for Claude like this:')}</div>
+      <pre class="onb-code">npm link</pre>
+      <div class="muted">${tr('Claude Code skills live in skills/ — symlink or copy them into ~/.claude/skills:')}</div>
+      <pre class="onb-code">ln -s "$(pwd)/skills/kanban" ~/.claude/skills/kanban
+ln -s "$(pwd)/skills/deploy" ~/.claude/skills/deploy</pre>
+      <div class="muted">${tr('Details are in the README. Enjoy!')}</div>`;
 }
 export function wireSetupPrompt(root) {
   const btn = root.querySelector('.setup-prompt-copy');

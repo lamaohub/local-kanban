@@ -118,11 +118,11 @@ The full HTTP API and the SSE event stream are the official extension point — 
 npm test   # node --test, DB isolated via KB_DATA_DIR
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the dev setup, branch flow and the schema-migration rule. The architecture is described in [ARCHITECTURE.md](ARCHITECTURE.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the dev setup, branch flow and the schema-migration rule. The architecture is described in [ARCHITECTURE.md](ARCHITECTURE.md), and what changed between versions in [CHANGELOG.md](CHANGELOG.md).
 
 ## UI language
 
-The interface follows your system language (Russian/English) and can be switched in **Settings → General**. Deeper corners of the settings are still Russian-first — translations are filled in as we go.
+English is the source language of the interface; Russian comes as a translation. The board follows your system language and can be switched in **Settings → General** — a string with no translation yet stays English rather than leaking into the wrong locale.
 
 ## License
 

@@ -64,11 +64,26 @@ export function currentPreview() {
   return { port, url: `http://127.0.0.1:${port}`, started_at: startedAt, stats, expires_in: Math.max(0, LIFETIME_MS - (Date.now() - startedAt)) };
 }
 
+const onExit = () => { if (current) stopPreview(); };
+const SIGNAL_HANDLERS = { SIGINT: () => { stopPreview(); process.exit(130); },
+  SIGTERM: () => { stopPreview(); process.exit(143); } };
+
+function armCleanup() {
+  process.on('exit', onExit);
+  for (const [sig, fn] of Object.entries(SIGNAL_HANDLERS)) process.on(sig, fn);
+}
+function disarmCleanup() {
+  process.off('exit', onExit);
+  for (const [sig, fn] of Object.entries(SIGNAL_HANDLERS)) process.off(sig, fn);
+}
+
 export function stopPreview() {
   if (!current) return false;
   const { proc, dir, timer } = current;
   clearTimeout(timer);
+  disarmCleanup();
   try { proc.kill('SIGTERM'); } catch {  }
+  try { setTimeout(() => { try { proc.kill('SIGKILL'); } catch {  } }, 2000).unref(); } catch {  }
   try { rmSync(dir, { recursive: true, force: true }); } catch {  }
   current = null;
   return true;
@@ -86,6 +101,7 @@ export async function startPreview(dir, stats) {
   proc.on('exit', (code) => { if (current && current.proc === proc && code) logError('server', 'restore-preview', `the preview board crashed, code ${code}`); });
   const timer = setTimeout(() => stopPreview(), LIFETIME_MS);
   current = { port, proc, dir, startedAt: Date.now(), timer, stats };
+  armCleanup();
   const deadline = Date.now() + 15000;
   while (Date.now() < deadline) {
     try { const r = await fetch(`http://127.0.0.1:${port}/api/projects`); if (r.ok) break; } catch {  }
@@ -93,5 +109,3 @@ export async function startPreview(dir, stats) {
   }
   return currentPreview();
 }
-
-for (const sig of ['exit', 'SIGINT', 'SIGTERM']) process.on(sig, () => { if (current) stopPreview(); });

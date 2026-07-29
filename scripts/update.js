@@ -7,7 +7,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const run = (cmd, args, opts = {}) =>
   spawnSync(cmd, args, { cwd: ROOT, stdio: 'inherit', ...opts });
 const out = (cmd, args) => {
-  try { return execFileSync(cmd, args, { cwd: ROOT, encoding: 'utf8' }).trim(); }
+  try { return execFileSync(cmd, args, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim(); }
   catch { return null; }
 };
 

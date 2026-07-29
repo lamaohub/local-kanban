@@ -41,7 +41,7 @@ export async function renderDashboard() {
     + statCard(tr('Active'), s.active, tr('queued and in progress'))
     + statCard(tr('Completed'), `${pct}%`, `${s.done_period} ${tr('of')} ${den} ${rlab}`)
     + statCard(tr('Work time'), fmtWork(s.work_seconds_period), rlab)
-    + statCard('Streak', `${cur} ${tr('d')}`, `${tr('max')} ${mx} ${tr('d')}`)
+    + statCard(tr('Streak'), `${cur} ${tr('d')}`, `${tr('max')} ${mx} ${tr('d')}`)
     + statCard(tr('Task cycle'), cyc, `${tr('from created to done')} (${rlab})`)
     + '</div>';
 

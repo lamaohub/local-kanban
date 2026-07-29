@@ -1,0 +1,41 @@
+name: publish
+
+# Publishing by hand from a laptop is how the wrong thing gets published: a stale working tree,
+# a version that does not match the tag, a green test run from yesterday. The tag is the trigger,
+# and the tag is what the release script pushes.
+#
+# Needs an NPM_TOKEN secret (an automation token). Until it exists the workflow simply fails at
+# the last step, which is the honest outcome — nothing half-published.
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # provenance is signed with this
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+      - name: the tag and package.json must agree
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          pkg=$(node -p "require('./package.json').version")
+          test "$tag" = "$pkg" || {
+            echo "tag $GITHUB_REF_NAME says $tag, package.json says $pkg — one of them is wrong"
+            exit 1
+          }
+
+      - run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { statSync, readdirSync, createReadStream } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { db, DATA_DIR, kvGet, kvSet, ghOwner, ghRepo, syncConfigured, enqueue, logError, uiLang, SYNC_MAX_ATTEMPTS } from '../db.js';
 import { emit } from '../bus.js';
@@ -135,6 +135,7 @@ export default async function systemRoutes(app) {
       tasks: db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n,
       projects: db.prepare('SELECT COUNT(*) AS n FROM projects').get().n,
       node: process.version,
+      packaged: ROOT.split(sep).includes('node_modules'),
     };
   });
 
