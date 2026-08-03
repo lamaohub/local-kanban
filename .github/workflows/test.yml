@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node: [20, 22]
+        node: [22, 24, 26]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -24,13 +24,19 @@ jobs:
   # lockfile, the contents from `files`, the entry points from `bin`. Both failures this project
   # actually shipped lived in that gap — a board with nothing to start it, and data written
   # inside the package directory — and a green `npm test` said nothing about either.
+  #
+  # On the current LTS, because that is what a stranger installing today gets. The database
+  # driver is a native module and ships prebuilt binaries per Node ABI: a version with no
+  # prebuild does not fail here, it silently falls back to compiling from source, which needs a
+  # toolchain the machine may not have. Testing only the version the author happens to run is how
+  # that goes unnoticed.
   install:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       - run: npm ci
       - name: pack, install and boot the package

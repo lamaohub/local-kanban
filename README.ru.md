@@ -22,7 +22,7 @@ English version — [README.md](README.md).
 
 ## Требования
 
-- **Node.js ≥ 20** (macOS или Linux)
+- **Node.js ≥ 22** (macOS или Linux) — у большинства стоит 24 LTS или новее
 - Опционально, только для GitHub-синка: [`gh` CLI](https://cli.github.com/) с правом `project`:
   `gh auth login && gh auth refresh -s project`
 

@@ -22,7 +22,7 @@ The server listens on **127.0.0.1 only** and has **no authentication**. The boar
 
 ## Requirements
 
-- **Node.js ≥ 20** (macOS or Linux)
+- **Node.js ≥ 22** (macOS or Linux) — 24 LTS or newer is what most people have
 - Optional, only for GitHub sync: [`gh` CLI](https://cli.github.com/) authenticated with the `project` scope:
   `gh auth login && gh auth refresh -s project`
 

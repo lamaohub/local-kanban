@@ -3,6 +3,20 @@
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [semantic versioning](https://semver.org/).
 
+## [1.1.0]
+
+### Changed
+
+- **Node 22 is now the minimum, and installing on a current Node no longer builds from source.**
+  The database driver is a native module that ships prebuilt binaries per Node version. The
+  pinned version had them for Node 18 through 23 only, so anyone installing on Node 24 LTS or 26
+  — which is what you get if you install Node today — silently fell through to compiling the
+  driver locally: minutes of waiting, a C++ toolchain required, and an outright failure on a
+  machine that has none. The driver is updated to a release with binaries for Node 22, 24, 25 and
+  26, `engines` states that range, and CI now tests both ends of it plus a real install on the
+  current LTS. Node 20 drops out of the range: the new driver has no binaries for it and Node 20
+  itself stopped receiving releases in March 2026.
+
 ## [1.0.2]
 
 ### Fixed
