@@ -22,6 +22,7 @@ const ICONS = {
   status: 'M8 13.4a5.4 5.4 0 1 0 0-10.8 5.4 5.4 0 0 0 0 10.8Z',
   flag: 'M4 14V2.6M4 3.2h7.5l-1.6 2.4 1.6 2.4H4',
   tag: 'M8 2.2H3.2a1 1 0 0 0-1 1V8l5.6 5.6a1.2 1.2 0 0 0 1.7 0l3.9-3.9a1.2 1.2 0 0 0 0-1.7L8 2.2Z',
+  chevron: 'M4.2 6.2 8 10l3.8-3.8',
 };
 const ICON_EXTRA = {
   status: '<path d="M8 2.6v10.8a5.4 5.4 0 0 0 0-10.8Z" fill="currentColor" stroke="none"/>',
@@ -521,6 +522,8 @@ const I18N_RU = {
   'Weeks': 'Недели',
   'Welcome!': 'Добро пожаловать!',
   'went back to work': 'возвращалась в работу',
+  'Show the rest': 'Развернуть остальные',
+  Collapse: 'Свернуть',
   'What are we working on?': 'Чем займёмся?',
   'What do we note before it slips?': 'Что запишем, пока не забыл?',
   'What do we take on?': 'За что возьмёмся?',

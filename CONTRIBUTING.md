@@ -5,7 +5,7 @@
 ```bash
 npm install
 npm start      # board at http://localhost:3100
-npm test       # node --test; the DB is isolated via KB_DATA_DIR, your data is safe
+node --test    # the DB is isolated via KB_DATA_DIR, your data is safe
 ```
 
 No build step: vanilla JS frontend served from `public/`, Fastify + better-sqlite3 backend in `src/`. Frontend changes apply on page reload; backend changes need a server restart.

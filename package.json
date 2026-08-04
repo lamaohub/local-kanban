@@ -1,6 +1,6 @@
 {
   "name": "local-kanban",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "license": "MIT",
   "author": "Dannylamao",
   "repository": {
@@ -21,7 +21,6 @@
   "description": "A local kanban board for working in tandem with Claude Code: the kb CLI plus a web board, with an optional GitHub mirror (issues + Projects v2)",
   "scripts": {
     "start": "node src/server.js",
-    "test": "node --test",
     "update": "node scripts/update.js"
   },
   "dependencies": {

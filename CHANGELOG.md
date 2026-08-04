@@ -3,6 +3,30 @@
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [semantic versioning](https://semver.org/).
 
+## [1.2.0]
+
+### Added
+
+- **A long status history no longer buries the rest of the task.** A task that has been moved
+  around for weeks collects a couple of dozen timeline rows, and they pushed everything else in
+  the panel out of view. Anything longer than six entries now shows the three most recent ones
+  with an arrow to expand the rest — and to fold them back.
+
+### Fixed
+
+- **`kb info` crashed on a project whose pm2 services were stored as a plain string.** The field
+  is documented as "a comma-separated string or JSON" and both forms exist in real databases, but
+  every reader parsed it as JSON only: the command exited with an error instead of printing the
+  project, `GET /api/projects/:slug/status` answered 500, and the project settings showed an empty
+  pm2 field that the next save would have wiped. Both forms are now read, and new values are
+  stored in one canonical shape.
+
+### Changed
+
+- `package.json` no longer declares a `test` script. The tests are not part of the published
+  package, so inside an installed one the command exited successfully having run nothing at all —
+  a green check for a check that never happened. Tests are run from a clone with `node --test`.
+
 ## [1.1.0]
 
 ### Changed

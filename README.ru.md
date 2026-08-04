@@ -115,7 +115,7 @@ npm run update   # git pull + npm install + pm2 restart (если примени
 ## Разработка
 
 ```bash
-npm test   # node --test, БД изолируется через KB_DATA_DIR
+node --test   # БД изолируется через KB_DATA_DIR
 ```
 
 Дев-окружение, флоу веток и правило миграций — в [CONTRIBUTING.md](CONTRIBUTING.md). Архитектура — в [ARCHITECTURE.md](ARCHITECTURE.md), что менялось между версиями — в [CHANGELOG.md](CHANGELOG.md).

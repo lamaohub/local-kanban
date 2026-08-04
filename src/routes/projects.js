@@ -5,6 +5,7 @@ import { db, genPrefix, usedPrefixes, makePrefix, kvGet, kvSet } from '../db.js'
 import { localRoot, panelUrl, panelInfo, skillsExtra } from '../config.js';
 import { emit } from '../bus.js';
 import { forgetRepoBase } from '../repo-base.js';
+import { parsePm2Services, serializePm2Services } from '../pm2-services.js';
 
 const DEFAULT_CATEGORY = 'Other';
 const LOCKED_CATEGORIES = new Set([DEFAULT_CATEGORY, 'Local']);
@@ -41,7 +42,7 @@ function scanFolders() {
 function syncCategoryToPanel(project) {
   if (!panelInfo()) return;
   try {
-    const services = JSON.parse(project.pm2_services || '[]');
+    const services = parsePm2Services(project.pm2_services);
     if (!services.length || !existsSync(panelInfo())) return;
     const info = JSON.parse(readFileSync(panelInfo(), 'utf8'));
     let changed = false;
@@ -250,7 +251,7 @@ export default async function projectRoutes(app) {
   app.get('/api/projects/:slug/status', async (req, reply) => {
     const p = resolveProject(req.params.slug);
     if (!p) return reply.code(404).send({ error: 'project not found' });
-    const services = JSON.parse(p.pm2_services || '[]');
+    const services = parsePm2Services(p.pm2_services);
     if (!services.length) return reply.code(404).send({ error: 'the project has no pm2 services' });
     let stats;
     try {
@@ -385,6 +386,9 @@ export default async function projectRoutes(app) {
     if (dsErr) return reply.code(400).send({ error: dsErr });
     const fields = { slug, name, prefix: makePrefix(slug) };
     for (const k of PATCHABLE) if (req.body[k] !== undefined) fields[k] = req.body[k];
+    // The field is documented as "comma-separated string <-> JSON", so store the canonical
+    // form instead of whatever the caller sent (readers stay tolerant for older rows).
+    if (fields.pm2_services !== undefined) fields.pm2_services = serializePm2Services(fields.pm2_services);
     const pc = checkPrefix(fields.prefix, null);
     if (pc.error) return reply.code(400).send({ error: pc.error });
     fields.prefix = pc.pref;
@@ -411,7 +415,7 @@ export default async function projectRoutes(app) {
     for (const k of PATCHABLE) {
       if (req.body && req.body[k] !== undefined) {
         updates.push(`${k} = ?`);
-        values.push(req.body[k]);
+        values.push(k === 'pm2_services' ? serializePm2Services(req.body[k]) : req.body[k]);
       }
     }
     if (updates.length) {

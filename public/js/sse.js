@@ -257,18 +257,48 @@ function fmtDate(iso) {
 
 export const STATUS_LABELS = Object.fromEntries(ALL_STATUSES);
 
+const TL_KEEP = 3;
+const TL_MAX = 6;
+
 export function renderTimeline(t) {
   const box = $('d-timeline');
-  const rows = [`<div class="tl-item"><span class="tl-when">${fmtDate(t.created_at)}</span>`
-    + `<span class="tl-what"><span class="tl-dot" style="background:var(--tl-created)"></span>${tr('Created')}</span></div>`];
+  const items = [{
+    when: t.created_at,
+    dot: '<span class="tl-dot" style="background:var(--tl-created)"></span>',
+    text: tr('Created'),
+  }];
   for (const ev of (t.events || [])) {
-    rows.push(`<div class="tl-item"><span class="tl-when">${fmtDate(ev.created_at)}</span>`
-      + `<span class="tl-what"><span class="tl-dot dot s-${ev.status}"></span>${esc(STATUS_LABELS[ev.status] || ev.status)}</span></div>`);
+    items.push({
+      when: ev.created_at,
+      dot: `<span class="tl-dot dot s-${ev.status}"></span>`,
+      text: esc(STATUS_LABELS[ev.status] || ev.status),
+    });
   }
+
+  const hiddenCount = items.length > TL_MAX ? items.length - TL_KEEP : 0;
+  const rows = items.map((it, i) => `<div class="tl-item${i < hiddenCount ? ' tl-old' : ''}">`
+    + `<span class="tl-when">${fmtDate(it.when)}</span>`
+    + `<span class="tl-what">${it.dot}${it.text}</span></div>`);
+
+  const toggle = hiddenCount
+    ? `<button type="button" class="tl-toggle" id="tl-toggle">`
+      + `<span class="tl-toggle-label">${tr('Show the rest')} (${hiddenCount})</span>${ic('chevron', 13)}</button>`
+    : '';
+
   const backToWork = (t.events || []).filter((e) => e.status === 'doing').length;
   const cycle = backToWork > 1 ? `<div class="tl-cycle">↻ ${tr('went back to work')} ${backToWork}×</div>` : '';
-  box.innerHTML = rows.join('') + cycle;
+  box.innerHTML = toggle + rows.join('') + cycle;
+  box.classList.toggle('tl-collapsed', hiddenCount > 0);
   box.classList.remove('hidden');
+
+  if (hiddenCount) {
+    $('tl-toggle').onclick = () => {
+      const collapsed = box.classList.toggle('tl-collapsed');
+      $('tl-toggle').querySelector('.tl-toggle-label').textContent = collapsed
+        ? `${tr('Show the rest')} (${hiddenCount})`
+        : tr('Collapse');
+    };
+  }
 }
 
 export function autoGrow(el) {

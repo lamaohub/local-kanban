@@ -55,10 +55,6 @@ board: it has no task key and no deploy metadata. The board does NOT register pr
 local folders under `LOCAL_ROOT` (`~/claude-projects`) appear in the sidebar with an "+ add" row,
 but a project living anywhere else has to be registered by hand.
 
-**Where to register it: the real board on `:3100`.** If you keep two copies (a personal board on
-:3100 and a sandbox on :3101 for developing the board itself), real projects and tasks always go
-to `:3100`; the sandbox is only for changes to the board's own code.
-
 Register it through the API rather than raw SQL — the API emits an SSE event so the board updates
 live, and the GitHub project is provisioned on the first task:
 

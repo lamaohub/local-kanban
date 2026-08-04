@@ -2,6 +2,8 @@
 // kb — the token-efficient CLI for the kanban board (localhost:3100).
 // Tasks are addressed by key (TIC-3) or by global id. One line of output per action.
 
+import { parsePm2Services } from '../src/pm2-services.js';
+
 const BASE = process.env.KB_URL || 'http://127.0.0.1:3100';
 const PRI = { 0: '', 1: 'p1', 2: 'p2', 3: 'p3' };
 const PRI_BY_NAME = { none: 0, low: 1, med: 2, medium: 2, high: 3, p0: 0, p1: 1, p2: 2, p3: 3 };
@@ -245,7 +247,8 @@ const commands = {
     if (p.path) out.push(`path: ${p.path}`);
     if (p.deploy_skill) out.push(`deploy_skill: ${p.deploy_skill}${p.deploy_skill_path ? ` (${p.deploy_skill_path})` : ''}`);
     if (p.server) out.push(`server: ${p.server}${p.server_path ? ':' + p.server_path : ''}`);
-    if (p.pm2_services) out.push(`pm2: ${JSON.parse(p.pm2_services).join(', ')}`);
+    const services = parsePm2Services(p.pm2_services);
+    if (services.length) out.push(`pm2: ${services.join(', ')}`);
     if (p.domain) out.push(`domain: ${p.domain}`);
     console.log(out.join('\n'));
   },

@@ -4,6 +4,16 @@ import { currentProject, popLayer, pushLayer, selectProject, styledConfirm } fro
 import { refresh } from './sse.js';
 
 let projPanelSlug = null;
+
+function parsePm2Services(raw) {
+  if (!raw) return [];
+  const text = String(raw).trim();
+  let list = null;
+  if (text.startsWith('[')) {
+    try { const v = JSON.parse(text); if (Array.isArray(v)) list = v; } catch {  }
+  }
+  return (list || text.split(',')).map((s) => String(s).trim()).filter(Boolean);
+}
 function placeProjectPanel(anchorRect) {
   const panel = $('proj-panel');
   if (!panel) return;
@@ -51,7 +61,7 @@ export function openProjectPanel(proj, anchorRect) {
   $('pp-path').value = p.path || '';
   $('pp-server').value = p.server || '';
   $('pp-spath').value = p.server_path || '';
-  try { $('pp-pm2').value = JSON.parse(p.pm2_services || '[]').join(', '); } catch { $('pp-pm2').value = ''; }
+  $('pp-pm2').value = parsePm2Services(p.pm2_services).join(', ');
   $('pp-domain').value = p.domain || '';
   $('pp-skill').value = p.deploy_skill || '';
   $('pp-more').onclick = () => {

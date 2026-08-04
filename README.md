@@ -115,7 +115,7 @@ The full HTTP API and the SSE event stream are the official extension point — 
 ## Development
 
 ```bash
-npm test   # node --test, DB isolated via KB_DATA_DIR
+node --test   # DB isolated via KB_DATA_DIR
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the dev setup, branch flow and the schema-migration rule. The architecture is described in [ARCHITECTURE.md](ARCHITECTURE.md), and what changed between versions in [CHANGELOG.md](CHANGELOG.md).

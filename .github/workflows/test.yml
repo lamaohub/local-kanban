@@ -18,12 +18,12 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
-      - run: npm test
+      - run: node --test
 
   # What a stranger runs is not this repository but a package: dependencies come from the
   # lockfile, the contents from `files`, the entry points from `bin`. Both failures this project
   # actually shipped lived in that gap — a board with nothing to start it, and data written
-  # inside the package directory — and a green `npm test` said nothing about either.
+  # inside the package directory — and a green test run said nothing about either.
   #
   # On the current LTS, because that is what a stranger installing today gets. The database
   # driver is a native module and ships prebuilt binaries per Node ABI: a version with no

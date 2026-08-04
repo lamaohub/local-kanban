@@ -60,7 +60,9 @@ Statuses: `backlog → todo → prep → doing → deploy → review → done` (
 | `GET /api/projects/folders` | folders on disk vs registry: `{root, unregistered, missing}` |
 | `POST /api/projects/folders` | mkdir/adopt a folder under `KB_LOCAL_ROOT` as a project |
 
-`pm2_services` is a JSON array serialized as a string, e.g. `"[\"my-api\"]"`.
+`pm2_services` is stored as a JSON array serialized to a string, e.g. `"[\"my-api\"]"`. On write it
+also accepts a comma-separated string (`"my-api, my-bot"`) or a real array and stores the canonical
+form; on read, older rows holding a bare string are still parsed, so both forms are safe.
 
 ### Status provider contract (`PANEL_URL`)
 

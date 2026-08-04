@@ -136,7 +136,7 @@ it runs in a background worker, not in the request path.
 
 ## Tests
 
-`npm test` runs `node --test` over `test/`. There is no test framework and no mocking library. Each
+`node --test` runs the suite over `test/` (there is no `npm test` script: `test/` is not part of the published package, so inside an installed package the command would pass without running anything). There is no test framework and no mocking library. Each
 test isolates its database through `KB_DATA_DIR`, so running the suite never touches a real board.
 
 Tests here are mostly **regression guards for behaviour that broke once**: rotation of backups,

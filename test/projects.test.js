@@ -109,3 +109,22 @@ test('an archived project leaves the list but stays reachable by key', async () 
   assert.ok(!list.some((p) => p.slug === 'alpha-beta'), 'an archived project is not in the list');
   assert.equal((await get('alpha-beta')).statusCode, 200, 'but it still opens by key');
 });
+
+test('pm2_services accepts both a JSON array and a comma-separated string', async () => {
+  const { parsePm2Services, serializePm2Services } = await import('../src/pm2-services.js');
+  assert.deepEqual(parsePm2Services('crm-tb'), ['crm-tb'], 'a bare string is one service');
+  assert.deepEqual(parsePm2Services('a, b ,c'), ['a', 'b', 'c']);
+  assert.deepEqual(parsePm2Services('["a","b"]'), ['a', 'b']);
+  assert.deepEqual(parsePm2Services('[broken'), ['[broken'], 'broken JSON is not a crash');
+  assert.deepEqual(parsePm2Services(null), []);
+  assert.equal(serializePm2Services(''), null, 'an empty list clears the column');
+
+  await create({ slug: 'pm2-proj', name: 'pm2 project', pm2_services: 'one, two' });
+  assert.equal((await get('pm2-proj')).json().pm2_services, '["one","two"]',
+    'the canonical JSON form is stored, whatever the caller sent');
+
+  await patch('pm2-proj', { pm2_services: 'three' });
+  assert.equal((await get('pm2-proj')).json().pm2_services, '["three"]');
+  await patch('pm2-proj', { pm2_services: '' });
+  assert.equal((await get('pm2-proj')).json().pm2_services, null, 'an empty value clears the field');
+});
