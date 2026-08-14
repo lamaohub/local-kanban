@@ -1,5 +1,5 @@
 
-import { WORKING, buildSelect, canMoveTo, clearSelection, labelChip, moveBlocked, scheduleDrawLinks, scrollToNewCardId, selVal, selectedIds, taskIsNoclaude } from './board.js';
+import { WORKING, buildSelect, canMoveTo, clearSelection, labelChip, moveBlocked, scheduleDrawLinks, selVal, selectedIds, setScrollToNewCardId, taskIsNoclaude } from './board.js';
 import { $, ALL, ALL_STATUSES, DASH, LABEL_COLORS, LABEL_SELECTABLE, PRI_LEVELS, SETTINGS, TITLE_LABEL_WORDS, api, apiBlob, esc, ghSyncOn, ic, seg, state, tr } from './core.js';
 import { getSetting } from './settings.js';
 import { currentProject, overlayLayer, popLayer, pushLayer, selectProject, styledAlert, styledConfirm } from './sidebar.js';
@@ -425,7 +425,7 @@ function setDrawerId(key, slug) {
 export function openDrawer(key) {
   if (selectedIds.size) clearSelection();
   if (autosaveTimer && state.drawerKey && state.drawerKey !== key) { clearTimeout(autosaveTimer); autosaveTimer = null; doAutosave(); }
-  api('GET', `/api/tasks/${seg(key)}`).then((t) => {
+  api('GET', `/api/tasks/${seg(key)}`, undefined, { quiet: true }).then((t) => {
     state.drawerKey = t.key;
     $('drawer').classList.remove('is-empty');
     $('d-project').classList.add('hidden');
@@ -457,6 +457,10 @@ export function openDrawer(key) {
     scheduleDrawLinks();
     const card = $('board').querySelector(`.card[data-id="${t.id}"]`);
     if (card) requestAnimationFrame(() => card.scrollIntoView({ inline: 'nearest', block: 'nearest' }));
+  }, () => {
+    styledAlert(tr('This task no longer exists — it was deleted.'));
+    if (state.drawerKey === key) closeDrawer();
+    refresh();
   });
 }
 
@@ -788,7 +792,7 @@ async function doReturn(reason) {
 export async function syncOpenDrawerStatus() {
   if (!state.drawerKey) return;
   let t = state.tasks.find((x) => x.key === state.drawerKey);
-  if (!t) { try { t = await api('GET', `/api/tasks/${seg(state.drawerKey)}`); } catch { return; } }
+  if (!t) { try { t = await api('GET', `/api/tasks/${seg(state.drawerKey)}`, undefined, { quiet: true }); } catch { return; } }
   if (!t) return;
   if (!DrawerSync.shouldSyncDrawerStatus(drawerStatus, selVal('d-status'), t.status)) return;
   drawerStatus = t.status;
@@ -850,6 +854,6 @@ export async function doAutosave() {
   }
   for (const p of pend) await uploadAttachment(p.blob, created.key);
   clearPending();
-  if (wasOpenOnNew) { scrollToNewCardId = created.id; setTimeout(() => { scrollToNewCardId = null; }, 900); }
+  if (wasOpenOnNew) { setScrollToNewCardId(created.id); setTimeout(() => setScrollToNewCardId(null), 900); }
   await refresh();
 }

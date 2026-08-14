@@ -3,6 +3,23 @@
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [semantic versioning](https://semver.org/).
 
+## [1.2.1]
+
+### Fixed
+
+- **Creating a task threw an error every single time.** The board splits its frontend into ES
+  modules, and two of them wrote to a variable owned by another module. An import is a read-only
+  binding, so the assignment threw a `TypeError` and took the rest of the function with it. Three
+  things were broken by it at once: a freshly created card was never scrolled into view, the board
+  refresh that follows creation never ran, and the sync badge stopped updating — which also meant
+  a board with no GitHub sync configured still promised "creating issue…" on every new task. Each
+  creation also left an entry in the error log; on a board in daily use they were 82 of the last
+  100 records.
+- **A task deleted in another tab filled the error log.** The panel re-reads the task it shows on
+  every board refresh, so a task deleted elsewhere logged the same "task not found" line again and
+  again. Opening one now says so plainly, closes the panel and refreshes the board, and the
+  periodic re-read no longer treats an expected miss as a failure.
+
 ## [1.2.0]
 
 ### Added

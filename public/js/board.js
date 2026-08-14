@@ -15,6 +15,7 @@ function matchesSearch(t) {
 let prevCardIds = new Set();
 let prevRenderSlug = null;
 export let scrollToNewCardId = null;
+export function setScrollToNewCardId(id) { scrollToNewCardId = id; }
 function ensureCardFxLayer() {
   let l = document.getElementById('card-fx');
   if (!l) { l = document.createElement('div'); l.id = 'card-fx'; document.body.appendChild(l); }

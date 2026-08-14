@@ -111,6 +111,13 @@ modules, nothing lands on `window` implicitly — `app.js` assigns an explicit l
 console use and browser-driven tests. A function that a test needs must be added to that list
 rather than reached around.
 
+**A module never assigns to a binding it imported.** An import is a read-only binding and modules
+are always strict, so the assignment throws a `TypeError` at runtime rather than quietly missing —
+and it takes the rest of the enclosing function with it. State shared across modules is changed
+through a setter next to its declaration (`setGhSyncOn`, `setScrollToNewCardId`). The rule is
+enforced statically by `test/frontend-imports.test.js`, because a module that no browser test
+happens to execute would otherwise fail only in front of a user.
+
 SSE updates are applied **surgically**: `applySseEvent` patches the affected card for
 `task.created/updated/deleted` instead of re-fetching the board. A full refresh is the fallback for
 events that change structure.

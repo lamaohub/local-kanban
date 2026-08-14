@@ -500,6 +500,7 @@ const I18N_RU = {
   'This is a local kanban board built to work in tandem with Claude Code. A couple of steps and you are ready.': 'Это локальная канбан-доска для работы в паре с Claude Code. Пара шагов — и можно работать.',
   'this month': 'за месяц',
   'This snapshot has already been rotated out — refreshing the list.': 'Этот снимок уже удалён ротацией — обновляю список.',
+  'This task no longer exists — it was deleted.': 'Этой задачи больше нет — её удалили.',
   'this takes a few seconds': 'это занимает несколько секунд',
   'this week': 'за неделю',
   'this year': 'за год',
@@ -667,6 +668,7 @@ export const setupPrompt = () => SETUP_PROMPT[LANG] || SETUP_PROMPT.ru;
 
 export const seg = (s) => encodeURIComponent(String(s));
 export let ghSyncOn = true;
+export function setGhSyncOn(v) { ghSyncOn = v; }
 const reportedErrors = new Map();
 const REPORT_WINDOW_MS = 10000;
 function reportError(scope, message, detail) {

@@ -1,6 +1,6 @@
 
 import { renderBoard } from './board.js';
-import { $, ALL, ALL_STATUSES, CALENDAR, CHAOS, DASH, HORIZON, LANG, SETTINGS, api, esc, ghSyncOn, ic, state, tr } from './core.js';
+import { $, ALL, ALL_STATUSES, CALENDAR, CHAOS, DASH, HORIZON, LANG, SETTINGS, api, esc, ic, setGhSyncOn, state, tr } from './core.js';
 import { openDrawer, renderComments, renderIssueRow, syncOpenDrawerStatus } from './drawer.js';
 import { getSetting } from './settings.js';
 import { loadProjects, loadTasks, renderSidebar, renderTopbar, selectProject } from './sidebar.js';
@@ -13,7 +13,7 @@ export async function refreshSync() {
       : `${Math.max(1, Math.round(st.week_seconds / 60))}${tr('m')}`;
     $('week-stats').textContent = st.week_done ? `${tr('last 7 days:')} ${st.week_done} ✓ · ${wk}` : '';
     const s = await api('GET', '/api/sync');
-    ghSyncOn = s.configured !== false;
+    setGhSyncOn(s.configured !== false);
     const el = $('sync-badge');
     if (s.configured === false) { el.textContent = ''; el.className = 'sync-badge'; }
     else if (s.failed.length) { el.innerHTML = `${ic('warn', 12)} ${esc(tr('sync'))}: ${s.failed.length} ${esc(tr('errors'))}`; el.className = 'sync-badge error'; }

@@ -12,10 +12,13 @@ No build step: vanilla JS frontend served from `public/`, Fastify + better-sqlit
 
 Read [ARCHITECTURE.md](ARCHITECTURE.md) before a first non-trivial change — it covers the design constraints, the status model and the rules that are easy to break from the outside.
 
-## Branch flow
+## Sending a change
 
-- `dev` — day-to-day work; PRs target `dev`.
-- `main` — stable only: `dev` is merged after it has run without problems, and tagged `vX.Y`. Users update from `main`.
+Fork the repository, branch off `main`, and open the pull request against `main` — that is the
+branch this repository publishes and the one users install from. `node --test` runs on every pull
+request, including from forks, and needs no secrets.
+
+Releases are cut from `main` and tagged `vX.Y.Z`; the tag is what publishes the package to npm.
 
 ## The schema rule (the one rule that protects user data)
 
@@ -33,7 +36,9 @@ The board is minimalist, Linear-style. **One accent color** (`--accent`), calm p
 
 ## UI strings
 
-New user-visible strings go through `tr('…')` with an English pair in `I18N_EN` (top of `public/app.js`).
+English is the base language: write the string itself in English inside `tr('…')`. The English text
+is also the dictionary key, so a string with no translation stays English rather than leaking another
+language into the interface. To translate it, add the pair to `I18N_RU` in `public/js/core.js`.
 
 ## Commits
 
