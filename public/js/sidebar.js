@@ -29,9 +29,11 @@ export async function loadTasks() {
   showView('board');
   if (!state.slug) { state.tasks = []; renderBoard(); return; }
   try {
+    const q = state.search ? `&q=${encodeURIComponent(state.search)}` : '';
     state.tasks = state.slug === ALL
-      ? await api('GET', '/api/tasks?all=1')
-      : await api('GET', `/api/tasks?project=${encodeURIComponent(state.slug)}&all=1`);
+      ? await api('GET', `/api/tasks?all=1${q}`)
+      : await api('GET', `/api/tasks?project=${encodeURIComponent(state.slug)}&all=1${q}`);
+    state.searchApplied = state.search;
   } catch {
     state.slug = null;
     state.tasks = [];

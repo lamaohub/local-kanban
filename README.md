@@ -78,6 +78,15 @@ Set the owner and issues repo in **Settings → Sync** on the board (or env `KB_
 
 ## Updating
 
+From npm:
+
+```bash
+npm install -g local-kanban@latest
+local-kanban skills          # refresh the Claude Code skills — they are a copy, not a link
+```
+
+From a clone:
+
 ```bash
 npm run update   # git pull + npm install + pm2 restart (if applicable)
 ```

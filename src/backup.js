@@ -1,6 +1,6 @@
-import { mkdirSync, existsSync, readdirSync, unlinkSync, renameSync, rmSync, statSync } from 'node:fs';
+import { cpSync, mkdirSync, existsSync, readdirSync, unlinkSync, renameSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { db, DATA_DIR } from './db.js';
+import { db, DATA_DIR, logError } from './db.js';
 
 const DIR = join(DATA_DIR, 'backups');
 
@@ -19,18 +19,31 @@ function rotate(re, keep) {
   while (files.length > keep) unlinkSync(join(DIR, files.shift()));
 }
 
+let tmpSeq = 0;
+let running = null;
 async function snapshot(path) {
-  const tmp = `${path}.part`;
-  rmSync(tmp, { force: true });
-  try {
-    await db.backup(tmp);
-    rmSync(path, { force: true });
-    renameSync(tmp, path);
-  } catch (e) {
+  while (running) { try { await running; } catch {  } }
+  const done = (async () => {
+    const tmp = `${path}.${process.pid}.${++tmpSeq}.part`;
     rmSync(tmp, { force: true });
-    throw e;
-  }
-  return path;
+    try {
+      await db.backup(tmp);
+      renameSync(tmp, path);
+    } catch (e) {
+      rmSync(tmp, { force: true });
+      throw e;
+    }
+    return path;
+  })();
+  running = done;
+  try { return await done; } finally { if (running === done) running = null; }
+}
+
+export const ATTACH_MIRROR = join(DIR, 'attachments');
+function mirrorAttachments() {
+  const src = join(DATA_DIR, 'attachments');
+  if (!existsSync(src)) return;
+  cpSync(src, ATTACH_MIRROR, { recursive: true, force: false, errorOnExist: false });
 }
 
 export function listBackups() {
@@ -51,26 +64,48 @@ export function backupPath(name) {
   return found ? join(DIR, found.name) : null;
 }
 
+export const backupState = { last_ok: null, last_error: null, last_error_at: null };
+
 export async function backupNow() {
   mkdirSync(DIR, { recursive: true });
   const path = join(DIR, `kanban-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.db`);
   await snapshot(path);
+  mirrorAttachments();
   rotate(MANUAL_RE, KEEP_MANUAL);
+  backupState.last_ok = new Date().toISOString();
   return path;
 }
 
+const BACKUP_EVERY_MS = 6 * 3600 * 1000;
+const BACKUP_RETRY_MS = 10 * 60 * 1000;
 export function startBackups() {
   mkdirSync(DIR, { recursive: true });
-  const run = () => {
+  let timer = null;
+  const again = (ms) => { clearTimeout(timer); timer = setTimeout(run, ms); timer.unref?.(); };
+  function run() {
     const path = join(DIR, `kanban-${new Date().toISOString().slice(0, 10)}.db`);
-    if (existsSync(path)) return;
+    if (existsSync(path)) {
+      mirrorAttachments();
+      backupState.last_ok = backupState.last_ok || statSync(path).mtime.toISOString();
+      again(BACKUP_EVERY_MS);
+      return;
+    }
     snapshot(path)
       .then(() => {
+        mirrorAttachments();
         rotate(DAILY_RE, KEEP_DAILY);
+        backupState.last_ok = new Date().toISOString();
+        backupState.last_error = null;
         console.log(`backup: ${path}`);
+        again(BACKUP_EVERY_MS);
       })
-      .catch((e) => console.error('backup failed:', e.message));
-  };
+      .catch((e) => {
+        backupState.last_error = e.message;
+        backupState.last_error_at = new Date().toISOString();
+        logError('server', 'backup', `daily backup failed: ${e.message}`, e.stack);
+        console.error('backup failed:', e.message);
+        again(BACKUP_RETRY_MS);
+      });
+  }
   run();
-  setInterval(run, 6 * 3600 * 1000);
 }

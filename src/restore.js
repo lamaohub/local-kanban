@@ -1,15 +1,23 @@
 import { spawn } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { closeSync, cpSync, mkdtempSync, openSync, readSync, readdirSync, statSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
 import Database from 'better-sqlite3';
 import { logError } from './db.js';
+import { ATTACH_MIRROR } from './backup.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const LIFETIME_MS = 30 * 60 * 1000;
 let current = null; // { port, proc, dir, startedAt, timer, stats }
+
+function readHead(path) {
+  const buf = Buffer.alloc(15);
+  let fd;
+  try { fd = openSync(path, 'r'); readSync(fd, buf, 0, 15, 0); } catch { return Buffer.alloc(0); } finally { if (fd !== undefined) closeSync(fd); }
+  return buf;
+}
 
 const freePort = () => new Promise((resolve, reject) => {
   const s = createServer();
@@ -17,13 +25,16 @@ const freePort = () => new Promise((resolve, reject) => {
   s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); });
 });
 
-export function inspectBackup(buf) {
-  if (buf.length < 100 || buf.subarray(0, 15).toString('latin1') !== 'SQLite format 3') {
+export function inspectBackup(input) {
+  const fromPath = typeof input === 'string';
+  const head = fromPath ? readHead(input) : input.subarray(0, 15);
+  const size = fromPath ? (statSync(input, { throwIfNoEntry: false })?.size ?? 0) : input.length;
+  if (size < 100 || head.toString('latin1') !== 'SQLite format 3') {
     return { ok: false, error: 'not an SQLite database file' };
   }
   const dir = mkdtempSync(join(tmpdir(), 'kb-restore-'));
   const file = join(dir, 'kanban.db');
-  writeFileSync(file, buf);
+  if (fromPath) cpSync(input, file); else writeFileSync(file, input);
   try {
     const db = new Database(file, { readonly: true });
     const integrity = db.pragma('integrity_check', { simple: true });
@@ -49,14 +60,36 @@ export function inspectBackup(buf) {
 function disarmSync(file) {
   const db = new Database(file);
   try {
-    db.prepare("DELETE FROM kv WHERE key IN ('gh.owner','gh.repo')").run();
-    db.prepare("INSERT INTO kv(key, value) VALUES('sync.paused','1') ON CONFLICT(key) DO UPDATE SET value='1'").run();
-    db.prepare('DELETE FROM sync_queue').run();
+    const has = (t) => Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(t));
+    if (has('kv')) {
+      db.prepare("DELETE FROM kv WHERE key IN ('gh.owner','gh.repo')").run();
+      db.prepare("INSERT INTO kv(key, value) VALUES('sync.paused','1') ON CONFLICT(key) DO UPDATE SET value='1'").run();
+    }
+    if (has('sync_queue')) db.prepare('DELETE FROM sync_queue').run();
   } catch (e) {
     logError('server', 'restore-preview', `could not disable the sync in the copy: ${e.message}`);
     throw e;
   } finally { db.close(); }
 }
+
+export function sweepStalePreviews() {
+  const base = tmpdir();
+  let left = 0;
+  try {
+    for (const name of readdirSync(base)) {
+      if (!name.startsWith('kb-restore-')) continue;
+      const dir = join(base, name);
+      try {
+        if (Date.now() - statSync(dir).mtimeMs < 3600 * 1000) continue;
+        rmSync(dir, { recursive: true, force: true });
+        left++;
+      } catch {  }
+    }
+  } catch {  }
+  return left;
+}
+
+export function previewProcessForTests() { return current; }
 
 export function currentPreview() {
   if (!current) return null;
@@ -91,11 +124,14 @@ export function stopPreview() {
 
 export async function startPreview(dir, stats) {
   stopPreview();
+  try { if (existsSync(ATTACH_MIRROR)) cpSync(ATTACH_MIRROR, join(dir, 'attachments'), { recursive: true }); } catch (e) {
+    logError('server', 'restore-preview', `could not copy the attachments into the copy: ${e.message}`);
+  }
   const port = await freePort();
   const proc = spawn(process.execPath, [join(ROOT, 'src', 'server.js')], {
     cwd: ROOT,
-    env: { ...process.env, PORT: String(port), KB_DATA_DIR: dir, KB_GH_OWNER: '', KB_GH_REPO: '' },
-    stdio: 'ignore',
+    env: { ...process.env, PORT: String(port), KB_DATA_DIR: dir, KB_GH_OWNER: '', KB_GH_REPO: '', KB_PREVIEW_TTL_MS: String(LIFETIME_MS) },
+    stdio: ['pipe', 'ignore', 'ignore'],
     detached: false,
   });
   proc.on('exit', (code) => { if (current && current.proc === proc && code) logError('server', 'restore-preview', `the preview board crashed, code ${code}`); });
@@ -103,9 +139,15 @@ export async function startPreview(dir, stats) {
   current = { port, proc, dir, startedAt: Date.now(), timer, stats };
   armCleanup();
   const deadline = Date.now() + 15000;
+  let up = false;
   while (Date.now() < deadline) {
-    try { const r = await fetch(`http://127.0.0.1:${port}/api/projects`); if (r.ok) break; } catch {  }
+    if (proc.exitCode !== null) break;
+    try { const r = await fetch(`http://127.0.0.1:${port}/api/projects`); if (r.ok) { up = true; break; } } catch {  }
     await new Promise((r) => setTimeout(r, 250));
+  }
+  if (!up) {
+    stopPreview();
+    throw new Error('the preview board did not answer within 15 seconds');
   }
   return currentPreview();
 }

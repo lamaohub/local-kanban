@@ -36,6 +36,31 @@ jobs:
             exit 1
           }
 
+      # CK-385: the same install check the test workflow runs. It was not called here at all, so
+      # the one thing that must never be published broken — a package that installs but does not
+      # open — had no gate on the publishing path. Nothing half-published: this runs before the
+      # irreversible step, not after it.
+      - name: pack, install and open the package
+        run: |
+          set -euo pipefail
+          tgz=$(npm pack --silent | tail -1)
+          npm install -g --prefix "$RUNNER_TEMP/prefix" "./$tgz"
+
+          "$RUNNER_TEMP/prefix/bin/local-kanban" start --port 3199 --data "$RUNNER_TEMP/data" &
+          pid=$!
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:3199/api/projects >/dev/null 2>&1; then up=1; break; fi
+            sleep 0.5
+          done
+          test "${up:-}" = 1 || { echo "the installed package never answered"; kill -9 "$pid"; exit 1; }
+          for path in / /app.js /js/core.js /style.css; do
+            curl -fsS "http://127.0.0.1:3199$path" >/dev/null \
+              || { echo "the board serves the API but not $path"; kill -9 "$pid"; exit 1; }
+          done
+          curl -fsS http://127.0.0.1:3199/ | grep -q '<div id="board"' \
+            || { echo "the page came back without the board markup"; kill -9 "$pid"; exit 1; }
+          kill "$pid" || true
+
       - run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

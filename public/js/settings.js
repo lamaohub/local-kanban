@@ -3,7 +3,7 @@ import { WORKING, buildSelect, drawLinks } from './board.js';
 import { $, ALL_STATUSES, LANG, api, apiBlob, esc, ic, seg, state, tr } from './core.js';
 import { applyKeepDrawer } from './drawer.js';
 import { checkVersion, pendingReload } from './init.js';
-import { popLayer, pushLayer, setupPromptBlockHTML, styledAlert, styledConfirm, styledPrompt, wireSetupPrompt } from './sidebar.js';
+import { loadProjects, popLayer, pushLayer, setupPromptBlockHTML, styledAlert, styledConfirm, styledPrompt, wireSetupPrompt } from './sidebar.js';
 import { SHORT_MONTHS, SOUND_LIB, STATUS_LABELS, audioCtx, lastMissedAt, lastSseAt, missedSounds, pageLoadedAt, playNamedSound, refresh, relTime, titleOr, updateSoundBadge } from './sse.js';
 
 const SETTINGS_DEFAULTS = { sound: true, soundReview: 'ding', soundDone: 'click', startScreen: 'dashboard', dashRange: 'week', theme: 'system', keepDrawer: false, notifyReview: false, compactCards: false, linkLines: true, keymap: {} };
@@ -74,7 +74,7 @@ function syncThemeColor() {
   if (bg) meta.setAttribute('content', bg);
 }
 
-const SM_SECTIONS = [['general', tr('General')], ['appearance', tr('Appearance')], ['cats', tr('Sections')], ['sync', tr('Sync')], ['errors', tr('Errors')], ['backups', tr('Backups')], ['keys', tr('Hotkeys')], ['about', tr('About')]];
+const SM_SECTIONS = [['general', tr('General')], ['appearance', tr('Appearance')], ['cats', tr('Sections')], ['archive', tr('Archive')], ['sync', tr('Sync')], ['errors', tr('Errors')], ['backups', tr('Backups')], ['keys', tr('Hotkeys')], ['about', tr('About')]];
 function settingsModalKey(e) { if (e.key === 'Escape') closeSettingsModal(); }
 function closeSettingsModal() {
   popLayer('settings-overlay');
@@ -167,6 +167,28 @@ async function renderSection(sec) {
     body.querySelector('[data-set="compactCards"]').onchange = (e) => { setSetting('compactCards', e.target.checked); applyCompact(); };
     body.querySelector('[data-set="linkLines"]').checked = getSetting('linkLines') !== false;
     body.querySelector('[data-set="linkLines"]').onchange = (e) => { setSetting('linkLines', e.target.checked); drawLinks(); };
+  } else if (sec === 'archive') {
+    body.innerHTML = `<div class="sm-h">${tr('Archive')}</div>`
+      + `<div class="kbh-note muted">${tr('Archived boards are hidden from the sidebar and left out of every dashboard number. Their tasks are kept.')}</div>`
+      + '<div id="arch-list" class="bk-list">…</div>';
+    const load = async () => {
+      let list;
+      try { list = await api('GET', '/api/projects/archived'); } catch { $('arch-list').textContent = '—'; return; }
+      $('arch-list').innerHTML = list.length
+        ? list.map((p) => `<div class="bk-row"><span>${esc(p.name)}</span>`
+            + `<span class="muted">${p.tasks_n} ${plural(p.tasks_n, 'task', 'tasks')}</span>`
+            + `<button class="btn-ghost arch-back" data-slug="${esc(p.slug)}">${tr('Bring back')}</button></div>`).join('')
+        : `<div class="muted">${tr('nothing archived')}</div>`;
+      $('arch-list').querySelectorAll('.arch-back').forEach((b) => {
+        b.onclick = async () => {
+          b.disabled = true;
+          try { await api('PATCH', `/api/projects/${seg(b.dataset.slug)}`, { archived: 0 }); } catch { b.disabled = false; return; }
+          await loadProjects();
+          load();
+        };
+      });
+    };
+    load();
   } else if (sec === 'cats') {
     body.innerHTML = `<div class="sm-h">${tr('Sections')}<button class="btn-ghost" id="cat-add">${tr('＋ New section')}</button></div>`
       + `<div class="kbh-note muted">${tr('Sections group boards in the sidebar. A new name applies to every board in the section.')}</div>`
@@ -288,6 +310,7 @@ async function renderSection(sec) {
               + `<span class="err-when muted">${esc(fmtDbTime(r.at))}</span>`
               + `<span class="err-src">${esc(SRC[r.source] || r.source)}${r.scope ? ` · ${esc(r.scope)}` : ''}</span>`
               + `<span class="err-msg">${esc(r.message)}`
+              + `${r.repeats ? ` <span class="muted">×${r.repeats + 1}</span>` : ''}`
               + `${r.resolved_at ? `<span class="err-fixed-tag">${tr('recovered on retry')}</span>` : ''}`
               + `</span></div>`).join('')
           : `<div class="muted">${tr('no errors ✓')}</div>`;
@@ -309,10 +332,19 @@ async function renderSection(sec) {
       + `<div id="bk-list" class="bk-list">…</div>`;
     const load = async () => {
       try {
-        const list = await api('GET', '/api/backups');
-        $('bk-list').innerHTML = list.length
+        const info = await api('GET', '/api/backups');
+        const list = info.items;
+        const stamp = (iso) => esc(String(iso).slice(0, 16).replace('T', ' '));
+        const head = (info.last_error
+          ? `<div class="kbh-note warn">${tr('The last automatic snapshot failed')} (${stamp(info.last_error_at)}): ${esc(info.last_error)}</div>`
+          : '')
+          + (info.last_ok ? `<div class="kbh-note muted">${tr('Last successful snapshot')}: ${stamp(info.last_ok)}</div>` : '')
+          + `<div class="kbh-note muted">${info.attachments
+            ? tr('Images and attachments are mirrored next to the snapshots, not inside the downloaded file.')
+            : tr('The snapshot covers the database only.')}</div>`;
+        $('bk-list').innerHTML = head + (list.length
           ? list.map((b) => `<div class="bk-row"><span>${esc(b.name)}</span><span class="muted">${(b.size / 1048576).toFixed(1)} ${tr('MB')} · ${esc(b.mtime.slice(0, 16).replace('T', ' '))}</span><a class="bk-dl" href="/api/backups/${encodeURIComponent(b.name)}" download="${esc(b.name)}" title="${tr('Download backup')}">${ic('download', 13)}</a></div>`).join('')
-          : `<div class="muted">${tr('no backups yet')}</div>`;
+          : `<div class="muted">${tr('no backups yet')}</div>`);
         $('bk-list').querySelectorAll('.bk-dl').forEach((a) => {
           a.onclick = async (e) => {
             e.preventDefault();
@@ -388,6 +420,10 @@ async function renderSection(sec) {
       const el = $('about-fresh');
       if (el) { el.textContent = pendingReload ? tr('⟳ a new version is available') : tr('the board is fresh ✓'); el.classList.toggle('stale-ver', pendingReload); }
     });
+    let about = null;
+    const updateHint = () => (about?.packaged
+      ? tr('update with: npm install -g local-kanban@latest')
+      : tr('update with: npm run update'));
     const renderUpd = (u) => {
       const el = $('about-upd'); const sub = $('about-upd-sub'); const lab = $('about-branch-lab');
       if (!el || !sub) return;
@@ -395,7 +431,7 @@ async function renderSection(sec) {
       const tag = u.tag ? ` · ${tr('tag')} ${u.tag}` : '';
       el.className = 'about-fresh';
       if (u.update_available === null) { el.textContent = ''; sub.textContent = tr('cannot check (no network, or the repo is private/not a git checkout)'); }
-      else if (u.update_available) { el.textContent = `⟳ ${tr('update available')} ${u.local} → ${u.remote}`; el.classList.add('stale-ver'); sub.textContent = `${tr('commit')} ${u.local}${tag} · ${tr('update with: npm run update')}`; }
+      else if (u.update_available) { el.textContent = `⟳ ${tr('update available')} ${u.local} → ${u.remote}`; el.classList.add('stale-ver'); sub.textContent = `${tr('commit')} ${u.local}${tag} · ${updateHint()}`; }
       else if (u.dev?.ahead) { el.textContent = `${tr('in dev')} ${u.dev.ahead} ${commitsWord(u.dev.ahead)} ${tr('awaiting release')}`; el.classList.add('stale-ver'); sub.textContent = `${tr('commit')} ${u.local}${tag} · ${tr('matches GitHub')}`; }
       else { el.textContent = tr('up to date ✓'); sub.textContent = `${tr('commit')} ${u.local}${tag} · ${tr('matches GitHub')}`; }
       const row = $('about-dev-row'); const dEl = $('about-dev'); const dSub = $('about-dev-sub');
@@ -408,7 +444,9 @@ async function renderSection(sec) {
         ? `${u.dev.sha}${u.dev.date ? ` ${tr('at')} ${fmtDbTime(u.dev.date.slice(0, 19).replace('T', ' '))}` : ''}${u.dev.message ? ` · ${u.dev.message}` : ''}`
         : tr('dev has no commits beyond main');
     };
-    api('GET', '/api/update-check').then(renderUpd).catch(() => { const s = $('about-upd-sub'); if (s) s.textContent = '—'; });
+    api('GET', '/api/about').catch(() => null).then((a) => { about = a; })
+      .then(() => api('GET', '/api/update-check')).then(renderUpd)
+      .catch(() => { const s = $('about-upd-sub'); if (s) s.textContent = '—'; });
     $('about-recheck').onclick = async () => {
       const btn = $('about-recheck');
       btn.disabled = true; $('about-upd-sub').textContent = tr('checking…');
@@ -418,6 +456,7 @@ async function renderSection(sec) {
     };
     try {
       const a = await api('GET', '/api/about');
+      about = a;
       $('about-ver').textContent = a.commit ? `${tr('commit')} ${a.commit}` : (a.app_mtime ? `app.js ${tr('from')} ${fmtDbTime(a.app_mtime.slice(0, 19).replace('T', ' '))}` : '—');
       const up = a.uptime;
       const upStr = up >= 86400 ? `${Math.floor(up / 86400)}${tr('d')} ${Math.floor((up % 86400) / 3600)}${tr('h')}` : up >= 3600 ? `${Math.floor(up / 3600)}${tr('h')} ${Math.floor((up % 3600) / 60)}${tr('m')}` : `${Math.floor(up / 60)}${tr('m')}`;

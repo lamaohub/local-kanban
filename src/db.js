@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { readFileSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
+import { readFileSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { DATA_DIR, ROOT, langOverride, ghOwnerEnv, ghRepoEnv } from './config.js';
 
@@ -22,18 +22,53 @@ const MIGRATIONS = [
     db.prepare("UPDATE projects SET category = 'Local' WHERE category = 'Локальные'").run();
     db.prepare("UPDATE projects SET category = 'Other' WHERE category = 'Прочее'").run();
   } },
+  { v: 4, name: 'work-truncated-counter', up: () => {
+    const cols = db.prepare('PRAGMA table_info(tasks)').all();
+    if (!cols.length || cols.some((c) => c.name === 'work_truncated')) return;
+    db.exec('ALTER TABLE tasks ADD COLUMN work_truncated INTEGER NOT NULL DEFAULT 0');
+  } },
+  { v: 5, name: 'app-errors-repeats', up: () => {
+    const cols = db.prepare('PRAGMA table_info(app_errors)').all();
+    if (!cols.length || cols.some((c) => c.name === 'repeats')) return;
+    db.exec('ALTER TABLE app_errors ADD COLUMN repeats INTEGER NOT NULL DEFAULT 0');
+  } },
+  { v: 6, name: 'sync-queue-started-at', up: () => {
+    const cols = db.prepare('PRAGMA table_info(sync_queue)').all();
+    if (!cols.length || cols.some((c) => c.name === 'started_at')) return;
+    db.exec('ALTER TABLE sync_queue ADD COLUMN started_at TEXT');
+  } },
 ];
 export const SCHEMA_VERSION = MIGRATIONS.at(-1).v;
 
-export const db = new Database(join(DATA_DIR, 'kanban.db'));
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+function dieOnBrokenDatabase(e) {
+  const dir = join(DATA_DIR, 'backups');
+  console.error(`\n  The board could not open its database: ${e.message}\n`);
+  console.error(`  The file is ${join(DATA_DIR, 'kanban.db')}`);
+  console.error('  What to do:');
+  console.error(`    · restore the newest snapshot over it — they are in ${dir}`);
+  console.error(`    · a snapshot taken before the last schema change is in ${join(dir, 'pre-migrate')}`);
+  console.error('    · stop the board first, then copy the file back and start it again\n');
+  process.exit(1);
+}
 
-migrate();
-db.exec(readFileSync(join(ROOT, 'src', 'schema.sql'), 'utf8'));
-backfill();
+let db;
+try {
+  db = new Database(join(DATA_DIR, 'kanban.db'));
+  db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = ON');
+} catch (e) { dieOnBrokenDatabase(e); }
+export { db };
+db.function('kb_lower', { deterministic: true }, (s) => (s === null || s === undefined ? null : String(s).toLowerCase()));
+
+try {
+  migrate();
+  db.exec(readFileSync(join(ROOT, 'src', 'schema.sql'), 'utf8'));
+  backfill();
+} catch (e) { dieOnBrokenDatabase(e); }
 
 export const SYNC_MAX_ATTEMPTS = 15;
+
+export const WORK_SEGMENT_MAX_S = 2 * 3600;
 
 export const STATUSES = ['backlog', 'todo', 'prep', 'doing', 'deploy', 'review', 'done', 'cancelled'];
 
@@ -61,7 +96,15 @@ function preMigrateBackup(fromVersion) {
   mkdirSync(dir, { recursive: true });
   const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
   const target = join(dir, `kanban-v${fromVersion}-${stamp}.db`);
-  db.exec(`VACUUM INTO '${target.replace(/'/g, "''")}'`);
+  const tmp = `${target}.part`;
+  rmSync(tmp, { force: true });
+  try {
+    db.exec(`VACUUM INTO '${tmp.replace(/'/g, "''")}'`);
+    renameSync(tmp, target);
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    throw e;
+  }
   const files = readdirSync(dir).filter((f) => f.endsWith('.db')).sort();
   for (const f of files.slice(0, -5)) rmSync(join(dir, f), { force: true });
 }
@@ -174,12 +217,28 @@ export function kvSet(key, value) {
 }
 
 const ERRORS_KEEP = 300;
+
+const DEDUP_MS = 10000;
+const lastLogged = new Map();
 export function logError(source, scope, message, detail, opId = null) {
   try {
-    db.prepare('INSERT INTO app_errors(source, scope, message, detail, op_id) VALUES(?, ?, ?, ?, ?)')
-      .run(String(source), scope ? String(scope).slice(0, 200) : null, String(message).slice(0, 500), detail ? String(detail).slice(0, 2000) : null, opId ?? null);
+    const scopeStr = scope ? String(scope).slice(0, 200) : null;
+    const msgStr = String(message).slice(0, 500);
+    const key = `${source}${scopeStr}${msgStr}`;
+    const now = Date.now();
+    const seen = lastLogged.get(key);
+    if (seen && now - seen.at < DEDUP_MS) {
+      db.prepare('UPDATE app_errors SET repeats = repeats + 1 WHERE id = ?').run(seen.id);
+      return;
+    }
+    for (const [k, v] of lastLogged) { if (now - v.at >= DEDUP_MS) lastLogged.delete(k); }
+    const info = db.prepare('INSERT INTO app_errors(source, scope, message, detail, op_id) VALUES(?, ?, ?, ?, ?)')
+      .run(String(source), scopeStr, msgStr, detail ? String(detail).slice(0, 2000) : null, opId ?? null);
+    lastLogged.set(key, { at: now, id: info.lastInsertRowid });
     db.prepare('DELETE FROM app_errors WHERE id NOT IN (SELECT id FROM app_errors ORDER BY id DESC LIMIT ?)').run(ERRORS_KEEP);
-  } catch {  }
+  } catch (e) {
+    console.error('logError failed:', e?.message || e, '|', source, scope, message);
+  }
 }
 
 export function resolveErrors(opId) {

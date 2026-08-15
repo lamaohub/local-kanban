@@ -7,12 +7,22 @@ const GH_CANDIDATES = [
 ];
 const GH = GH_CANDIDATES.find((p) => existsSync(p)) || 'gh';
 
+const PERMANENT = [
+  /validation failed/i,
+  /could not resolve to a (repository|issue|user|organization)/i,
+  /label.{0,80}not found/i,
+  /^unprocessable entity/i,
+];
+export function isPermanent(stderr) {
+  return PERMANENT.some((re) => re.test(stderr));
+}
+
 export function gh(args, { timeout = 60000 } = {}) {
   return new Promise((resolve, reject) => {
     execFile(GH, args, { timeout, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) {
         const e = new Error((stderr || err.message || '').trim().slice(0, 500));
-        e.permanent = /not found|could not resolve|invalid|unprocessable/i.test(String(stderr));
+        e.permanent = isPermanent(String(stderr));
         return reject(e);
       }
       resolve(stdout.trim());
@@ -57,8 +67,14 @@ let labelsEnsuredFor = null;
 export async function ensureLabels() {
   const repo = ghRepo();
   if (labelsEnsuredFor === repo) return;
+  let existing = new Set();
+  try {
+    const out = await gh(['label', 'list', '-R', repo, '--limit', '200', '--json', 'name']);
+    existing = new Set(JSON.parse(out || '[]').map((l) => l.name));
+  } catch {  }
   for (const [name, color] of Object.entries(LABELS)) {
-    await gh(['label', 'create', name, '-R', repo, '--color', color, '--force']);
+    if (existing.has(name)) continue;
+    await gh(['label', 'create', name, '-R', repo, '--color', color]);
   }
   labelsEnsuredFor = repo;
 }
@@ -111,7 +127,8 @@ export async function ensureProject(project) {
 
 export async function setItemStatus(project, itemId, statusKey) {
   const opt = statusOptions(project)[statusKey];
-  if (!opt || !itemId) return;
+  if (!itemId) throw new Error('the task has no card on the GitHub board yet — waiting for create_issue');
+  if (!opt) return;
   await gh(['project', 'item-edit', '--id', itemId, '--project-id', project.gh_project_id,
     '--field-id', project.gh_status_field_id, '--single-select-option-id', opt]);
 }
@@ -138,8 +155,24 @@ export async function createIssueOnly(project, payload) {
   if (payload.blocked) labels.push('blocked');
   for (const l of labels) args.push('--label', l);
   const url = await gh(args);
-  const number = Number(url.match(/\/issues\/(\d+)/)?.[1]);
-  return { number, url };
+  return { number: parseIssueNumber(url), url };
+}
+
+export function parseIssueNumber(url) {
+  const number = Number(String(url).match(/\/issues\/(\d+)/)?.[1]);
+  if (!Number.isInteger(number) || number <= 0) {
+    throw new Error(`gh issue create answered without an issue link: ${String(url).slice(0, 200)}`);
+  }
+  return number;
+}
+
+export async function findIssueByKey(key) {
+  if (!key) return null;
+  const out = await gh(['issue', 'list', '-R', ghRepo(), '--search', `"${key}" in:body`,
+    '--state', 'all', '--limit', '20', '--json', 'number,url,body']);
+  const list = JSON.parse(out || '[]');
+  const hit = list.find((i) => typeof i.body === 'string' && i.body.includes(`· ${key} ·`));
+  return hit ? { number: hit.number, url: hit.url } : null;
 }
 
 export async function addToProject(project, url) {

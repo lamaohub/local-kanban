@@ -1,6 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -53,6 +53,84 @@ test('the list returns both daily and manual snapshots, newest first', () => {
   assert.deepEqual(times, [...times].sort().reverse(), 'the list is not sorted newest first');
 });
 
+test('two snapshots in the same second do not destroy each other', async () => {
+  const paths = await Promise.all([backupNow(), backupNow(), backupNow()]);
+  for (const p of paths) {
+    assert.ok(existsSync(p), `the snapshot disappeared: ${p}`);
+    assert.ok(statSync(p).size > 0, `the snapshot is empty (0 bytes): ${p}`);
+  }
+  assert.deepEqual(readdirSync(DIR).filter((f) => f.includes('.part')).filter((f) => f !== 'kanban-2026-07-09.db.part'), []);
+});
+
+test('a listed snapshot is never a 0-byte stub', () => {
+  for (const b of listBackups()) assert.ok(b.size > 0 || b.name.startsWith('kanban-2026-07'),
+    `a 0-byte snapshot is offered for download: ${b.name}`);
+});
+
+test('attachments are mirrored next to the snapshots', async () => {
+  const { ATTACH_MIRROR } = await import('../src/backup.js');
+  const src = join(tmp, 'attachments', '42');
+  mkdirSync(src, { recursive: true });
+  writeFileSync(join(src, '7.png'), 'PNGDATA');
+  await backupNow();
+  assert.ok(existsSync(join(ATTACH_MIRROR, '42', '7.png')), 'the attachment did not make it into the backup');
+
+  rmSync(src, { recursive: true, force: true });
+  await backupNow();
+  assert.ok(existsSync(join(ATTACH_MIRROR, '42', '7.png')), 'the mirror lost a file that the live board deleted');
+});
+
+test('a failing daily snapshot is written to the error log, not only to stdout', async () => {
+  const { startBackups, backupState } = await import('../src/backup.js');
+  const { db } = await import('../src/db.js');
+  const orig = db.backup;
+  db.backup = () => Promise.reject(new Error('EACCES: permission denied'));
+  try {
+    rmSync(join(DIR, `kanban-${new Date().toISOString().slice(0, 10)}.db`), { force: true });
+    startBackups();
+    await new Promise((r) => setTimeout(r, 150));
+    const logged = db.prepare("SELECT COUNT(*) n FROM app_errors WHERE scope = 'backup'").get().n;
+    assert.ok(logged > 0, 'the daily backup failed silently: nothing in GET /api/errors');
+    assert.match(backupState.last_error || '', /EACCES/, 'the section cannot show what broke');
+  } finally { db.backup = orig; }
+});
+
+test('octet-stream is accepted only where the backup route lives', async () => {
+  const { default: Fastify } = await import('fastify');
+  const taskRoutes = (await import('../src/routes/tasks.js')).default;
+  const app = Fastify();
+  await app.register(taskRoutes);
+  await app.ready();
+
+  const r = await app.inject({
+    method: 'POST', url: '/api/tasks',
+    headers: { 'content-type': 'application/octet-stream' },
+    payload: Buffer.alloc(1024),
+  });
+  assert.equal(r.statusCode, 415, 'the task route still swallows raw bodies of any size');
+  await app.close();
+});
+
+test('a rejected upload leaves no temp file behind', async () => {
+  const { default: Fastify } = await import('fastify');
+  const systemRoutes = (await import('../src/routes/system.js')).default;
+  const app = Fastify();
+  await app.register(systemRoutes);
+  await app.ready();
+
+  const before = readdirSync(tmpdir()).filter((f) => f.startsWith('kb-upload-')).length;
+  const r = await app.inject({
+    method: 'POST', url: '/api/backups/restore',
+    headers: { 'content-type': 'application/octet-stream' },
+    payload: Buffer.from('this is definitely not a database'.repeat(10)),
+  });
+  assert.equal(r.statusCode, 400);
+  assert.match(r.json().error, /not an SQLite/);
+  const after = readdirSync(tmpdir()).filter((f) => f.startsWith('kb-upload-')).length;
+  assert.equal(after, before, 'the uploaded file stayed in the temp directory');
+  await app.close();
+});
+
 test('GET /api/backups lists them, POST takes a new one', async () => {
   const { default: Fastify } = await import('fastify');
   const taskRoutes = (await import('../src/routes/tasks.js')).default;
@@ -64,14 +142,17 @@ test('GET /api/backups lists them, POST takes a new one', async () => {
 
   const before = await app.inject({ method: 'GET', url: '/api/backups' });
   assert.equal(before.statusCode, 200);
-  assert.ok(Array.isArray(before.json()) && before.json().length, 'the list is not empty');
+  assert.ok(Array.isArray(before.json().items) && before.json().items.length, 'the list is not empty');
+  assert.equal('last_ok' in before.json(), true, 'the section can no longer tell when a snapshot last worked');
+  assert.equal('last_error' in before.json(), true, 'the section can no longer tell what broke');
 
   const made = await app.inject({ method: 'POST', url: '/api/backups' });
   assert.equal(made.statusCode, 200);
   assert.deepEqual(made.json(), { ok: true });
 
   const after = await app.inject({ method: 'GET', url: '/api/backups' });
-  assert.ok(after.json().length >= before.json().length, 'the snapshot shows up in the list');
+  assert.ok(after.json().items.length >= before.json().items.length, 'the snapshot shows up in the list');
+  assert.notEqual(after.json().last_ok, null, 'a successful snapshot did not update last_ok');
   await app.close();
 });
 

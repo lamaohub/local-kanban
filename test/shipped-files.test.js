@@ -35,3 +35,27 @@ test('every package.json script points at a path the package actually ships', ()
   assert.equal(pkg.scripts?.test, undefined,
     'there is no test script: test/ is not published, so it would pass without running anything');
 });
+
+test('the package can refresh the skills it copied', () => {
+  const cli = readFileSync(new URL('../bin/local-kanban', import.meta.url), 'utf8');
+  assert.match(cli, /local-kanban skills/, 'the skills subcommand disappeared from the help');
+  assert.match(cli, /if \(cmd === 'skills'\)/, 'there is no way to refresh the skills after an update again');
+  assert.match(cli, /function installSkills\(/, 'the wizard and the refresh no longer share one implementation');
+});
+
+test('the update hint matches how the board was installed', () => {
+  const settings = readFileSync(new URL('../public/js/settings.js', import.meta.url), 'utf8');
+  assert.match(settings, /const updateHint = \(\) => \(about\?\.packaged/,
+    'the About section tells an npm install to run npm run update, which it does not have');
+  for (const name of ['README.md', 'README.ru.md']) {
+    const readme = readFileSync(new URL(`../${name}`, import.meta.url), 'utf8');
+    assert.match(readme, /npm install -g local-kanban@latest/, `${name} only explains how to update a clone`);
+  }
+});
+
+test('the install check asks for the page, not only for the API', () => {
+  for (const wf of ['test.yml', 'publish.yml']) {
+    const yml = readFileSync(new URL(`../.github/workflows/${wf}`, import.meta.url), 'utf8');
+    assert.match(yml, /<div id="board"/, `${wf} would stay green on a package built without public/`);
+  }
+});

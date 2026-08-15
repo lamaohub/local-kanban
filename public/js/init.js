@@ -5,8 +5,8 @@ import { $, ALL, CHAOS, DASH, SETTINGS, api, loadLabelPalette, seg, state } from
 import { addChecklistItem, applyCommentDraft, applyKeepDrawer, applyTitleLabelShortcut, closeDrawer, commentDrafts, deleteTask, doAutosave, kbMoveCard, kbMoveCursor, onDrawerPaste, openDrawer, openDrawerMenu, openDrawerNew, openReturnPop, pendingAttachments, renderComments, scheduleAutosave, setKbCursor } from './drawer.js';
 import { openProjectPanel } from './project.js';
 import { applyCompact, applyTheme, getSetting, matchKey, syncLangToServer } from './settings.js';
-import { closeTopLayer, maybeOnboarding, switchProject } from './sidebar.js';
-import { autoGrow, connectSSE, ensureAudio, refresh, refreshSync } from './sse.js';
+import { closeTopLayer, loadTasks, maybeOnboarding, switchProject } from './sidebar.js';
+import { autoGrow, connectSSE, ensureAudio, ensureSSE, refresh, refreshSync } from './sse.js';
 
 /* ── init ── */
 $('new-task').onclick = () => openDrawerNew('backlog');
@@ -47,7 +47,13 @@ $('c-input').addEventListener('input', (e) => {
 });
 $('drawer').addEventListener('paste', onDrawerPaste);
 
-$('search').addEventListener('input', (e) => { state.search = e.target.value.trim(); renderBoard(); });
+let searchTimer = null;
+$('search').addEventListener('input', (e) => {
+  state.search = e.target.value.trim();
+  renderBoard();
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(loadTasks, 120);
+});
 
 window.addEventListener('resize', scheduleDrawLinks);
 $('board').addEventListener('scroll', scheduleDrawLinks, true);
@@ -192,3 +198,4 @@ setInterval(refreshSync, 30000);
 setInterval(checkVersion, 30000);
 window.addEventListener('focus', checkVersion);
 setInterval(renderBoard, 60000);
+setInterval(ensureSSE, 20000);

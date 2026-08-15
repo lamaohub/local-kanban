@@ -13,6 +13,7 @@ export function listShape(t) {
     gh_issue_url: t.gh_issue_url || null,
     work_seconds: t.work_seconds || 0,
     work_started_at: t.work_started_at || null,
+    work_truncated: t.work_truncated || 0,
     updated_at: t.updated_at,
   };
 }

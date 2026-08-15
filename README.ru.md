@@ -78,6 +78,15 @@ ln -s "$(pwd)/skills/deploy" ~/.claude/skills/deploy
 
 ## Обновление
 
+Установка из npm:
+
+```bash
+npm install -g local-kanban@latest
+local-kanban skills          # обновить скиллы Claude Code — они копия, а не ссылка
+```
+
+Клон репозитория:
+
 ```bash
 npm run update   # git pull + npm install + pm2 restart (если применимо)
 ```

@@ -111,6 +111,11 @@ body {
   border-radius: 7px; padding: 3px 8px; cursor: pointer; font-family: inherit;
 }
 .sound-badge:hover { border-color: var(--accent); }
+.offline-badge {
+  font-size: 11.5px; color: var(--danger); background: none; border: 1px solid var(--border);
+  border-radius: 7px; padding: 3px 8px; cursor: pointer; font-family: inherit;
+}
+.offline-badge:hover { border-color: var(--danger); }
 .sync-badge.busy { color: var(--accent); }
 .sync-badge.error { color: var(--danger); }
 

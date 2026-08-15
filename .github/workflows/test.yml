@@ -54,6 +54,17 @@ jobs:
           done
           test "${up:-}" = 1 || { echo "the installed package never answered"; kill -9 "$pid"; exit 1; }
 
+          # CK-385: the API answering is NOT the board opening. A package built without public/
+          # — the exact breakage this job exists to catch — still answers 200 on /api/projects,
+          # while the page itself is a 404 and the server only prints one warn-level line that
+          # nothing here reads. So ask for the page and the entry point too.
+          for path in / /app.js /js/core.js /style.css; do
+            curl -fsS "http://127.0.0.1:3199$path" >/dev/null \
+              || { echo "the board serves the API but not $path"; kill -9 "$pid"; exit 1; }
+          done
+          curl -fsS http://127.0.0.1:3199/ | grep -q '<div id="board"' \
+            || { echo "the page came back without the board markup"; kill -9 "$pid"; exit 1; }
+
           # and it must also stop the way a person stops it: a listener registered on import once
           # cancelled Node's default terminate, and the board survived both Ctrl+C and SIGTERM
           kill "$pid"

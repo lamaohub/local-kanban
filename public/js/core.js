@@ -339,6 +339,16 @@ const I18N_RU = {
   'next project (in the sidebar)': 'следующий проект (в сайдбаре)',
   'no activity yet': 'пока нет событий',
   'no backups yet': 'пока нет бэкапов',
+  'Claude moves these columns itself': 'эти колонки двигает сам Claude',
+  'update with: npm install -g local-kanban@latest': 'обновить: npm install -g local-kanban@latest',
+  Archive: 'Архив',
+  'Archived boards are hidden from the sidebar and left out of every dashboard number. Their tasks are kept.': 'архивные доски спрятаны из сайдбара и не считаются ни в одной цифре дашборда. Задачи при этом сохраняются.',
+  'Bring back': 'вернуть',
+  'nothing archived': 'в архиве пусто',
+  'The last automatic snapshot failed': 'последний автоматический снимок не сделался',
+  'Last successful snapshot': 'последний удачный снимок',
+  'Images and attachments are mirrored next to the snapshots, not inside the downloaded file.': 'картинки и вложения лежат копией рядом со снимками, а не внутри скачиваемого файла.',
+  'The snapshot covers the database only.': 'снимок покрывает только базу.',
   'no errors ✓': 'ошибок не было ✓',
   'no folder — just a task list': 'без папки — просто список задач',
   'no git on the server — the project was not created': 'на сервере нет git — проект не создан',
@@ -506,6 +516,10 @@ const I18N_RU = {
   'this year': 'за год',
   'Thu': 'Чт',
   'time spent': 'время в работе',
+  'The board is not responding — try again in a moment.': 'доска не отвечает — попробуй ещё раз через мгновение.',
+  'not saved': 'не сохранено',
+  'The board could not reach the server — the change was not saved': 'доска не достучалась до сервера — правка не сохранена',
+  'capped: the task sat in a working column too long': 'урезано: задача слишком долго лежала в рабочей колонке',
   'To do': 'Сделать',
   'Today': 'Сегодня',
   'Top projects': 'Топ проектов',
@@ -589,6 +603,8 @@ function applyLang() {
   set('#week-stats', 'title', 'Done in the last 7 days');
   set('#sound-badge', 'title', 'The browser blocked sound until the first click — click to enable');
   set('#sync-badge', 'title', 'GitHub sync queue');
+  set('#offline-badge', 'textContent', 'not saved');
+  set('#offline-badge', 'title', 'The board could not reach the server — the change was not saved');
 }
 applyLang();
 
@@ -634,6 +650,7 @@ export const SIDEBAR_SECTIONS = [[HORIZON, 'Horizon'], [CALENDAR, 'Calendar'], [
 export const state = {
   projects: [], slug: DASH,
   tasks: [], drawerKey: null, search: '',
+  searchApplied: '',
   folders: { unregistered: [], missing: [] },
   categories: [],
   dashRange: 'week',
@@ -698,17 +715,43 @@ export const apiBlob = async (path, blob, opts = {}) => {
   return data;
 };
 
+export function apiError(message, extra) {
+  return Object.assign(new Error(String(message)), extra);
+}
+
+const offlineRetries = [];
+export function showOfflineBadge(on) {
+  const el = $('offline-badge');
+  if (el) el.classList.toggle('hidden', !on);
+}
+export function noteUnsaved(retry) {
+  if (retry && !offlineRetries.includes(retry)) offlineRetries.push(retry);
+  showOfflineBadge(true);
+  const el = $('offline-badge');
+  if (el && !el.onclick) el.onclick = () => retryUnsaved();
+}
+export async function retryUnsaved() {
+  const queue = offlineRetries.splice(0);
+  for (const fn of queue) {
+    try { await fn(); } catch { if (!offlineRetries.includes(fn)) offlineRetries.push(fn); }
+  }
+  showOfflineBadge(offlineRetries.length > 0);
+}
+
 export const api = async (method, path, body, opts = {}) => {
   const res = await fetch(path, {
     method,
     headers: body ? { 'Content-Type': 'application/json' } : undefined,
     body: body ? JSON.stringify(body) : undefined,
-  }).catch((e) => { if (!opts.quiet) reportError(`${method} ${path}`, `network: ${e.message}`); throw e; });
+  }).catch((e) => {
+    if (!opts.quiet) reportError(`${method} ${path}`, `network: ${e.message}`);
+    throw apiError(e.message, { offline: true });
+  });
   if (res.status === 204) return null;
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     if (!opts.quiet && path !== '/api/errors') reportError(`${method} ${path}`, `HTTP ${res.status}: ${data.error || ''}`.trim());
-    throw new Error(data.error || res.status);
+    throw apiError(data.error || res.status, { status: res.status });
   }
   return data;
 };

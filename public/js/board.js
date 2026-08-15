@@ -1,12 +1,13 @@
 
-import { $, ALL, ALL_STATUSES, DONE_LIMIT, LABEL_COLORS, LABEL_SELECTABLE, PRI_ICON, PRI_LEVELS, api, esc, ic, seg, state, tr } from './core.js';
+import { $, ALL, ALL_STATUSES, DONE_LIMIT, LABEL_COLORS, LABEL_SELECTABLE, PRI_ICON, PRI_LEVELS, api, esc, ic, noteUnsaved, seg, state, tr } from './core.js';
 import { markKbCursor, openCardMenu, openDrawer, openDrawerNew, setKbCursor, statusOptionList } from './drawer.js';
 import { getSetting, plural } from './settings.js';
-import { styledConfirm } from './sidebar.js';
+import { styledAlert, styledConfirm } from './sidebar.js';
 import { copyBacklogPrompt, copyTodoPrompt, refresh } from './sse.js';
 
 function matchesSearch(t) {
   if (!state.search) return true;
+  if (state.searchApplied === state.search) return true;
   const q = state.search.toLowerCase();
   return t.title.toLowerCase().includes(q) || t.key.toLowerCase().includes(q)
     || (t.preview || '').toLowerCase().includes(q) || t.labels.some((l) => l.includes(q));
@@ -14,6 +15,7 @@ function matchesSearch(t) {
 
 let prevCardIds = new Set();
 let prevRenderSlug = null;
+const CARD_EXIT_MAX = 10;
 export let scrollToNewCardId = null;
 export function setScrollToNewCardId(id) { scrollToNewCardId = id; }
 function ensureCardFxLayer() {
@@ -108,15 +110,19 @@ export function renderBoard() {
   const newIds = new Set([...board.querySelectorAll('.card')].map((c) => Number(c.dataset.id)));
   if (animate) {
     board.querySelectorAll('.card').forEach((c) => { if (!prevCardIds.has(Number(c.dataset.id))) c.classList.add('card-enter'); });
-    oldCards.forEach((info, id) => {
-      if (newIds.has(id)) return;
-      const clone = info.node.cloneNode(true);
-      clone.className = 'card card-exit';
-      Object.assign(clone.style, { position: 'fixed', left: `${info.rect.left}px`, top: `${info.rect.top}px`, width: `${info.rect.width}px`, margin: '0' });
-      ensureCardFxLayer().appendChild(clone);
-      setTimeout(() => clone.remove(), 260);
-    });
+    const leaving = [...oldCards.keys()].filter((id) => !newIds.has(id));
+    if (leaving.length <= CARD_EXIT_MAX) {
+      for (const id of leaving) {
+        const info = oldCards.get(id);
+        const clone = info.node.cloneNode(true);
+        clone.className = 'card card-exit';
+        Object.assign(clone.style, { position: 'fixed', left: `${info.rect.left}px`, top: `${info.rect.top}px`, width: `${info.rect.width}px`, margin: '0' });
+        ensureCardFxLayer().appendChild(clone);
+        setTimeout(() => clone.remove(), 260);
+      }
+    }
   }
+  oldCards.clear();
   prevCardIds = newIds;
   prevRenderSlug = state.slug;
 
@@ -256,14 +262,16 @@ export function drawLinks() {
   const seen = new Set();
   const offScreen = {};
   const linesOn = getSetting('linkLines') !== false;
+  const cardEls = new Map();
+  for (const el of board.querySelectorAll('.card')) cardEls.set(Number(el.dataset.id), el);
   let html = '';
   for (const t of state.tasks) {
     for (const other of (t.linked_ids || [])) {
       const pair = t.id < other ? `${t.id}.${other}` : `${other}.${t.id}`;
       if (seen.has(pair)) continue;
       seen.add(pair);
-      const elA = board.querySelector(`.card[data-id="${t.id}"]`);
-      const elB = board.querySelector(`.card[data-id="${other}"]`);
+      const elA = cardEls.get(t.id);
+      const elB = cardEls.get(other);
       if (!linesOn || !elA || !elB) {
         if (elA) offScreen[t.id] = (offScreen[t.id] || 0) + 1;
         if (elB) offScreen[other] = (offScreen[other] || 0) + 1;
@@ -476,7 +484,9 @@ function workTimer(t) {
   const running = !!t.work_started_at && WORKING.has(t.status);
   if (!t.work_seconds && !running) return '';
   const started = running ? new Date(t.work_started_at + 'Z').getTime() : 0;
-  return `<span class="timer${running ? ' running' : ''}" data-base="${t.work_seconds}" data-started="${started}" title="${esc(tr('time spent'))}">${ic('timer', 12)} ${fmtWork(t.work_seconds + (running ? (Date.now() - started) / 1000 : 0))}</span>`;
+  const cut = t.work_truncated > 0;
+  const title = cut ? `${tr('time spent')} — ${tr('capped: the task sat in a working column too long')}` : tr('time spent');
+  return `<span class="timer${running ? ' running' : ''}" data-base="${t.work_seconds}" data-started="${started}" title="${esc(title)}">${ic('timer', 12)} ${cut ? '≈' : ''}${fmtWork(t.work_seconds + (running ? (Date.now() - started) / 1000 : 0))}</span>`;
 }
 
 const STALE_MS = 2 * 3600 * 1000;
@@ -484,6 +494,18 @@ function staleHours(t) {
   if (!WORKING.has(t.status)) return 0;
   const idle = Date.now() - new Date(t.updated_at + 'Z').getTime();
   return idle > STALE_MS ? Math.floor(idle / 3600000) : 0;
+}
+
+const ORDERING = ['status', 'priority', 'position', 'pinned'];
+export function patchCard(before, after) {
+  const el = $('board')?.querySelector(`.card[data-id="${after.id}"]`);
+  if (!el || !el.parentNode) return false;
+  if (ORDERING.some((k) => before[k] !== after[k])) return false;
+  el.replaceWith(cardEl(after));
+  markKbCursor();
+  markSelection();
+  scheduleDrawLinks();
+  return true;
 }
 
 function cardEl(t) {
@@ -584,7 +606,13 @@ async function onDrop(e, status, body) {
     card.addEventListener('animationend', () => card.classList.remove('just-dropped'), { once: true });
   }
   dropPh.remove();
-  await api('PATCH', `/api/tasks/${seg(id)}`, { status, position });
+  try {
+    await api('PATCH', `/api/tasks/${seg(id)}`, { status, position });
+  } catch (e) {
+    renderBoard();
+    if (e?.offline) noteUnsaved(() => api('PATCH', `/api/tasks/${seg(id)}`, { status, position }).then(refresh));
+    return;
+  }
   await refresh();
 }
 
@@ -595,6 +623,13 @@ async function onDropGroup(e, status, body) {
     .filter(Boolean)
     .filter((t) => !DRAG_LOCKED.has(t.status))
     .filter((t) => !moveBlocked(t.status, status, { manual: taskIsNoclaude(t) }));
+  const refused = ids.map((id) => state.tasks.find((x) => x.id === id)).filter(Boolean)
+    .filter((t) => !movable.includes(t));
+  if (refused.length) {
+    const why = refused.map((t) => moveBlocked(t.status, status, { manual: taskIsNoclaude(t) }))
+      .find(Boolean) || tr('Claude moves these columns itself');
+    styledAlert(`${refused.length} ${plural(refused.length, 'task', 'tasks')}: ${why}`);
+  }
   if (!movable.length) { dropPh.remove(); return; }
 
   const draggedSet = new Set(movable.map((t) => t.id));

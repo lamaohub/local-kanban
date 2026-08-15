@@ -1,19 +1,53 @@
 import { execFile } from 'node:child_process';
-import { statSync, readdirSync, createReadStream } from 'node:fs';
+import { statSync, readdirSync, createReadStream, createWriteStream, existsSync, rmSync } from 'node:fs';
 import { join, dirname, sep } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { db, DATA_DIR, kvGet, kvSet, ghOwner, ghRepo, syncConfigured, enqueue, logError, uiLang, SYNC_MAX_ATTEMPTS } from '../db.js';
 import { emit } from '../bus.js';
 import { ghState, kick, syncPaused } from '../sync/worker.js';
 import { LABELS, MANAGED_LABELS, gh as ghCli } from '../sync/github.js';
-import { listBackups, backupNow, backupPath } from '../backup.js';
+import { listBackups, backupNow, backupPath, backupState, ATTACH_MIRROR } from '../backup.js';
 import { inspectBackup, startPreview, stopPreview, currentPreview } from '../restore.js';
 import { langOverride, ghOwnerEnv, ghRepoEnv } from '../config.js';
 import { snapshot, TASK_SELECT } from './tasks.js';
 
 const ROOT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
+const UPLOAD_FLOOR = 64 * 1024 * 1024;
+function uploadLimit() {
+  try { return Math.max(UPLOAD_FLOOR, statSync(join(DATA_DIR, 'kanban.db')).size * 4); } catch { return UPLOAD_FLOOR; }
+}
+
 export default async function systemRoutes(app) {
+  app.addContentTypeParser('application/octet-stream', (req, payload, done) => {
+    const limit = uploadLimit();
+    const file = join(tmpdir(), `kb-upload-${process.pid}-${Date.now()}.db`);
+    const out = createWriteStream(file);
+    let size = 0;
+    let failed = null;
+    const fail = (err) => {
+      if (failed) return;
+      failed = err;
+      payload.unpipe?.(out);
+      out.destroy();
+      rmSync(file, { force: true });
+      done(err);
+    };
+    payload.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > limit) {
+        const e = new Error(`the file is larger than ${Math.round(limit / 1048576)} MB`);
+        e.statusCode = 413;
+        fail(e);
+      }
+    });
+    payload.on('error', fail);
+    out.on('error', fail);
+    out.on('close', () => { if (!failed) done(null, { file, size }); });
+    payload.pipe(out);
+  });
+
   app.get('/api/labels', () => ({
     palette: Object.fromEntries(Object.entries(LABELS).map(([name, hex]) => [name, `#${hex}`])),
     selectable: Object.keys(LABELS).filter((name) => !MANAGED_LABELS.has(name)),
@@ -84,7 +118,7 @@ export default async function systemRoutes(app) {
   app.get('/api/errors', (req) => {
     const limit = Math.min(Number(req.query?.limit) || 100, 300);
     return db.prepare(
-      'SELECT id, at, source, scope, message, substr(detail, 1, 300) AS detail, resolved_at FROM app_errors ORDER BY id DESC LIMIT ?',
+      'SELECT id, at, source, scope, message, substr(detail, 1, 300) AS detail, resolved_at, repeats FROM app_errors ORDER BY id DESC LIMIT ?',
     ).all(limit);
   });
   app.delete('/api/errors', () => { db.prepare('DELETE FROM app_errors').run(); return { ok: true }; });
@@ -206,18 +240,36 @@ export default async function systemRoutes(app) {
     return { done: kvGet('onboarding.done') === '1' };
   });
 
-  app.get('/api/backups', () => listBackups());
+  app.get('/api/backups', () => ({
+    items: listBackups(),
+    last_ok: backupState.last_ok,
+    last_error: backupState.last_error,
+    last_error_at: backupState.last_error_at,
+    attachments: existsSync(ATTACH_MIRROR),
+  }));
   app.post('/api/backups', async () => { await backupNow(); return { ok: true }; });
+  let uploading = false;
   app.post('/api/backups/restore', async (req, reply) => {
-    const buf = req.body;
-    if (!Buffer.isBuffer(buf) || !buf.length) return reply.code(400).send({ error: 'empty file' });
-    const checked = inspectBackup(buf);
-    if (!checked.ok) return reply.code(400).send({ error: checked.error });
+    const up = req.body;
+    if (!up?.file || !up.size) {
+      if (up?.file) rmSync(up.file, { force: true });
+      return reply.code(400).send({ error: 'empty file' });
+    }
+    if (uploading) { rmSync(up.file, { force: true }); return reply.code(409).send({ error: 'another backup is already being opened' }); }
+    uploading = true;
     try {
-      const preview = await startPreview(checked.dir, checked.stats);
-      return preview || reply.code(500).send({ error: 'the preview board failed to start' });
-    } catch (e) {
-      return reply.code(500).send({ error: `could not start the preview board: ${e.message}` });
+      const checked = inspectBackup(up.file);
+      if (!checked.ok) return reply.code(400).send({ error: checked.error });
+      try {
+        const preview = await startPreview(checked.dir, checked.stats);
+        return preview || reply.code(500).send({ error: 'the preview board failed to start' });
+      } catch (e) {
+        rmSync(checked.dir, { recursive: true, force: true });
+        return reply.code(500).send({ error: `could not start the preview board: ${e.message}` });
+      }
+    } finally {
+      rmSync(up.file, { force: true });
+      uploading = false;
     }
   });
   app.get('/api/backups/restore', () => currentPreview() || { running: false });

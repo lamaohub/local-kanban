@@ -1,6 +1,6 @@
 
 import './js/init.js';
-import { state, api } from './js/core.js';
+import { state, api, retryUnsaved } from './js/core.js';
 import { refresh } from './js/sse.js';
 import { selectProject, loadProjects, loadTasks, styledConfirm, styledPrompt } from './js/sidebar.js';
 import { openDrawer, closeDrawer, deleteTask, cancelTask, setKbCursor } from './js/drawer.js';
@@ -14,4 +14,5 @@ Object.assign(window, {
   openDrawer, closeDrawer, deleteTask, cancelTask, setKbCursor,
   openProjectPanel, openSettingsModal, getSetting, setSetting, applyTheme,
   renderDashboard, styledConfirm, styledPrompt, checkVersion,
+  retryUnsaved,
 });

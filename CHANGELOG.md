@@ -3,6 +3,98 @@
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [semantic versioning](https://semver.org/).
 
+## [1.3.0]
+
+A full audit of the board — stability, performance and error handling — went through every part of
+it, and this release is the answer to it. The headline is the tab you leave open all day: it used
+to go quiet without ever saying so.
+
+### Added
+
+- **The board tells you when a change did not save.** With the server down, the board used to stay
+  silent: a dragged card slid into its new column and drifted back on its own two seconds later, a
+  description you typed went nowhere, and the title of a new task vanished without a trace — the
+  only record was a failed request in the console, because the error report itself goes to the
+  server that is down. A change that cannot reach the server now rolls back, lights up a "not
+  saved" badge in the header, and is sent again as soon as the connection returns.
+- **Archived boards can be brought back.** Archiving hid a board from the sidebar and there was no
+  way back short of a raw HTTP request. Settings now has an Archive section listing what was
+  archived, with a button to restore it.
+- **`local-kanban skills` refreshes the Claude Code skills.** Installed from npm they were copied
+  once and then never updated by anything, so the board moved forward while the instructions the
+  agent reads stayed on an older version.
+- **Search covers the whole description.** It only ever looked at the first 180 characters, so a
+  word further in was simply not found — no result, no error, no hint that the search was partial.
+
+### Fixed
+
+- **A tab that lost its event stream never noticed.** The check for a dead stream ran only when the
+  window was hidden or refocused — and the board is normally visible and focused all day, so
+  neither ever happened. After a laptop sleep or a network timeout the board froze: finished tasks
+  did not appear, and anything done from the frozen board overwrote what had happened meanwhile.
+  Liveness is now checked on a timer, and a stream that recovers on its own catches up on what it
+  missed.
+- **A burst of events left only the last one.** Five tasks created in a row showed up as one; five
+  tasks moved in a row left four cards sitting in their old column — which is worse, because a
+  missing card is visible and a card in the wrong column is not. Every event in a burst is now
+  applied.
+- **The task panel overwrote changes made elsewhere.** It sent every field it held on any edit,
+  while only refreshing the status, so setting a priority or a label from the CLI or another tab
+  was rolled back within half a second. It now sends only what actually changed, shows what came
+  from elsewhere, and closes itself if the task was deleted.
+- **Every board render held on to the previous one.** Memory grew with each redraw for as long as
+  the tab stayed on one board — tens of megabytes over a day of activity.
+- **A task forgotten in a working column counted the whole time as work.** One task left in
+  "doing" over a weekend turned the week's work time into fiction. A single stretch is now capped,
+  and a capped number is marked as approximate instead of pretending to be exact.
+- **Two snapshots taken in the same second destroyed each other,** leaving a zero-byte file under
+  the final name that was listed, downloadable and counted as a backup.
+- **A failing daily backup said nothing.** With the snapshot directory unwritable the board started
+  normally, took no snapshots, logged nothing, and tried again six hours later. The Backups section
+  now shows the last success and the last failure, and a failure is retried in minutes.
+- **Attachments were in no backup at all.** Images are now mirrored alongside the snapshots and
+  restored into the preview board.
+- **A board opened from a backup could outlive the one that started it,** holding a port and
+  serving a full copy of every task with nothing left to stop it.
+- **Uploading a backup buffered the whole file in memory** and lifted the size limit from every
+  other route as a side effect. The body is now streamed to disk and the limit is scoped.
+- **The error log washed itself out.** A few hundred identical broken requests erased the whole
+  ring, real failures included; repeats are now collapsed with a counter. A genuine server failure
+  also reaches the process log — previously its only copy was the table, and if that table was the
+  problem, the board pointed at a section that answered with the same failure.
+- **Malformed input answered 500 instead of 400** on ten routes, and in one of them a request could
+  come back 200 while writing the wrong value into a project field.
+- **`kb` could not tell a refusal from a failure.** A board erroring on a request exited with the
+  same code as a lawful refusal, and a reply that was not JSON — what you get when the address
+  points at something else — exited zero and reported a move that never happened.
+- **GitHub sync could create a second issue for one task** if the process restarted at the wrong
+  moment, and an unparsed answer from `gh` started stamping out new ones. An ordinary network
+  failure was also filed as permanent and never retried, and labels recoloured by hand were reset
+  on every restart.
+- **Archiving a project hid it from the sidebar only.** Its cards stayed on the combined board, its
+  tasks stayed in "waiting for you", and it was still named in the top projects.
+- **Dashboard windows were cut in UTC but drawn in local days,** so the edge of the week fell in
+  the middle of a day that the calendar showed in full. The header and the dashboard also counted
+  the same week by different rules.
+- **A board with its own data directory still used the live project folder of the account,** listed
+  it and created folders in it.
+- **A relative or `~`-prefixed data directory** created a real directory named `~` and then died on
+  a raw stack trace.
+- **The install check in CI passed on a package that installs but does not open,** and it was not
+  called on the publishing path at all.
+- **A broken database died on a raw driver stack** instead of pointing at the snapshots next to it.
+- **A group drag that was refused explained nothing** — the reason was computed, translated and
+  thrown away.
+- **Deleting the demo project left its attachments on disk,** still served over a direct link.
+
+### Performance
+
+Groundwork for larger boards; on a board of a couple of thousand tasks the difference today is a
+few milliseconds. The task list no longer reads full descriptions off disk to return a 180-character
+preview, the link map is built only for the tasks being shown, the dashboard stops scanning the whole
+event log for one minimum, project counters got a covering index, and an edit that changes neither
+the column nor the order redraws one card instead of the whole board. Search input is debounced.
+
 ## [1.2.1]
 
 ### Fixed

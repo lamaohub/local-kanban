@@ -3,7 +3,7 @@ import fastifyStatic from '@fastify/static';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DATA_DIR, logError } from './db.js';
-import { PORT, ROOT } from './config.js';
+import { PORT, ROOT, localRoot } from './config.js';
 import { makeOriginGuard } from './origin-guard.js';
 import projectRoutes from './routes/projects.js';
 import taskRoutes from './routes/tasks.js';
@@ -13,6 +13,7 @@ import eventRoutes from './routes/events.js';
 import horizonRoutes from './routes/horizons.js';
 import { startWorker } from './sync/worker.js';
 import { startBackups } from './backup.js';
+import { sweepStalePreviews } from './restore.js';
 
 const ATTACH_DIR = join(DATA_DIR, 'attachments');
 mkdirSync(ATTACH_DIR, { recursive: true });
@@ -32,8 +33,6 @@ const CSP = [
   "frame-ancestors 'none'",
 ].join('; ');
 
-app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer', bodyLimit: 200 * 1024 * 1024 }, (req, body, done) => done(null, body));
-
 app.register(fastifyStatic, {
   root: join(ROOT, 'public'),
   setHeaders: (res) => {
@@ -50,9 +49,12 @@ app.register(fastifyStatic, {
   setHeaders: (res) => { res.setHeader('X-Content-Type-Options', 'nosniff'); },
 });
 app.setErrorHandler((err, req, reply) => {
-  logError('server', `${req.method} ${req.url.split('?')[0]}`, err.message, err.stack);
   const code = err.statusCode || 500;
-  if (code >= 500) return reply.code(500).send({ error: 'internal error — details under Settings → Errors' });
+  if (code >= 500) {
+    req.log.error(err);
+    logError('server', `${req.method} ${req.url.split('?')[0]}`, err.message, err.stack);
+    return reply.code(500).send({ error: 'internal error — details under Settings → Errors' });
+  }
   reply.send(err);
 });
 
@@ -71,10 +73,24 @@ for (const ev of ['unhandledRejection', 'uncaughtException']) {
   });
 }
 
+if (process.env.KB_PREVIEW_TTL_MS) {
+  const ttl = Number(process.env.KB_PREVIEW_TTL_MS);
+  if (Number.isFinite(ttl) && ttl > 0) setTimeout(() => process.exit(0), ttl).unref();
+  process.stdin.on('end', () => process.exit(0));
+  process.stdin.on('close', () => process.exit(0));
+  process.stdin.on('error', () => process.exit(0));
+  process.stdin.resume();
+}
+
 app.listen({ port: PORT, host: '127.0.0.1' }).then(() => {
   console.log(`kanban: http://127.0.0.1:${PORT}`);
+  console.log(`kanban: data ${DATA_DIR} · project folders ${localRoot()}`);
   startWorker();
   startBackups();
+  if (!process.env.KB_PREVIEW_TTL_MS) {
+    const swept = sweepStalePreviews();
+    if (swept) console.log(`restore: swept ${swept} stale preview director${swept === 1 ? 'y' : 'ies'}`);
+  }
 }).catch((err) => {
   if (err && err.code === 'EADDRINUSE') {
     console.error(`\n  Port ${PORT} is already taken — the board did not start.\n`);

@@ -1,6 +1,6 @@
 
 import { WORKING, buildSelect, canMoveTo, clearSelection, labelChip, moveBlocked, scheduleDrawLinks, selVal, selectedIds, setScrollToNewCardId, taskIsNoclaude } from './board.js';
-import { $, ALL, ALL_STATUSES, DASH, LABEL_COLORS, LABEL_SELECTABLE, PRI_LEVELS, SETTINGS, TITLE_LABEL_WORDS, api, apiBlob, esc, ghSyncOn, ic, seg, state, tr } from './core.js';
+import { $, ALL, ALL_STATUSES, DASH, LABEL_COLORS, LABEL_SELECTABLE, PRI_LEVELS, SETTINGS, TITLE_LABEL_WORDS, api, apiBlob, esc, ghSyncOn, ic, noteUnsaved, seg, state, tr } from './core.js';
 import { getSetting } from './settings.js';
 import { currentProject, overlayLayer, popLayer, pushLayer, selectProject, styledAlert, styledConfirm } from './sidebar.js';
 import { autoGrow, copyText, refresh, relTime, renderTimeline } from './sse.js';
@@ -11,6 +11,19 @@ let drawerLocked = false;
 let drawerStatus = null;
 let drawerPinned = 0;
 let createInFlight = false;
+let drawerSnapshot = null;
+const sameLabels = (a, b) => a.length === b.length && new Set([...a, ...b]).size === new Set(a).size;
+const fieldsSnapshot = (t) => ({
+  title: t.title || '', description: t.description || '', priority: t.priority, labels: [...(t.labels || [])], status: t.status,
+});
+function changedFields(next, snap) {
+  const out = {};
+  for (const [k, v] of Object.entries(next)) {
+    const same = k === 'labels' ? sameLabels(v, snap[k] || []) : v === snap[k];
+    if (!same) out[k] = v;
+  }
+  return out;
+}
 
 export function applyTitleLabelShortcut() {
   const el = $('d-title');
@@ -437,6 +450,7 @@ export function openDrawer(key) {
     buildStatusSelect(t.status, false, taskIsNoclaude(t));
     buildPrioritySelect(t.priority);
     drawerLabels = t.labels;
+    drawerSnapshot = fieldsSnapshot(t);
     drawerPinned = t.pinned || 0;
     renderDrawerLabels();
     renderDrawerLinks(t.links);
@@ -457,7 +471,8 @@ export function openDrawer(key) {
     scheduleDrawLinks();
     const card = $('board').querySelector(`.card[data-id="${t.id}"]`);
     if (card) requestAnimationFrame(() => card.scrollIntoView({ inline: 'nearest', block: 'nearest' }));
-  }, () => {
+  }, (e) => {
+    if (e?.status !== 404) { styledAlert(tr('The board is not responding — try again in a moment.')); return; }
     styledAlert(tr('This task no longer exists — it was deleted.'));
     if (state.drawerKey === key) closeDrawer();
     refresh();
@@ -481,6 +496,7 @@ export function openDrawerNew(status = 'backlog') {
   $('d-title').value = '';
   $('d-desc').value = '';
   drawerStatus = status;
+  drawerSnapshot = null;
   buildStatusSelect(status, true);
   buildPrioritySelect(0);
   drawerLabels = [];
@@ -510,6 +526,7 @@ export function closeDrawer() {
   closeReturnPop();
   state.drawerKey = null;
   drawerStatus = null;
+  drawerSnapshot = null;
   closeLabelPicker();
   clearPending();
   markSelectedCard();
@@ -789,11 +806,41 @@ async function doReturn(reason) {
   openDrawer(key);
 }
 
+async function refreshDrawerFields(t) {
+  if (autosaveTimer || drawerLocked) return;
+  const active = document.activeElement;
+  const title = $('d-title');
+  const desc = $('d-desc');
+  if ('description' in t) {
+    if (desc !== active && desc.value !== (t.description || '')) { desc.value = t.description || ''; autoGrow(desc); }
+  } else if (desc !== active && (t.preview || '') !== desc.value.slice(0, 180)) {
+    try { t = await api('GET', `/api/tasks/${seg(t.key)}`, undefined, { quiet: true }); } catch { return; }
+    if (autosaveTimer || document.activeElement === desc) return;
+    if (desc.value !== (t.description || '')) { desc.value = t.description || ''; autoGrow(desc); }
+  }
+  if (title !== active && title.value !== (t.title || '')) { title.value = t.title || ''; autoGrow(title); }
+  if (Number(selVal('d-priority')) !== t.priority) buildPrioritySelect(t.priority);
+  const labels = t.labels || [];
+  if (!sameLabels(drawerLabels, labels)) { drawerLabels = [...labels]; renderDrawerLabels(); }
+  if (drawerSnapshot) Object.assign(drawerSnapshot, changedFields({
+    title: t.title || '', priority: t.priority, labels: [...labels], status: t.status,
+    ...('description' in t ? { description: t.description || '' } : {}),
+  }, drawerSnapshot));
+}
+
 export async function syncOpenDrawerStatus() {
   if (!state.drawerKey) return;
   let t = state.tasks.find((x) => x.key === state.drawerKey);
-  if (!t) { try { t = await api('GET', `/api/tasks/${seg(state.drawerKey)}`, undefined, { quiet: true }); } catch { return; } }
+  if (!t) {
+    try {
+      t = await api('GET', `/api/tasks/${seg(state.drawerKey)}`, undefined, { quiet: true });
+    } catch (e) {
+      if (e?.status === 404) { styledAlert(tr('This task no longer exists — it was deleted.')); closeDrawer(); }
+      return;
+    }
+  }
   if (!t) return;
+  await refreshDrawerFields(t);
   if (!DrawerSync.shouldSyncDrawerStatus(drawerStatus, selVal('d-status'), t.status)) return;
   drawerStatus = t.status;
   buildStatusSelect(t.status, false, drawerLabels.includes('noclaude'));
@@ -814,7 +861,16 @@ export function scheduleAutosave() {
   clearTimeout(autosaveTimer);
   autosaveTimer = setTimeout(doAutosave, 450);
 }
+
 export async function doAutosave() {
+  try {
+    return await doAutosaveOnce();
+  } catch (e) {
+    if (e?.offline) { noteUnsaved(doAutosaveOnce); return undefined; }
+    throw e;
+  }
+}
+async function doAutosaveOnce() {
   clearTimeout(autosaveTimer); autosaveTimer = null;
   if (drawerLocked || $('drawer').classList.contains('hidden')) return;
   const title = $('d-title').value.trim();
@@ -826,7 +882,11 @@ export async function doAutosave() {
     status: selVal('d-status'),
   };
   if (state.drawerKey) {
-    await api('PATCH', `/api/tasks/${seg(state.drawerKey)}`, title ? { ...common, title } : common);
+    const full = title ? { ...common, title } : common;
+    const patch = drawerSnapshot ? changedFields(full, drawerSnapshot) : full;
+    if (!Object.keys(patch).length) return;
+    await api('PATCH', `/api/tasks/${seg(state.drawerKey)}`, patch);
+    if (drawerSnapshot) Object.assign(drawerSnapshot, patch);
     return;
   }
   if (!title && !description.trim() && !pendingAttachments.length) return;

@@ -16,9 +16,17 @@ const ST_ALIAS = {
 
 // Exit codes are a contract for automation (scripts gate their moves on them):
 // 0 — success, 1 — the board is not responding, 2 — the request was rejected (4xx or an
-// unknown command), 3 — kb itself broke. Previously an exception exited with 1 as well,
+// unknown command), 3 — kb itself broke, 4 — the board answered, but with a failure of its
+// own (5xx) or with something that is not JSON. Previously an exception exited with 1 as well,
 // so "the board is down" was indistinguishable from "kb is broken".
-const EXIT = { DOWN: 1, REJECTED: 2, INTERNAL: 3 };
+// Code 4 exists because 2 was answering two different questions at once. A live board that
+// answers with an honest 500 (a broken row in the database) used to exit with the SAME code as
+// a lawful refusal of a transition — there was no way to tell "the board falls over on my
+// request" from "you are not allowed to do that". Worse, a 200 whose body is not JSON made
+// `kb mv` print "undefined undefined" and exit 0: it reported a move that never happened, and
+// that is exactly what someone whose KB_URL points at a different port would see (several
+// ports are live on this machine).
+const EXIT = { DOWN: 1, REJECTED: 2, INTERNAL: 3, BOARD_ERROR: 4 };
 
 function die(msg, code = EXIT.REJECTED) { process.stderr.write(msg + '\n'); process.exit(code); }
 
@@ -34,8 +42,18 @@ async function api(method, path, body) {
     die('kb: board is not responding — pm2 restart kanban', EXIT.DOWN);
   }
   if (res.status === 204) return null;
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) die(`kb: ${data.error || res.status}`);
+  const text = await res.text();
+  let data = null;
+  let parsed = false;
+  try { data = JSON.parse(text); parsed = true; } catch { /* not JSON — see below */ }
+  if (!res.ok) {
+    const detail = parsed ? (data?.error || res.status) : `${res.status} ${text.slice(0, 200)}`;
+    // 5xx is the board failing on us, not us asking for something forbidden — its own code.
+    die(`kb: ${detail}`, res.status >= 500 ? EXIT.BOARD_ERROR : EXIT.REJECTED);
+  }
+  if (!parsed) {
+    die(`kb: the board answered ${res.status} with something that is not JSON — is KB_URL (${BASE}) the board?`, EXIT.BOARD_ERROR);
+  }
   return data;
 }
 

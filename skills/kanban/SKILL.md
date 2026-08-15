@@ -210,6 +210,8 @@ One line of summary at the end.
 - `kb: board is not responding` → restart the board's server (`pm2 restart kanban` / `npm start`),
   wait two seconds and retry once. **Exit codes are distinct: `1` — the board is down (a restart
   and a retry make sense), `2` — the request was rejected (retrying is pointless, read the
-  message), `3` — `kb` itself broke (stack trace under `KB_DEBUG=1`). Gate on the code, not on the
-  message text.**
+  message), `3` — `kb` itself broke (stack trace under `KB_DEBUG=1`), `4` — the board answered,
+  but with a failure of its own (5xx) or with something that is not JSON. Gate on the code, not on
+  the message text.** Code `4` is worth reading closely: it means the board falls over on this
+  request, or `KB_URL` points at something that is not the board at all.
 - The web board is for the human: http://localhost:3100 — do not open it, do not scrape it.

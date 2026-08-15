@@ -110,6 +110,34 @@ test('an archived project leaves the list but stays reachable by key', async () 
   assert.equal((await get('alpha-beta')).statusCode, 200, 'but it still opens by key');
 });
 
+test('an archived project drops out of the task list, but stays reachable by name', async () => {
+  const { default: Fastify } = await import('fastify');
+  const app = Fastify();
+  await app.register((await import('../src/routes/projects.js')).default);
+  await app.register((await import('../src/routes/tasks.js')).default);
+  await app.ready();
+
+  await app.inject({ method: 'POST', url: '/api/projects', payload: { slug: 'arch', name: 'Arch', prefix: 'ARC' } });
+  await app.inject({ method: 'POST', url: '/api/tasks', payload: { project: 'arch', title: 'in the archive' } });
+
+  const listed = () => app.inject({ method: 'GET', url: '/api/tasks?all=1' }).then((r) => r.json());
+  assert.equal((await listed()).some((t) => t.project === 'arch'), true, 'the fixture stopped testing what it was written for');
+
+  await app.inject({ method: 'PATCH', url: '/api/projects/arch', payload: { archived: 1 } });
+  assert.equal((await listed()).some((t) => t.project === 'arch'), false, 'the archived project still shows up on "All projects"');
+
+  const explicit = await app.inject({ method: 'GET', url: '/api/tasks?project=arch&all=1' });
+  assert.equal(explicit.json().length, 1, 'an archived project can no longer be opened by name at all');
+
+  const archived = await app.inject({ method: 'GET', url: '/api/projects/archived' });
+  assert.equal(archived.statusCode, 200);
+  assert.equal(archived.json().some((p) => p.slug === 'arch' && p.tasks_n === 1), true, 'there is no way to find what was archived');
+
+  await app.inject({ method: 'PATCH', url: '/api/projects/arch', payload: { archived: 0 } });
+  assert.equal((await listed()).some((t) => t.project === 'arch'), true, 'bringing a project back does not restore its tasks');
+  await app.close();
+});
+
 test('pm2_services accepts both a JSON array and a comma-separated string', async () => {
   const { parsePm2Services, serializePm2Services } = await import('../src/pm2-services.js');
   assert.deepEqual(parsePm2Services('crm-tb'), ['crm-tb'], 'a bare string is one service');

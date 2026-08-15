@@ -1,12 +1,19 @@
 import { db } from '../db.js';
 import { bus } from '../bus.js';
 
+const noclaudeFilter = (alias = '', only = false) => `${alias}labels ${only ? '' : 'NOT '}LIKE '%"noclaude"%'`;
+const LIVE_TASKS = (alias = '') => `${alias}project_id IN (SELECT id FROM projects WHERE archived = 0)`;
+
+const SINCE_LOCAL_MIDNIGHT = "datetime('now','localtime','start of day', ?, 'utc')";
+const sinceArgFor = (days) => `-${days - 1} days`;
+
 export default async function dashboardRoutes(app) {
   app.get('/api/stats', () => {
     const r = db.prepare(`
       SELECT COUNT(*) AS n, COALESCE(SUM(work_seconds), 0) AS sec
-      FROM tasks WHERE status = 'done' AND done_at >= datetime('now', '-7 days')
-    `).get();
+      FROM tasks WHERE status = 'done' AND done_at >= ${SINCE_LOCAL_MIDNIGHT}
+        AND ${LIVE_TASKS()} AND ${noclaudeFilter()}
+    `).get(sinceArgFor(7));
     return { week_done: r.n, week_seconds: r.sec };
   });
 
@@ -20,27 +27,28 @@ export default async function dashboardRoutes(app) {
     const range = Object.hasOwn(RANGE_DAYS, req.query.range) ? req.query.range : 'week';
     const hit = dashCache.get(range);
     if (hit && Date.now() - hit.at < DASH_TTL) return hit.data;
-    const noclaudeFilter = (alias = '', only = false) => `${alias}labels ${only ? '' : 'NOT '}LIKE '%"noclaude"%'`;
+    const LIVE_EVENTS = (alias = '') => `${alias}task_id IN (SELECT id FROM tasks WHERE ${LIVE_TASKS()})`;
+    const LIVE = LIVE_TASKS();
     const NOT_NOCLAUDE = noclaudeFilter();
     const IS_NOCLAUDE = noclaudeFilter('', true);
-    const sinceArg = `-${RANGE_DAYS[range]} days`;
+    const sinceArg = sinceArgFor(RANGE_DAYS[range]);
     const period = db.prepare(`
       SELECT COUNT(*) AS n, COALESCE(SUM(work_seconds), 0) AS sec,
              AVG((julianday(done_at) - julianday(created_at)) * 24) AS cyc
-      FROM tasks WHERE status = 'done' AND ${NOT_NOCLAUDE} AND done_at >= datetime('now', ?)
+      FROM tasks WHERE status = 'done' AND ${LIVE} AND ${NOT_NOCLAUDE} AND done_at >= datetime('now','localtime','start of day', ?, 'utc')
     `).get(sinceArg);
-    const active = db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE status IN ('todo','prep','doing','deploy','review') AND ${NOT_NOCLAUDE}`).get().n;
-    const doneTotal = db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE status = 'done' AND ${NOT_NOCLAUDE}`).get().n;
-    const manualPeriod = db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE status = 'done' AND ${IS_NOCLAUDE} AND done_at >= datetime('now', ?)`).get(sinceArg).n;
-    const manualTotal = db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE status = 'done' AND ${IS_NOCLAUDE}`).get().n;
-    const todoReady = db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE status = 'todo'").get().n;
-    const backlog = db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE status = 'backlog'").get().n;
+    const active = db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE status IN ('todo','prep','doing','deploy','review') AND ${LIVE} AND ${NOT_NOCLAUDE}`).get().n;
+    const doneTotal = db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE status = 'done' AND ${LIVE} AND ${NOT_NOCLAUDE}`).get().n;
+    const manualPeriod = db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE status = 'done' AND ${LIVE} AND ${IS_NOCLAUDE} AND done_at >= datetime('now','localtime','start of day', ?, 'utc')`).get(sinceArg).n;
+    const manualTotal = db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE status = 'done' AND ${LIVE} AND ${IS_NOCLAUDE}`).get().n;
+    const todoReady = db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE status = 'todo' AND ${LIVE}`).get().n;
+    const backlog = db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE status = 'backlog' AND ${LIVE}`).get().n;
 
     const waitSel = `
       SELECT (p.prefix || '-' || t.task_no) AS key, t.title, p.name AS project,
              t.priority, t.blocked_reason AS reason,
              (julianday('now') - julianday(t.updated_at)) * 24 AS idle_h
-      FROM tasks t JOIN projects p ON p.id = t.project_id`;
+      FROM tasks t JOIN projects p ON p.id = t.project_id AND p.archived = 0`;
     const review = db.prepare(`${waitSel} WHERE t.status = 'review' ORDER BY t.priority DESC, t.updated_at DESC LIMIT 40`).all()
       .map((t) => ({ key: t.key, title: t.title, project: t.project, priority: t.priority }));
     const blocked = db.prepare(`${waitSel} WHERE t.blocked = 1 AND t.status NOT IN ('done','cancelled') ORDER BY t.updated_at DESC LIMIT 40`).all()
@@ -55,7 +63,7 @@ export default async function dashboardRoutes(app) {
              (t.description IS NULL OR trim(t.description) = '') AS no_desc,
              CAST(julianday('now') - julianday(t.updated_at) AS INTEGER) AS idle_days,
              CAST(julianday('now') - julianday(t.created_at) AS INTEGER) AS age_days
-      FROM tasks t JOIN projects p ON p.id = t.project_id
+      FROM tasks t JOIN projects p ON p.id = t.project_id AND p.archived = 0
       WHERE t.status IN ('backlog','todo')
       ORDER BY t.priority DESC, t.updated_at DESC`).all();
     const planRow = (t) => ({ key: t.key, title: t.title, project: t.project, status: t.status, priority: t.priority, idle_days: t.idle_days });
@@ -85,22 +93,22 @@ export default async function dashboardRoutes(app) {
 
     const planning = { funnel, next, matrix, health };
 
-    const heatDays = db.prepare("SELECT strftime('%Y-%m-%d', created_at, 'localtime') AS d, COUNT(DISTINCT task_id) AS n FROM task_events WHERE created_at >= datetime('now', ?) GROUP BY d ORDER BY d").all(sinceArg);
-    const heatTime = db.prepare("SELECT CAST(strftime('%w', created_at, 'localtime') AS INTEGER) AS w, CAST(strftime('%H', created_at, 'localtime') AS INTEGER) AS h, COUNT(DISTINCT task_id) AS n FROM task_events WHERE created_at >= datetime('now', ?) GROUP BY w, h").all(sinceArg);
-    const donePerDay = db.prepare("SELECT strftime('%Y-%m-%d', done_at, 'localtime') AS d, COUNT(*) AS n FROM tasks WHERE done_at IS NOT NULL AND done_at >= datetime('now', ?) GROUP BY d ORDER BY d").all(sinceArg);
-    const topProjects = db.prepare("SELECT p.name, COUNT(*) AS n FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.status = 'done' AND t.done_at >= datetime('now', ?) GROUP BY p.id ORDER BY n DESC, p.name LIMIT 6").all(sinceArg);
+    const heatDays = db.prepare(`SELECT strftime('%Y-%m-%d', created_at, 'localtime') AS d, COUNT(DISTINCT task_id) AS n FROM task_events WHERE ${LIVE_EVENTS()} AND created_at >= datetime('now','localtime','start of day', ?, 'utc') GROUP BY d ORDER BY d`).all(sinceArg);
+    const heatTime = db.prepare(`SELECT CAST(strftime('%w', created_at, 'localtime') AS INTEGER) AS w, CAST(strftime('%H', created_at, 'localtime') AS INTEGER) AS h, COUNT(DISTINCT task_id) AS n FROM task_events WHERE ${LIVE_EVENTS()} AND created_at >= datetime('now','localtime','start of day', ?, 'utc') GROUP BY w, h`).all(sinceArg);
+    const donePerDay = db.prepare(`SELECT strftime('%Y-%m-%d', done_at, 'localtime') AS d, COUNT(*) AS n FROM tasks WHERE ${LIVE} AND done_at IS NOT NULL AND done_at >= datetime('now','localtime','start of day', ?, 'utc') GROUP BY d ORDER BY d`).all(sinceArg);
+    const topProjects = db.prepare("SELECT p.name, COUNT(*) AS n FROM tasks t JOIN projects p ON p.id = t.project_id WHERE p.archived = 0 AND t.status = 'done' AND t.done_at >= datetime('now','localtime','start of day', ?, 'utc') GROUP BY p.id ORDER BY n DESC, p.name LIMIT 6").all(sinceArg);
 
     const recent = db.prepare(`
       SELECT e.status, e.created_at, (p.prefix || '-' || t.task_no) AS key, t.title, p.name AS project
       FROM task_events e
       JOIN (SELECT task_id, MAX(id) AS mid FROM task_events GROUP BY task_id) last ON last.mid = e.id
-      JOIN tasks t ON t.id = e.task_id JOIN projects p ON p.id = t.project_id
+      JOIN tasks t ON t.id = e.task_id JOIN projects p ON p.id = t.project_id AND p.archived = 0
       ORDER BY e.id DESC LIMIT 30
     `).all();
 
     const peak = db.prepare("SELECT CAST(strftime('%H', created_at, 'localtime') AS INTEGER) AS h, COUNT(*) AS n FROM task_events GROUP BY h ORDER BY n DESC LIMIT 1").get();
-    const since = db.prepare("SELECT MIN(strftime('%Y-%m-%d', created_at, 'localtime')) AS d FROM task_events").get().d;
-    const rangeStart = db.prepare("SELECT strftime('%Y-%m-%d', datetime('now', ?), 'localtime') AS d").get(sinceArg).d;
+    const since = db.prepare("SELECT strftime('%Y-%m-%d', MIN(created_at), 'localtime') AS d FROM task_events").get().d;
+    const rangeStart = db.prepare("SELECT strftime('%Y-%m-%d', 'now', 'localtime', 'start of day', ?) AS d").get(sinceArg).d;
     const rangeSince = since && since > rangeStart ? since : rangeStart;
 
     const out = {

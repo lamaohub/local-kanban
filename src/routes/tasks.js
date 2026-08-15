@@ -2,7 +2,8 @@ import { execFile } from 'node:child_process';
 import { writeFileSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { db, DATA_DIR, STATUSES, enqueue, nextTaskNo, nextPosition, logError } from '../db.js';
+import { db, DATA_DIR, STATUSES, WORK_SEGMENT_MAX_S, enqueue, nextTaskNo, nextPosition, logError } from '../db.js';
+import { scalarQuery } from '../query-params.js';
 import { emit } from '../bus.js';
 import { resolveProject } from './projects.js';
 import { kick } from '../sync/worker.js';
@@ -128,22 +129,42 @@ export default async function taskRoutes(app) {
   app.addContentTypeParser(/^image\//, { parseAs: 'buffer', bodyLimit: 6 * 1024 * 1024 }, (req, body, done) => done(null, body));
 
   app.get('/api/tasks', (req, reply) => {
-    const { project, status, all } = req.query;
+    const parsed = scalarQuery(req.query, ['project', 'status', 'all', 'q']);
+    if (parsed.error) return reply.code(400).send({ error: parsed.error });
+    const { project, status, all, q } = parsed.values;
     const p = project ? resolveProject(project) : null;
     if (project && !p) return reply.code(404).send({ error: 'project not found' });
     let sql = `
-      SELECT t.*, p.slug AS project, (p.prefix || '-' || t.task_no) AS key,
+      SELECT t.id, t.project_id, t.task_no, t.title, substr(t.description, 1, 180) AS description,
+        t.status, t.priority, t.blocked, t.blocked_reason, t.position, t.pinned,
+        t.work_seconds, t.work_started_at, t.work_truncated,
+        t.gh_issue_number, t.gh_issue_url, t.updated_at, t.labels,
+        p.slug AS project, (p.prefix || '-' || t.task_no) AS key,
         (SELECT COUNT(*) FROM task_comments c WHERE c.task_id = t.id) AS comments_n,
         (SELECT COUNT(*) FROM task_attachments a WHERE a.task_id = t.id AND a.file != '') AS attachments_n
       FROM tasks t JOIN projects p ON p.id = t.project_id WHERE 1=1`;
     const args = [];
     if (p) { sql += ' AND t.project_id = ?'; args.push(p.id); }
+    else sql += ' AND p.archived = 0';
     if (status) { sql += ' AND t.status = ?'; args.push(status); }
     else if (!all) sql += " AND t.status NOT IN ('done','cancelled','backlog')";
+    if (q) {
+      sql += ` AND (instr(kb_lower(t.title), kb_lower(?)) > 0
+        OR instr(kb_lower(t.description), kb_lower(?)) > 0
+        OR instr(kb_lower(p.prefix || '-' || t.task_no), kb_lower(?)) > 0
+        OR instr(kb_lower(t.labels), kb_lower(?)) > 0)`;
+      args.push(q, q, q, q);
+    }
     sql += ' ORDER BY t.status, t.priority DESC, t.position, t.id';
     const list = db.prepare(sql).all(...args).map(listShape);
     const linkMap = {};
-    for (const { task_id, linked_task_id } of db.prepare('SELECT task_id, linked_task_id FROM task_links').all()) {
+    const shownIds = list.map((t) => t.id);
+    const linkRows = shownIds.length
+      ? db.prepare(`SELECT task_id, linked_task_id FROM task_links
+                    WHERE task_id IN (${shownIds.map(() => '?').join(',')})
+                       OR linked_task_id IN (${shownIds.map(() => '?').join(',')})`).all(...shownIds, ...shownIds)
+      : [];
+    for (const { task_id, linked_task_id } of linkRows) {
       (linkMap[task_id] ||= []).push(linked_task_id);
       (linkMap[linked_task_id] ||= []).push(task_id);
     }
@@ -220,6 +241,9 @@ export default async function taskRoutes(app) {
       updates.push('blocked_reason = ?'); values.push(b.blocked ? (b.blocked_reason || '') : null);
     }
     if (b.position !== undefined) {
+      if (typeof b.position !== 'number' && typeof b.position !== 'string') {
+        return reply.code(400).send({ error: 'position: a finite number' });
+      }
       const pos = Number(b.position);
       if (!Number.isFinite(pos)) return reply.code(400).send({ error: 'position: a finite number' });
       updates.push('position = ?'); values.push(pos);
@@ -239,7 +263,10 @@ export default async function taskRoutes(app) {
       if (working(b.status) && !working(t.status)) {
         updates.push("work_started_at = datetime('now')");
       } else if (!working(b.status) && working(t.status)) {
-        updates.push("work_seconds = work_seconds + COALESCE(CAST(strftime('%s','now') AS INTEGER) - CAST(strftime('%s', work_started_at) AS INTEGER), 0)");
+        updates.push("work_seconds = work_seconds + MIN(?, COALESCE(CAST(strftime('%s','now') AS INTEGER) - CAST(strftime('%s', work_started_at) AS INTEGER), 0))");
+        values.push(WORK_SEGMENT_MAX_S);
+        updates.push("work_truncated = work_truncated + (COALESCE(CAST(strftime('%s','now') AS INTEGER) - CAST(strftime('%s', work_started_at) AS INTEGER), 0) > ?)");
+        values.push(WORK_SEGMENT_MAX_S);
         updates.push('work_started_at = NULL');
       }
       if (b.status !== t.status && b.position === undefined) {
@@ -430,7 +457,10 @@ export default async function taskRoutes(app) {
     if (!item) return reply.code(404).send({ error: 'checklist item not found' });
     const b = req.body || {};
     const sets = [], vals = [];
-    if (b.text !== undefined) { sets.push('text = ?'); vals.push(b.text.toString()); }
+    if (b.text !== undefined) {
+      if (b.text === null || typeof b.text === 'object') return reply.code(400).send({ error: 'text: expected a string' });
+      sets.push('text = ?'); vals.push(String(b.text));
+    }
     if (b.done !== undefined) { sets.push('done = ?'); vals.push(b.done ? 1 : 0); }
     if (sets.length) { db.prepare(`UPDATE task_checklist SET ${sets.join(', ')} WHERE id = ?`).run(...vals, item.id); }
     const fresh = db.prepare('SELECT id, text, done, position FROM task_checklist WHERE id = ?').get(item.id);

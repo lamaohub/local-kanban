@@ -1,4 +1,4 @@
-import { join, dirname, sep } from 'node:path';
+import { join, dirname, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -19,10 +19,17 @@ const env = (...names) => {
   return '';
 };
 
-export const DATA_DIR = env('KB_DATA_DIR') || defaultDataDir();
+export function expandPath(p) {
+  if (!p) return p;
+  const home = p === '~' || p.startsWith('~/') ? join(homedir(), p.slice(1)) : p;
+  return resolve(home);
+}
+
+export const DATA_DIR = expandPath(env('KB_DATA_DIR')) || defaultDataDir();
 export const PORT = Number(env('PORT') || 3100);
 
-export const localRoot = () => env('KB_LOCAL_ROOT') || join(homedir(), 'claude-projects');
+export const localRoot = () => expandPath(env('KB_LOCAL_ROOT'))
+  || (env('KB_DATA_DIR') ? join(DATA_DIR, 'projects') : join(homedir(), 'claude-projects'));
 export const panelUrl = () => env('KB_PANEL_URL', 'PANEL_URL');
 export const panelInfo = () => env('KB_PANEL_INFO', 'PANEL_INFO');
 export const skillsExtra = () => env('KB_SKILLS_EXTRA').split(':').filter(Boolean);

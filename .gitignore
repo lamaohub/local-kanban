@@ -11,6 +11,9 @@ contrib/seed-projects.json
 contrib/seed-from-panel.js
 # local notes of whoever runs this board
 CLAUDE.local.md
+# audit reports: owner-only, written in Russian, and every .md in the release slice
+# has to be English (MUST_BE_ENGLISH in scripts/release.js) — keep them out of the tree
+AUDIT-*.md
 # site-specific leak patterns used by scripts/release.js
 .release-private.json
 

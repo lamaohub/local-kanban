@@ -1,7 +1,7 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { join, basename, resolve, sep } from 'node:path';
-import { db, genPrefix, usedPrefixes, makePrefix, kvGet, kvSet } from '../db.js';
+import { db, DATA_DIR, genPrefix, usedPrefixes, makePrefix, kvGet, kvSet } from '../db.js';
 import { localRoot, panelUrl, panelInfo, skillsExtra } from '../config.js';
 import { emit } from '../bus.js';
 import { forgetRepoBase } from '../repo-base.js';
@@ -57,6 +57,25 @@ function syncCategoryToPanel(project) {
 }
 
 const PATCHABLE = ['name', 'prefix', 'path', 'server_path', 'deploy_skill', 'server', 'pm2_services', 'domain', 'category', 'description', 'pinned', 'archived'];
+
+const FIELD_KIND = { pinned: 'flag', archived: 'flag', pm2_services: 'any' };
+function badField(k, v) {
+  const kind = FIELD_KIND[k] || 'text';
+  if (kind === 'any') return null;
+  if (kind === 'flag') {
+    if (v === null || v === undefined) return `${k}: expected 0 or 1`;
+    if (typeof v === 'boolean' || v === 0 || v === 1 || v === '0' || v === '1') return null;
+    return `${k}: expected 0 or 1`;
+  }
+  if (v === null) return null;
+  if (typeof v === 'string' || typeof v === 'number') return null;
+  return `${k}: expected a string`;
+}
+const normField = (k, v) => {
+  if (FIELD_KIND[k] === 'flag') return (v === true || v === 1 || v === '1') ? 1 : 0;
+  if (FIELD_KIND[k] === 'any') return v;
+  return v === null ? null : String(v);
+};
 
 export function projectBySlug(slug) {
   return db.prepare('SELECT * FROM projects WHERE slug = ?').get(slug);
@@ -137,9 +156,16 @@ export default async function projectRoutes(app) {
     `).all();
   });
 
+  app.get('/api/projects/archived', () => db.prepare(`
+    SELECT p.slug, p.name, p.category, p.archived,
+      (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id) AS tasks_n
+    FROM projects p WHERE p.archived = 1 ORDER BY p.name COLLATE NOCASE
+  `).all());
+
   app.post('/api/projects/reorder', (req, reply) => {
     const slugs = Array.isArray(req.body?.slugs) ? req.body.slugs : null;
     if (!slugs) return reply.code(400).send({ error: 'slugs[] required' });
+    if (slugs.some((s) => typeof s !== 'string')) return reply.code(400).send({ error: 'slugs[]: expected strings' });
     const upd = db.prepare('UPDATE projects SET position = ? WHERE slug = ?');
     const tx = db.transaction((list) => list.forEach((s, i) => upd.run(i, s)));
     tx(slugs);
@@ -196,7 +222,11 @@ export default async function projectRoutes(app) {
   app.get('/api/projects/folders', () => scanFolders());
 
   app.post('/api/projects/folders', (req, reply) => {
-    const name = (req.body?.name || '').trim();
+    const raw = req.body?.name;
+    if (raw !== undefined && raw !== null && typeof raw !== 'string' && typeof raw !== 'number') {
+      return reply.code(400).send({ error: 'name: expected a string' });
+    }
+    const name = String(raw ?? '').trim();
     if (!name) return reply.code(400).send({ error: 'name required' });
     if (!/^[A-Za-z0-9._-]+$/.test(name) || name.startsWith('.')) {
       return reply.code(400).send({ error: 'folder name: latin letters, digits, - and _, no slashes' });
@@ -257,7 +287,7 @@ export default async function projectRoutes(app) {
     try {
       stats = await serviceStats();
     } catch (e) {
-      return reply.code(502).send({ error: panelUrl() ? `status source (panelUrl()) is unavailable: ${e.message}` : e.message });
+      return reply.code(502).send({ error: panelUrl() ? `status source (${panelUrl()}) is unavailable: ${e.message}` : e.message });
     }
     return services.map((name) => {
       const proc = stats.find((x) => x.name === name);
@@ -372,8 +402,10 @@ export default async function projectRoutes(app) {
   app.delete('/api/projects/demo', (req, reply) => {
     const p = projectBySlug('demo');
     if (!p) return reply.code(404).send({ error: 'there is no demo project' });
+    const ids = db.prepare('SELECT id FROM tasks WHERE project_id = ?').all(p.id).map((t) => t.id);
     db.prepare('DELETE FROM tasks WHERE project_id = ?').run(p.id);
     db.prepare('DELETE FROM projects WHERE id = ?').run(p.id);
+    for (const id of ids) rmSync(join(DATA_DIR, 'attachments', String(id)), { recursive: true, force: true });
     emit('project.updated', { slug: 'demo', deleted: true });
     return { ok: true };
   });
@@ -381,11 +413,19 @@ export default async function projectRoutes(app) {
   app.post('/api/projects', (req, reply) => {
     const { slug, name } = req.body || {};
     if (!slug || !name) return reply.code(400).send({ error: 'slug and name required' });
+    if (typeof slug !== 'string' || typeof name !== 'string') {
+      return reply.code(400).send({ error: 'slug and name: expected strings' });
+    }
     if (projectBySlug(slug)) return reply.code(409).send({ error: 'slug exists' });
     const dsErr = badDeploySkill(req.body);
     if (dsErr) return reply.code(400).send({ error: dsErr });
     const fields = { slug, name, prefix: makePrefix(slug) };
-    for (const k of PATCHABLE) if (req.body[k] !== undefined) fields[k] = req.body[k];
+    for (const k of PATCHABLE) {
+      if (req.body[k] === undefined) continue;
+      const bad = badField(k, req.body[k]);
+      if (bad) return reply.code(400).send({ error: bad });
+      fields[k] = normField(k, req.body[k]);
+    }
     // The field is documented as "comma-separated string <-> JSON", so store the canonical
     // form instead of whatever the caller sent (readers stay tolerant for older rows).
     if (fields.pm2_services !== undefined) fields.pm2_services = serializePm2Services(fields.pm2_services);
@@ -414,8 +454,10 @@ export default async function projectRoutes(app) {
     const values = [];
     for (const k of PATCHABLE) {
       if (req.body && req.body[k] !== undefined) {
+        const bad = badField(k, req.body[k]);
+        if (bad) return reply.code(400).send({ error: bad });
         updates.push(`${k} = ?`);
-        values.push(k === 'pm2_services' ? serializePm2Services(req.body[k]) : req.body[k]);
+        values.push(k === 'pm2_services' ? serializePm2Services(req.body[k]) : normField(k, req.body[k]));
       }
     }
     if (updates.length) {

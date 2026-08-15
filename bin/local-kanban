@@ -10,7 +10,7 @@
 //  - nothing happens quietly: every step prints what it wrote and where.
 import { createInterface } from 'node:readline/promises';
 import { execFileSync } from 'node:child_process';
-import { existsSync, writeFileSync, mkdirSync, symlinkSync, cpSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, rmSync, writeFileSync, mkdirSync, symlinkSync, cpSync, readFileSync } from 'node:fs';
 import { join, dirname, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { homedir } from 'node:os';
@@ -69,8 +69,37 @@ const usage = () => say(`
   local-kanban start      run the board
       --port <N>          port (defaults to 3100, or PORT)
       --data <dir>        data directory (defaults to whatever the board resolves on its own)
+  local-kanban skills     refresh the Claude Code skills in ~/.claude/skills
   local-kanban help       this help
 `);
+
+function installSkills({ force = false, quiet = false } = {}) {
+  const skillsDir = join(homedir(), '.claude', 'skills');
+  mkdirSync(skillsDir, { recursive: true });
+  for (const name of ['kanban', 'deploy']) {
+    const target = join(skillsDir, name);
+    const source = join(ROOT, 'skills', name);
+    const linked = existsSync(target) && lstatSync(target).isSymbolicLink();
+    if (existsSync(target) && !force) { if (!quiet) skip(`${target} already exists — leaving it alone`); continue; }
+    // A clone links, so edits to the skill apply immediately and there is nothing to refresh.
+    if (linked) { if (!quiet) skip(`${target} is a symlink — nothing to refresh`); continue; }
+    try {
+      // from a package this is a COPY. A symlink would point inside node_modules, and updating or
+      // removing the package would silently take the skill away from Claude.
+      if (packaged || force) {
+        rmSync(target, { recursive: true, force: true });
+        cpSync(source, target, { recursive: true });
+        if (!quiet) done(`${target} (copy)`);
+      } else { symlinkSync(source, target); if (!quiet) done(`${target} → skills/${name}`); }
+    } catch (e) { skip(`could not install the skill ${target}: ${e.message}`); }
+  }
+}
+
+if (cmd === 'skills') {
+  installSkills({ force: true });
+  say('\n  The skills in ~/.claude/skills now match this version of the package.');
+  process.exit(0);
+}
 
 if (cmd === 'start') {
   if (flag('port')) process.env.PORT = flag('port');
@@ -93,11 +122,17 @@ say('\n  local-kanban — install\n');
 /* ── 1. port and data directory ─────────────────────────────────────────── */
 // imported here rather than at the top: a static import would run BEFORE the `start` branch,
 // which sets KB_DATA_DIR from --data, and the server would receive a stale cached value
-const { DATA_DIR } = await import(pathToFileURL(join(ROOT, 'src', 'config.js')).href);
+const { DATA_DIR, expandPath } = await import(pathToFileURL(join(ROOT, 'src', 'config.js')).href);
 const port = await ask('Board port (listens on 127.0.0.1 only)', '3100');
 // the default comes from config.js, the single place that decides where data lives — otherwise
 // the wizard would offer a directory inside the package and the board would open a different one
-const dataDir = await ask('Data directory (SQLite, attachments, backups)', DATA_DIR);
+// A tilde or a relative path is expanded here, and the result is shown back: the shell only
+// expands `~` when it is unquoted, and nothing expands it inside a pm2 config file. Writing the
+// answer down verbatim used to create a real directory named `~` next to wherever the board was
+// started from, and the board then died with a raw stack from @fastify/static.
+const dataAnswer = await ask('Data directory (SQLite, attachments, backups)', DATA_DIR);
+const dataDir = expandPath(dataAnswer);
+if (dataDir !== dataAnswer) say(`  → ${dataDir}`);
 
 /* ── 2. GitHub sync ─────────────────────────────────────────────────────── */
 let ghOwner = '';
@@ -156,21 +191,10 @@ ${env}
 }
 
 /* ── 4. Claude Code skills ──────────────────────────────────────────────── */
-const skillsDir = join(homedir(), '.claude', 'skills');
 say('');
 if (await confirm('Install the Claude Code skills (kanban, deploy) into ~/.claude/skills?', true)) {
-  mkdirSync(skillsDir, { recursive: true });
-  for (const name of ['kanban', 'deploy']) {
-    const target = join(skillsDir, name);
-    if (existsSync(target)) { skip(`${target} already exists — leaving it alone`); continue; }
-    // from a package this is a COPY. A symlink would point inside node_modules, and updating or
-    // removing the package would silently take the skill away from Claude. From a clone a link is
-    // better: edits to the skill apply immediately and the directory is not going anywhere.
-    try {
-      if (packaged) { cpSync(join(ROOT, 'skills', name), target, { recursive: true }); done(`${target} (copy)`); }
-      else { symlinkSync(join(ROOT, 'skills', name), target); done(`${target} → skills/${name}`); }
-    } catch (e) { skip(`could not install the skill ${target}: ${e.message}`); }
-  }
+  installSkills();
+  if (packaged) say('    after an update, refresh them:  local-kanban skills');
 } else {
   skip('skills not installed — later: ln -s "$(pwd)/skills/kanban" ~/.claude/skills/kanban');
 }

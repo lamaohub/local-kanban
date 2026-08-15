@@ -1,6 +1,6 @@
 
-import { renderBoard } from './board.js';
-import { $, ALL, ALL_STATUSES, CALENDAR, CHAOS, DASH, HORIZON, LANG, SETTINGS, api, esc, ic, setGhSyncOn, state, tr } from './core.js';
+import { patchCard, renderBoard } from './board.js';
+import { $, ALL, ALL_STATUSES, CALENDAR, CHAOS, DASH, HORIZON, LANG, SETTINGS, api, esc, ic, retryUnsaved, setGhSyncOn, state, tr } from './core.js';
 import { openDrawer, renderComments, renderIssueRow, syncOpenDrawerStatus } from './drawer.js';
 import { getSetting } from './settings.js';
 import { loadProjects, loadTasks, renderSidebar, renderTopbar, selectProject } from './sidebar.js';
@@ -49,7 +49,10 @@ async function applySseEvent(ev) {
     if (ev.type === 'task.deleted') {
       if (i >= 0) state.tasks.splice(i, 1);
     } else if (i >= 0) {
-      state.tasks[i] = { ...state.tasks[i], ...d };
+      const before = state.tasks[i];
+      const after = { ...before, ...d };
+      state.tasks[i] = after;
+      if (patchCard(before, after)) { await refreshProjectCounters(); await syncOpenDrawerStatus(); return true; }
     } else if (ev.type === 'task.created') {
       state.tasks.push(d);
     } else {
@@ -201,16 +204,45 @@ function maybeDoneSound(ev) {
   if (realTransition(ev, 'done')) playDoneSound();
 }
 
+export const SSE_STALE_MS = 75000;
 let sse = null;
 export let lastSseAt = Date.now();
+
+let sseQueue = [];
+let sseFlushing = false;
+async function flushSseQueue() {
+  if (sseFlushing) return;
+  sseFlushing = true;
+  try {
+    while (sseQueue.length) {
+      const batch = sseQueue;
+      sseQueue = [];
+      let applied = true;
+      for (const ev of batch) { if (!await applySseEvent(ev)) { applied = false; break; } }
+      if (!applied) await refresh();
+      if (state.drawerKey && batch.some((ev) => ev.type === 'task.updated'
+        && ev.data.key === state.drawerKey && ev.data.gh_issue_number)) {
+        const t = state.tasks.find((x) => x.key === state.drawerKey);
+        if (t) renderIssueRow(t);
+      }
+    }
+  } finally { sseFlushing = false; }
+}
+
 export function connectSSE() {
   if (sse) { try { sse.close(); } catch {  } }
   const es = new EventSource('/api/events');
   sse = es;
   let timer = null;
-  es.onopen = () => { lastSseAt = Date.now(); refresh(); };
-  es.onmessage = (e) => {
+  es.onopen = () => {
     lastSseAt = Date.now();
+    refresh();
+    retryUnsaved();
+  };
+  es.onmessage = (e) => {
+    const gap = Date.now() - lastSseAt;
+    lastSseAt = Date.now();
+    if (gap > SSE_STALE_MS) refresh().catch(() => {});
     const ev = JSON.parse(e.data);
     if (ev.type === 'ping') return;
     if (ev.type === 'sync.status') { refreshSync(); return; }
@@ -218,20 +250,15 @@ export function connectSSE() {
     maybeReviewSound(ev);
     maybeReviewNotify(ev);
     maybeDoneSound(ev);
+    sseQueue.push(ev);
     clearTimeout(timer);
-    timer = setTimeout(async () => {
-      if (!await applySseEvent(ev)) await refresh();
-      if (state.drawerKey && ev.type === 'task.updated' && ev.data.key === state.drawerKey && ev.data.gh_issue_number) {
-        const t = state.tasks.find((x) => x.key === state.drawerKey);
-        if (t) renderIssueRow(t);
-      }
-    }, 150);
+    timer = setTimeout(flushSseQueue, 150);
   };
   es.onerror = () => { es.close(); if (sse === es) setTimeout(connectSSE, 3000); };
 }
-function ensureSSE() {
+export function ensureSSE() {
   if (document.hidden) return;
-  if (!sse || sse.readyState === 2 || Date.now() - lastSseAt > 75000) connectSSE();
+  if (!sse || sse.readyState === 2 || Date.now() - lastSseAt > SSE_STALE_MS) connectSSE();
 }
 document.addEventListener('visibilitychange', ensureSSE);
 window.addEventListener('focus', ensureSSE);

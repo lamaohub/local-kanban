@@ -23,7 +23,7 @@ function backoff(attempts) {
   return Math.min(30 * 2 ** attempts, 3600);
 }
 
-async function processOp(row) {
+export async function processOp(row, api = github) {
   const payload = JSON.parse(row.payload);
   const task = row.task_id
     ? db.prepare('SELECT t.*, p.slug AS project FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ?').get(row.task_id)
@@ -50,33 +50,40 @@ async function processOp(row) {
   switch (row.op) {
     case 'create_issue': {
       if (!task) return;
-      project = await github.ensureProject(project);
+      project = await api.ensureProject(project);
       let { gh_issue_number: number, gh_issue_url: url, gh_item_id: itemId } = task;
       if (!number) {
-        ({ number, url } = await github.createIssueOnly(project, data));
+        if (row.started_at) {
+          const found = await api.findIssueByKey(data.key);
+          if (found) ({ number, url } = found);
+        }
+        if (!number) {
+          db.prepare("UPDATE sync_queue SET started_at = datetime('now') WHERE id = ?").run(row.id);
+          ({ number, url } = await api.createIssueOnly(project, data));
+        }
         if (db.prepare('UPDATE tasks SET gh_issue_number=?, gh_issue_url=? WHERE id=?').run(number, url, task.id).changes === 0) {
-          await github.deleteIssue({ gh_issue_number: number }); return;
+          await api.deleteIssue({ gh_issue_number: number }); return;
         }
       }
       if (!itemId) {
-        itemId = await github.addToProject(project, url);
+        itemId = await api.addToProject(project, url);
         if (db.prepare('UPDATE tasks SET gh_item_id=? WHERE id=?').run(itemId, task.id).changes === 0) {
-          await github.deleteIssue({ gh_issue_number: number }); return;
+          await api.deleteIssue({ gh_issue_number: number }); return;
         }
       }
-      await github.setItemStatus(project, itemId, data.status || 'backlog');
+      await api.setItemStatus(project, itemId, data.status || 'backlog');
       emit('task.updated', taskEvent(task.id));
       break;
     }
-    case 'set_status': project = await github.ensureProject(project); await github.setItemStatus(project, data.gh_item_id, data.status); break;
-    case 'set_priority': await github.setPriority(data); break;
-    case 'set_blocked': await github.setBlocked(data); break;
-    case 'set_labels': await github.setLabels(data); break;
-    case 'add_comment': await github.addComment(data); break;
-    case 'update_issue': await github.updateIssue(data, project); break;
-    case 'close_issue': project = await github.ensureProject(project); await github.closeIssue(data, project); break;
-    case 'reopen_issue': project = await github.ensureProject(project); await github.reopenIssue(data, project); break;
-    case 'delete_issue': await github.deleteIssue(payload); break;
+    case 'set_status': project = await api.ensureProject(project); await api.setItemStatus(project, data.gh_item_id, data.status); break;
+    case 'set_priority': await api.setPriority(data); break;
+    case 'set_blocked': await api.setBlocked(data); break;
+    case 'set_labels': await api.setLabels(data); break;
+    case 'add_comment': await api.addComment(data); break;
+    case 'update_issue': await api.updateIssue(data, project); break;
+    case 'close_issue': project = await api.ensureProject(project); await api.closeIssue(data, project); break;
+    case 'reopen_issue': project = await api.ensureProject(project); await api.reopenIssue(data, project); break;
+    case 'delete_issue': await api.deleteIssue(payload); break;
     default: break;
   }
 }
@@ -121,7 +128,7 @@ export async function drain({ handler = processOp } = {}) {
 }
 
 export function kick() {
-  setImmediate(() => drain().catch(() => {}));
+  setImmediate(() => drain().catch((e) => logError('sync', 'kick', e?.message || String(e), e?.stack)));
 }
 
 export function startWorker() {
