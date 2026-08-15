@@ -64,19 +64,30 @@ export const LABELS = {
 export const MANAGED_LABELS = new Set([...Object.values(PRIORITY_LABELS), 'blocked']);
 
 let labelsEnsuredFor = null;
-export async function ensureLabels() {
+
+export function missingLabels(existingNames = []) {
+  const have = new Set(existingNames.map((n) => String(n).toLowerCase()));
+  return Object.entries(LABELS).filter(([name]) => !have.has(name.toLowerCase()));
+}
+
+export async function ensureLabels({ run = gh } = {}) {
   const repo = ghRepo();
   if (labelsEnsuredFor === repo) return;
-  let existing = new Set();
+  let existing = [];
+  let listed = false;
   try {
-    const out = await gh(['label', 'list', '-R', repo, '--limit', '200', '--json', 'name']);
-    existing = new Set(JSON.parse(out || '[]').map((l) => l.name));
+    const out = await run(['label', 'list', '-R', repo, '--limit', '200', '--json', 'name']);
+    existing = JSON.parse(out || '[]').map((l) => l.name);
+    listed = true;
   } catch {  }
-  for (const [name, color] of Object.entries(LABELS)) {
-    if (existing.has(name)) continue;
-    await gh(['label', 'create', name, '-R', repo, '--color', color]);
+  for (const [name, color] of missingLabels(existing)) {
+    try {
+      await run(['label', 'create', name, '-R', repo, '--color', color]);
+    } catch (e) {
+      if (!/already exists/i.test(e.message)) throw e;
+    }
   }
-  labelsEnsuredFor = repo;
+  if (listed) labelsEnsuredFor = repo;
 }
 
 function statusOptions(project) {

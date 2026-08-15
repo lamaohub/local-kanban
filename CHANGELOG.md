@@ -3,6 +3,20 @@
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [semantic versioning](https://semver.org/).
 
+## [1.3.2]
+
+### Fixed
+
+- **The GitHub sync stopped as soon as a label differed only in capitalisation.** GitHub treats
+  label names as case-insensitive; the board compared them exactly. A board whose repository
+  already had, say, `NoClaude` while the palette asks for `noclaude` did not recognise it, tried to
+  create it, and GitHub answered "a label with that name already exists" — which brought down the
+  whole issue creation, so every task after that reported "the issue does not exist yet" and the
+  error log filled up. Dropping `--force` in 1.3.0 is what exposed it: `--force` never complained
+  about a label that was already there. A label that already exists is no longer treated as a
+  failure at all, and a repository whose labels could not be listed is retried on the next
+  operation instead of being written off until a restart.
+
 ## [1.3.1]
 
 Three fixes found by testing the previous release rather than by using it — each one a place where

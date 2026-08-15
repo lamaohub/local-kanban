@@ -22,6 +22,40 @@ before(async () => {
 
 after(() => { if (tmp) rmSync(tmp, { recursive: true, force: true }); });
 
+test('a label that differs only in case is not created again', () => {
+  const inRepo = ['bug', 'documentation', 'docs', 'duplicate', 'enhancement', 'good first issue',
+    'help wanted', 'invalid', 'question', 'wontfix', 'ui', 'feature', 'blocked',
+    'p:low', 'p:med', 'p:high', 'NoClaude', 'security', 'ask'];
+  const missing = github.missingLabels(inRepo).map(([name]) => name);
+  assert.deepEqual(missing, [],
+    `the board tries to create labels GitHub already has under a different case: ${missing.join(', ')}`);
+});
+
+test('a genuinely missing label is still created', () => {
+  const missing = github.missingLabels(['bug', 'NoClaude']).map(([name]) => name);
+  assert.ok(missing.includes('security'), 'nothing would ever be created — the check is too eager');
+  assert.ok(!missing.includes('bug') && !missing.includes('noclaude'), missing.join(', '));
+});
+
+test('«already exists» from label create does not bring down create_issue', async () => {
+  const calls = [];
+  const run = async (args) => {
+    calls.push(args[1]);
+    if (args[0] === 'label' && args[1] === 'list') throw new Error('network is down');
+    throw new Error('HTTP 422: label with name "bug" already exists; use `--force` to update its color');
+  };
+  await assert.doesNotReject(() => github.ensureLabels({ run }),
+    'a label that is already there is reported as a failure, and the whole create_issue dies with it');
+  assert.ok(calls.filter((c) => c === 'create').length > 1, 'the loop stopped at the first label');
+
+  const angry = async (args) => {
+    if (args[1] === 'list') throw new Error('network is down');
+    throw new Error('HTTP 403: Resource not accessible by personal access token');
+  };
+  await assert.rejects(() => github.ensureLabels({ run: angry }), /not accessible/,
+    'a real refusal is swallowed together with the harmless one');
+});
+
 test('a transient network answer is not marked as permanent', () => {
   assert.equal(github.isPermanent(`invalid character '<' looking for beginning of value`), false,
     'a captive portal answer still goes straight to failed without a single retry');
