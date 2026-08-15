@@ -95,6 +95,17 @@ test('an unregistered folder shows up in /folders and can be adopted', async () 
   assert.ok(!after.unregistered.includes('new-folder'), 'an adopted folder is no longer offered');
 });
 
+test('a folder is created even when the root does not exist yet', async () => {
+  const missingRoot = join(projectsRoot, 'not-created-yet', 'nested');
+  const saved = process.env.KB_LOCAL_ROOT;
+  process.env.KB_LOCAL_ROOT = missingRoot;
+  try {
+    const r = await app.inject({ method: 'POST', url: '/api/projects/folders', payload: { name: 'first-folder' } });
+    assert.equal(r.statusCode, 201, `an isolated instance cannot create its first folder: ${r.body}`);
+    assert.equal(r.json().created, true);
+  } finally { process.env.KB_LOCAL_ROOT = saved; }
+});
+
 test('folder name: slashes, a leading dot and non-latin characters are rejected', async () => {
   const bad = (name) => app.inject({ method: 'POST', url: '/api/projects/folders', payload: { name } });
   assert.equal((await bad('../escape')).statusCode, 400);

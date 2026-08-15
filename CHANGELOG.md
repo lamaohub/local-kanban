@@ -3,6 +3,27 @@
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [semantic versioning](https://semver.org/).
 
+## [1.3.1]
+
+Three fixes found by testing the previous release rather than by using it — each one a place where
+the 1.3.0 change was right in intent and incomplete in reach.
+
+### Fixed
+
+- **A board with its own data directory could not create a project folder.** Keeping an isolated
+  instance out of the owner's live `~/claude-projects` (1.3.0) moved project folders next to the
+  data directory — but nothing ever created that directory, so the first "create a folder" answered
+  with an error and the feature simply did not work for anyone who chose a custom data directory
+  during setup. The failure was also invisible: it never reached the error log.
+- **The dashboard funnel still counted archived boards.** Archiving was made to remove a board from
+  every card and every total, and it does — except for the bar chart of how many tasks sit at each
+  stage, which was left counting the archived board's tasks. On one screen that put a set of
+  consistent numbers next to one inconsistent one.
+- **A deleted issue was retried instead of failing.** The list of GitHub answers that mean "this
+  will never succeed" spelled the article one way, and GitHub writes it the other way for half the
+  entries — so an issue that no longer exists was treated as a passing network problem and retried
+  fifteen times before giving up.
+
 ## [1.3.0]
 
 A full audit of the board — stability, performance and error handling — went through every part of

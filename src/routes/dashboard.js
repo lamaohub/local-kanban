@@ -70,7 +70,8 @@ export default async function dashboardRoutes(app) {
 
     const FUNNEL_ST = ['backlog', 'todo', 'prep', 'doing', 'deploy', 'review'];
     const funMap = Object.fromEntries(db.prepare(
-      `SELECT status, COUNT(*) n FROM tasks WHERE status IN ('backlog','todo','prep','doing','deploy','review') GROUP BY status`).all().map((r) => [r.status, r.n]));
+      `SELECT status, COUNT(*) n FROM tasks WHERE status IN ('backlog','todo','prep','doing','deploy','review')
+         AND ${LIVE_TASKS()} GROUP BY status`).all().map((r) => [r.status, r.n]));
     const funnel = FUNNEL_ST.map((s) => ({ status: s, n: funMap[s] || 0 }));
 
     const nextScore = (t) => t.priority * 100 + Math.min(t.age_days, NEXT_FRESH_DAYS);

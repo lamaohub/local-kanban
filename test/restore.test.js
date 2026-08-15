@@ -1,6 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, readFileSync, existsSync, utimesSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, existsSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -84,6 +84,18 @@ test('a backup older than the kv table still opens', async () => {
   const checked = restore.inspectBackup(readFileSync(old));
   assert.equal(checked.ok, true, `an old backup was rejected: ${checked.error}`);
   rmSync(checked.dir, { recursive: true, force: true });
+});
+
+test('a backup the board cannot boot from is a refusal, not a green "the board is up"', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'kb-restore-'));
+  mkdirSync(join(dir, 'kanban.db'));
+  await assert.rejects(
+    () => restore.startPreview(dir, { tasks: 0, projects: 0, version: 0 }),
+    /did not answer/,
+    'a board that never came up is reported as running, with a port and statistics',
+  );
+  assert.equal(restore.currentPreview(), null, 'the failed preview is still counted as the live one');
+  assert.equal(existsSync(dir), false, 'a failed start left its copy of the database in /tmp');
 });
 
 test('stale preview directories are swept on startup', () => {

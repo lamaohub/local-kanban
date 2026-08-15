@@ -33,6 +33,10 @@ test('an unambiguous GitHub refusal is still permanent', () => {
   assert.equal(github.isPermanent('GraphQL: Could not resolve to a Repository with the name someone/board.'), true);
   assert.equal(github.isPermanent('HTTP 422: Validation Failed'), true);
   assert.equal(github.isPermanent(`could not add label: 'security' not found`), true);
+  assert.equal(github.isPermanent('GraphQL: Could not resolve to an Issue with the number 4102.'), true,
+    'a deleted issue is retried fifteen times instead of failing at once');
+  assert.equal(github.isPermanent('Could not resolve to an Organization with the login of nope.'), true);
+  assert.equal(github.isPermanent('Could not resolve to a User with the login of nope.'), true);
 });
 
 test('an answer without an issue link is a failure, not a NULL issue number', () => {

@@ -84,6 +84,29 @@ test('funnel: counts per active stage', async () => {
   assert.deepEqual(f, { backlog: 2, todo: 2, prep: 1, doing: 1, deploy: 1, review: 1 });
 });
 
+test('an archived project drops out of the funnel too, not just out of the other cards', async () => {
+  const { bus } = await import('../src/bus.js');
+  const funnel = async () => {
+    bus.emit('event', { type: 'test.cache-bust' });
+    return Object.fromEntries((await dash('week')).planning.funnel.map((s) => [s.status, s.n]));
+  };
+  const before = await funnel();
+  db.prepare("INSERT INTO projects (slug, prefix, name) VALUES ('gone','GN','Archived')").run();
+  const gid = db.prepare("SELECT id FROM projects WHERE slug='gone'").get().id;
+  db.prepare(`INSERT INTO tasks (project_id, task_no, title, description, status, priority)
+              VALUES (?, 1, 'in an archived project', 'd', 'todo', 1)`).run(gid);
+  try {
+    const live = await funnel();
+    assert.equal(live.todo, before.todo + 1, 'a live project must be counted — otherwise the test proves nothing');
+
+    db.prepare('UPDATE projects SET archived = 1 WHERE id = ?').run(gid);
+    assert.deepEqual(await funnel(), before, 'the funnel still counts the tasks of an archived project');
+  } finally {
+    db.prepare('DELETE FROM tasks WHERE project_id = ?').run(gid);
+    db.prepare('DELETE FROM projects WHERE id = ?').run(gid);
+  }
+});
+
 test('the priority×staleness matrix sorts into hot/queue/decide/idea', async () => {
   const { matrix } = (await dash('week')).planning;
   const has = (bucket, key) => matrix[bucket].some((t) => t.key === key);

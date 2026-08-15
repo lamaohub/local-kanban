@@ -62,6 +62,16 @@ test('two snapshots in the same second do not destroy each other', async () => {
   assert.deepEqual(readdirSync(DIR).filter((f) => f.includes('.part')).filter((f) => f !== 'kanban-2026-07-09.db.part'), []);
 });
 
+test('twenty snapshots at once are still serialised — no 0-byte file, no orphan .part', async () => {
+  const paths = await Promise.all(Array.from({ length: 20 }, () => backupNow()));
+  for (const p of paths) {
+    assert.ok(existsSync(p), `the snapshot disappeared under a parallel one: ${p}`);
+    assert.ok(statSync(p).size > 0, `a 0-byte file is left under the final name: ${p}`);
+  }
+  const orphans = readdirSync(DIR).filter((f) => f.includes('.part') && f !== 'kanban-2026-07-09.db.part');
+  assert.deepEqual(orphans, [], `temp files left behind: ${orphans.join(', ')}`);
+});
+
 test('a listed snapshot is never a 0-byte stub', () => {
   for (const b of listBackups()) assert.ok(b.size > 0 || b.name.startsWith('kanban-2026-07'),
     `a 0-byte snapshot is offered for download: ${b.name}`);

@@ -57,14 +57,8 @@ test('protocol-level 4xx are not written to the log', async () => {
   const { default: Fastify } = await import('fastify');
   const systemRoutes = (await import('../src/routes/system.js')).default;
   const app = Fastify();
-  app.setErrorHandler((err, req, reply) => {
-    const code = err.statusCode || 500;
-    if (code >= 500) {
-      logError('server', `${req.method} ${req.url.split('?')[0]}`, err.message, err.stack);
-      return reply.code(500).send({ error: 'internal error — details under Settings → Errors' });
-    }
-    reply.send(err);
-  });
+  const { errorHandler } = await import('../src/error-handler.js');
+  app.setErrorHandler(errorHandler);
   await app.register(systemRoutes);
   app.get('/boom', () => { throw new Error('kaboom'); });
   await app.ready();

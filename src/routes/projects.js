@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { join, basename, resolve, sep } from 'node:path';
-import { db, DATA_DIR, genPrefix, usedPrefixes, makePrefix, kvGet, kvSet } from '../db.js';
+import { db, DATA_DIR, genPrefix, usedPrefixes, makePrefix, kvGet, kvSet, logError } from '../db.js';
 import { localRoot, panelUrl, panelInfo, skillsExtra } from '../config.js';
 import { emit } from '../bus.js';
 import { forgetRepoBase } from '../repo-base.js';
@@ -234,7 +234,10 @@ export default async function projectRoutes(app) {
     const dir = join(localRoot(), name);
     const existed = existsSync(dir);
     if (!existed) {
-      try { mkdirSync(dir); } catch (e) { return reply.code(500).send({ error: `mkdir failed: ${e.message}` }); }
+      try { mkdirSync(dir, { recursive: true }); } catch (e) {
+        logError('server', 'POST /api/projects/folders', `mkdir failed: ${e.message}`, dir);
+        return reply.code(500).send({ error: `mkdir failed: ${e.message}` });
+      }
     }
     if (db.prepare('SELECT slug FROM projects WHERE path = ?').get(dir)) {
       return reply.code(409).send({ error: 'folder is already on the board' });

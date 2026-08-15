@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { DATA_DIR, logError } from './db.js';
 import { PORT, ROOT, localRoot } from './config.js';
 import { makeOriginGuard } from './origin-guard.js';
+import { errorHandler } from './error-handler.js';
 import projectRoutes from './routes/projects.js';
 import taskRoutes from './routes/tasks.js';
 import dashboardRoutes from './routes/dashboard.js';
@@ -48,15 +49,7 @@ app.register(fastifyStatic, {
   decorateReply: false,
   setHeaders: (res) => { res.setHeader('X-Content-Type-Options', 'nosniff'); },
 });
-app.setErrorHandler((err, req, reply) => {
-  const code = err.statusCode || 500;
-  if (code >= 500) {
-    req.log.error(err);
-    logError('server', `${req.method} ${req.url.split('?')[0]}`, err.message, err.stack);
-    return reply.code(500).send({ error: 'internal error — details under Settings → Errors' });
-  }
-  reply.send(err);
-});
+app.setErrorHandler(errorHandler);
 
 app.register(projectRoutes);
 app.register(taskRoutes);

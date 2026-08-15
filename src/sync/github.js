@@ -9,7 +9,7 @@ const GH = GH_CANDIDATES.find((p) => existsSync(p)) || 'gh';
 
 const PERMANENT = [
   /validation failed/i,
-  /could not resolve to a (repository|issue|user|organization)/i,
+  /could not resolve to an? (repository|issue|user|organization)/i,
   /label.{0,80}not found/i,
   /^unprocessable entity/i,
 ];
