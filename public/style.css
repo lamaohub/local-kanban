@@ -1206,8 +1206,9 @@ body.dragging-board .col-add-ghost { display: none; }
 .sk-row { cursor: pointer; align-items: center; }
 .sk-row:hover { color: var(--accent); }
 .sk-row.active .sk-name { color: var(--accent); font-weight: 600; }
-.sk-name { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.sk-meta { white-space: nowrap; }
+.sk-name { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; overflow: hidden; }
+.sk-name .ps-doc-tag { overflow: hidden; text-overflow: ellipsis; }
+.sk-meta { white-space: nowrap; flex: none; }
 .sk-edit { gap: 8px; }
 .sk-path { word-break: break-all; }
 .sk-text {

@@ -3,6 +3,15 @@
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [semantic versioning](https://semver.org/).
 
+## [1.4.1]
+
+### Fixed
+
+- **A skill used by a dozen projects broke its own row in the new "Skills" section.** The label
+  listed every project by name, so it wrapped onto a second line and pushed the size and date off
+  the right edge of the list. Past two projects the label now counts them ("used by 12 projects")
+  and the names move into the tooltip.
+
 ## [1.4.0]
 
 ### Added

@@ -526,15 +526,18 @@ async function renderSkillsSection(body) {
   const items = [...info.items];
   if (!items.some((s) => s.name === info.board_skill)) items.unshift({ ...info.board, used_by: [], packaged: true });
   items.sort((a, b) => (a.name === info.board_skill ? -1 : b.name === info.board_skill ? 1 : a.name.localeCompare(b.name)));
+  const usedByLabel = (list) => (list.length > 2
+    ? `${tr('used by')} ${list.length} ${plural(list.length, 'project', 'projects')}`
+    : `${tr('used by')} ${list.map((p) => p.name || p.slug).join(', ')}`);
   const tagsFor = (s) => {
     const tags = [];
     if (s.name === info.board_skill) tags.push(tr('board skill'));
     if (s.name === info.generic_deploy_skill) tags.push(tr('shared deploy skill'));
-    if (s.used_by?.length) tags.push(`${tr('used by')} ${s.used_by.map((p) => p.name || p.slug).join(', ')}`);
+    if (s.used_by?.length) tags.push(usedByLabel(s.used_by));
     if (!s.exists) tags.push(tr('not installed'));
     return tags;
   };
-  $('sk-list').innerHTML = items.map((s) => `<div class="bk-row sk-row" data-name="${esc(s.name)}">
+  $('sk-list').innerHTML = items.map((s) => `<div class="bk-row sk-row" data-name="${esc(s.name)}" title="${esc((s.used_by || []).map((p) => p.name || p.slug).join(', '))}">
       <span class="sk-name">${esc(s.name)}${tagsFor(s).map((t) => `<span class="ps-doc-tag">${esc(t)}</span>`).join('')}</span>
       <span class="muted sk-meta" title="${esc(s.real_path)}">${s.exists ? `${Math.max(1, Math.round((s.size || 0) / 1024))} ${tr('KB')} · ${esc(String(s.mtime || '').slice(0, 10))}` : '—'}</span>
     </div>`).join('');
