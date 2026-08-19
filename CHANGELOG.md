@@ -3,6 +3,19 @@
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [semantic versioning](https://semver.org/).
 
+## [1.6.1]
+
+### Fixed
+
+- **The buttons in the skills section could act on the previous skill instead of the one on
+  screen.** Creating a skill left two requests in flight — the section re-renders and opens its
+  first row, then the code opens the new skill — and whichever answered last owned the panel's
+  state. In that gap the page showed the new skill while "load the shared version" fetched the text
+  of another one and "delete" would have removed it: with the guard deliberately switched off, 19
+  frames out of 30 showed one skill's row above another skill's path. An answer that is no longer
+  the current one is now discarded, the section opens exactly one skill instead of two, and the
+  buttons stay disabled until its text has arrived.
+
 ## [1.6.0]
 
 ### Changed

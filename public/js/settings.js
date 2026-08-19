@@ -475,6 +475,7 @@ async function renderSection(sec) {
 
 let skillSel = null;
 let skillsInfo = null;
+let pendingSkill = null;
 function skillDirty() {
   const ta = $('sk-text');
   return Boolean(skillSel && ta && ta.value !== skillSel.saved);
@@ -488,28 +489,38 @@ function updateSkillState(note) {
   if (note !== undefined) { el.textContent = note; return; }
   el.textContent = dirty ? tr('changed — not written to the file yet') : '';
 }
-async function selectSkillRow(name, note) {
+async function selectSkillRow(name) {
   const list = $('sk-list');
   const row = list?.querySelector(`.sk-row[data-name="${CSS.escape(name)}"]`);
   if (!row) return;
   list.querySelectorAll('.sk-row').forEach((x) => x.classList.toggle('active', x === row));
   $('sk-edit').classList.remove('hidden');
   await loadSkillText(name);
-  if (note) updateSkillState(note);
+}
+
+let skillLoadSeq = 0;
+function setSkillButtons(enabled) {
+  for (const id of ['sk-fetch', 'sk-save', 'sk-del']) { const b = $(id); if (b) b.disabled = !enabled; }
 }
 async function loadSkillText(name) {
   const ta = $('sk-text');
   if (!ta) return;
+  const seq = ++skillLoadSeq;
+  skillSel = null;
+  setSkillButtons(false);
   ta.value = '';
   let r;
   try { r = await api('GET', `/api/skills/${seg(name)}`); }
-  catch (e) { updateSkillState(e.message || tr('could not read the file')); return; }
+  catch (e) { if (seq === skillLoadSeq) updateSkillState(e.message || tr('could not read the file')); return; }
+  if (seq !== skillLoadSeq) return;
   if (!$('sk-text')) return;
+  setSkillButtons(true);
   skillSel = { name, real_path: r.real_path, symlink: r.symlink, exists: r.exists, saved: r.text || '' };
   ta.value = skillSel.saved;
   $('sk-path').textContent = r.real_path;
   const shared = (skillsInfo?.packaged_skills || []).includes(name);
   $('sk-fetch').disabled = !shared;
+  $('sk-del').disabled = false;
   $('sk-fetch').title = shared ? '' : tr('the board has no shared version of this skill — it is your own');
   $('sk-del').classList.toggle('hidden', !r.exists);
   $('sk-link-warn').classList.toggle('hidden', !r.symlink);
@@ -566,14 +577,8 @@ async function renderSkillsSection(body) {
   $('sk-list').innerHTML = groups.filter(([, list]) => list.length)
     .map(([title, list]) => `<div class="sk-group-h">${esc(title)}</div>${list.map(row).join('')}`).join('');
   $('sk-list').querySelectorAll('.sk-row').forEach((row) => {
-    row.onclick = () => {
-      $('sk-list').querySelectorAll('.sk-row').forEach((x) => x.classList.toggle('active', x === row));
-      $('sk-edit').classList.remove('hidden');
-      loadSkillText(row.dataset.name);
-    };
+    row.onclick = () => selectSkillRow(row.dataset.name);
   });
-  $('sk-list').querySelector('.sk-row')?.click();
-
   $('sk-new').onclick = () => styledPrompt(tr('New skill'), {
     placeholder: tr('name: latin letters, digits, hyphen'),
     okLabel: tr('Create'),
@@ -583,8 +588,9 @@ async function renderSkillsSection(body) {
       const cur = await api('GET', `/api/skills/${seg(name)}`);
       if (cur.exists) {
         await api('POST', `/api/skills/${seg(name)}/adopt`);
+        pendingSkill = name;
         await renderSection('skills');
-        await selectSkillRow(name, tr('this skill was already on disk — added it to the list'));
+        updateSkillState(tr('this skill was already on disk — added it to the list'));
         return;
       }
       let text = `---\nname: ${name}\ndescription: \n---\n\n`;
@@ -593,8 +599,9 @@ async function renderSkillsSection(body) {
         catch {  }
       }
       await api('PUT', `/api/skills/${seg(name)}`, { text, confirm_path: cur.real_path });
+      pendingSkill = name;
       await renderSection('skills');
-      await selectSkillRow(name, tr('created ✓'));
+      updateSkillState(tr('created ✓'));
     },
   });
 
@@ -641,6 +648,10 @@ async function renderSkillsSection(body) {
       if (e.status === 409) loadSkillText(skillSel.name);
     }
   };
+
+  const want = pendingSkill && items.some((s) => s.name === pendingSkill) ? pendingSkill : items[0]?.name;
+  pendingSkill = null;
+  if (want) await selectSkillRow(want);
 }
 
 function listenRemap(row) {
