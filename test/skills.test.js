@@ -128,3 +128,49 @@ test('a check board opened from a backup does not write skills at all', async ()
   assert.equal(r.statusCode, 403);
   assert.equal(readFileSync(path, 'utf8'), before);
 });
+
+test('deleting a skill needs the confirmed path and keeps a snapshot', async () => {
+  const path = join(skillsDir, 'fresh-skill', 'SKILL.md');
+  writeFileSync(path, '# to be deleted\n');
+  const del = (payload) => app.inject({ method: 'DELETE', url: '/api/skills/fresh-skill', payload });
+
+  assert.equal((await del({})).statusCode, 409, 'no confirmed path — nothing is deleted');
+  assert.equal(existsSync(path), true);
+
+  const r = await del({ confirm_path: path });
+  assert.equal(r.statusCode, 200);
+  assert.equal(existsSync(path), false);
+  assert.equal(existsSync(join(skillsDir, 'fresh-skill')), false, 'the empty directory goes too');
+  assert.equal(readFileSync(r.json().backup, 'utf8'), '# to be deleted\n');
+});
+
+test('deleting a symlinked skill removes the link, never the file behind it', async () => {
+  const personal = join(tmp, 'personal2', 'linked2');
+  mkdirSync(personal, { recursive: true });
+  writeFileSync(join(personal, 'SKILL.md'), '# personal, must survive\n');
+  symlinkSync(personal, join(skillsDir, 'linked2'));
+
+  const info = skills.skillInfo('linked2');
+  const r = await app.inject({ method: 'DELETE', url: '/api/skills/linked2', payload: { confirm_path: info.real_path } });
+  assert.equal(r.statusCode, 200);
+  assert.equal(r.json().link_only, true, 'the answer says the link is what went');
+  assert.equal(existsSync(join(skillsDir, 'linked2')), false, 'the link is gone from the skills directory');
+  assert.equal(readFileSync(join(personal, 'SKILL.md'), 'utf8'), '# personal, must survive\n');
+});
+
+test('a check board opened from a backup does not delete skills either', async () => {
+  process.env.KB_PREVIEW_TTL_MS = '60000';
+  const r = await app.inject({ method: 'DELETE', url: '/api/skills/kanban', payload: { confirm_path: join(skillsDir, 'kanban', 'SKILL.md') } });
+  delete process.env.KB_PREVIEW_TTL_MS;
+  assert.equal(r.statusCode, 403);
+  assert.equal(existsSync(join(skillsDir, 'kanban', 'SKILL.md')), true);
+});
+
+test('a skill written from the board is remembered as its own, and forgotten when deleted', async () => {
+  const path = join(skillsDir, 'own-one', 'SKILL.md');
+  await put('own-one', { text: '# mine\n', confirm_path: path });
+  const listed = () => app.inject({ method: 'GET', url: '/api/skills' }).then((r) => r.json().own_skills);
+  assert.ok((await listed()).includes('own-one'));
+  await app.inject({ method: 'DELETE', url: '/api/skills/own-one', payload: { confirm_path: path } });
+  assert.equal((await listed()).includes('own-one'), false);
+});

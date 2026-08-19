@@ -474,6 +474,7 @@ async function renderSection(sec) {
 }
 
 let skillSel = null;
+let skillsInfo = null;
 function skillDirty() {
   const ta = $('sk-text');
   return Boolean(skillSel && ta && ta.value !== skillSel.saved);
@@ -487,6 +488,15 @@ function updateSkillState(note) {
   if (note !== undefined) { el.textContent = note; return; }
   el.textContent = dirty ? tr('changed — not written to the file yet') : '';
 }
+async function selectSkillRow(name, note) {
+  const list = $('sk-list');
+  const row = list?.querySelector(`.sk-row[data-name="${CSS.escape(name)}"]`);
+  if (!row) return;
+  list.querySelectorAll('.sk-row').forEach((x) => x.classList.toggle('active', x === row));
+  $('sk-edit').classList.remove('hidden');
+  await loadSkillText(name);
+  if (note) updateSkillState(note);
+}
 async function loadSkillText(name) {
   const ta = $('sk-text');
   if (!ta) return;
@@ -495,9 +505,13 @@ async function loadSkillText(name) {
   try { r = await api('GET', `/api/skills/${seg(name)}`); }
   catch (e) { updateSkillState(e.message || tr('could not read the file')); return; }
   if (!$('sk-text')) return;
-  skillSel = { name, real_path: r.real_path, saved: r.text || '' };
+  skillSel = { name, real_path: r.real_path, symlink: r.symlink, exists: r.exists, saved: r.text || '' };
   ta.value = skillSel.saved;
   $('sk-path').textContent = r.real_path;
+  const shared = (skillsInfo?.packaged_skills || []).includes(name);
+  $('sk-fetch').disabled = !shared;
+  $('sk-fetch').title = shared ? '' : tr('the board has no shared version of this skill — it is your own');
+  $('sk-del').classList.toggle('hidden', !r.exists);
   $('sk-link-warn').classList.toggle('hidden', !r.symlink);
   $('sk-link-warn').textContent = r.symlink
     ? `${tr('this is a symlink — saving rewrites the file it points to:')} ${r.real_path}`
@@ -516,6 +530,7 @@ async function renderSkillsSection(body) {
           <button class="btn-ghost" id="sk-fetch">${tr('Load the shared version')}</button>
           <button class="btn-ghost" id="sk-revert">${tr('Revert')}</button>
           <button class="btn-primary" id="sk-save" disabled>${tr('Save to the file')}</button>
+          <button class="btn-ghost sk-del hidden" id="sk-del">${tr('Delete')}</button>
           <span class="muted sk-note" id="sk-note"></span>
         </div>
       </div>`;
@@ -523,6 +538,7 @@ async function renderSkillsSection(body) {
   try { info = await api('GET', '/api/skills'); }
   catch { $('sk-list').textContent = '—'; return; }
   if (!$('sk-list')) return;
+  skillsInfo = info;
   const items = [...info.items];
   if (!items.some((s) => s.name === info.board_skill)) items.unshift({ ...info.board, used_by: [], packaged: true });
   items.sort((a, b) => (a.name === info.board_skill ? -1 : b.name === info.board_skill ? 1 : a.name.localeCompare(b.name)));
@@ -538,28 +554,17 @@ async function renderSkillsSection(body) {
     return tags;
   };
   const row = (s) => `<div class="bk-row sk-row" data-name="${esc(s.name)}" title="${esc((s.used_by || []).map((p) => p.name || p.slug).join(', '))}">
-      <span class="sk-name">${esc(s.name)}${tagsFor(s).map((t) => `<span class="ps-doc-tag">${esc(t)}</span>`).join('')}</span>
+      <span class="sk-name"><span class="sk-title">${esc(s.name)}</span>${tagsFor(s).map((t) => `<span class="ps-doc-tag">${esc(t)}</span>`).join('')}</span>
       <span class="muted sk-meta" title="${esc(s.real_path)}">${s.exists ? `${Math.max(1, Math.round((s.size || 0) / 1024))} ${tr('KB')} · ${esc(String(s.mtime || '').slice(0, 10))}` : '—'}</span>
     </div>`;
-  const isDeploy = (s) => s.name === info.generic_deploy_skill || s.used_by?.length;
+  const own = new Set(info.own_skills || []);
+  const isDeploy = (s) => s.name === info.generic_deploy_skill || s.used_by?.length || own.has(s.name);
   const groups = [
     [tr('The board'), items.filter((s) => s.name === info.board_skill)],
-    [tr('Deploy skills of the projects'), items.filter((s) => s.name !== info.board_skill && isDeploy(s))],
+    [tr('Deploy skills'), items.filter((s) => s.name !== info.board_skill && isDeploy(s))],
   ];
-  const rest = items.filter((s) => s.name !== info.board_skill && !isDeploy(s));
   $('sk-list').innerHTML = groups.filter(([, list]) => list.length)
-    .map(([title, list]) => `<div class="sk-group-h">${esc(title)}</div>${list.map(row).join('')}`).join('')
-    + (rest.length
-      ? `<div class="sk-group-h sk-more" id="sk-rest-toggle">${tr('Other Claude skills')} · ${rest.length} <span class="pp-sel-chev">▾</span></div>`
-        + `<div id="sk-rest" class="hidden">${rest.map(row).join('')}</div>`
-      : '');
-  const restToggle = $('sk-rest-toggle');
-  if (restToggle) {
-    restToggle.onclick = () => {
-      const open = $('sk-rest').classList.toggle('hidden');
-      restToggle.classList.toggle('open', !open);
-    };
-  }
+    .map(([title, list]) => `<div class="sk-group-h">${esc(title)}</div>${list.map(row).join('')}`).join('');
   $('sk-list').querySelectorAll('.sk-row').forEach((row) => {
     row.onclick = () => {
       $('sk-list').querySelectorAll('.sk-row').forEach((x) => x.classList.toggle('active', x === row));
@@ -576,7 +581,12 @@ async function renderSkillsSection(body) {
       const name = raw.trim();
       if (!/^[A-Za-z0-9_-]{1,64}$/.test(name)) throw new Error(tr('name: latin letters, digits, hyphen, underscore only'));
       const cur = await api('GET', `/api/skills/${seg(name)}`);
-      if (cur.exists) throw new Error(tr('a skill with this name already exists'));
+      if (cur.exists) {
+        await api('POST', `/api/skills/${seg(name)}/adopt`);
+        await renderSection('skills');
+        await selectSkillRow(name, tr('this skill was already on disk — added it to the list'));
+        return;
+      }
       let text = `---\nname: ${name}\ndescription: \n---\n\n`;
       if ((info.packaged_skills || []).includes(name)) {
         try { text = (await api('GET', `/api/skills/${seg(name)}/upstream?lang=${LANG}`, null, { quiet: true })).text; }
@@ -584,9 +594,23 @@ async function renderSkillsSection(body) {
       }
       await api('PUT', `/api/skills/${seg(name)}`, { text, confirm_path: cur.real_path });
       await renderSection('skills');
-      $('sk-list').querySelector(`.sk-row[data-name="${CSS.escape(name)}"]`)?.click();
+      await selectSkillRow(name, tr('created ✓'));
     },
   });
+
+  $('sk-del').onclick = async () => {
+    if (!skillSel) return;
+    const item = (skillsInfo?.items || []).find((s) => s.name === skillSel.name);
+    const used = (item?.used_by || []).map((p) => p.name || p.slug);
+    const msg = `${tr('Delete the skill')} «${skillSel.name}»?\n${skillSel.real_path}`
+      + (skillSel.symlink ? `\n${tr('this is a link — only the link is removed, the file it points to stays')}` : '')
+      + (used.length ? `\n${tr('used by')}: ${used.join(', ')}` : '');
+    if (!await styledConfirm(msg, { okLabel: tr('Delete'), danger: true })) return;
+    try { await api('DELETE', `/api/skills/${seg(skillSel.name)}`, { confirm_path: skillSel.real_path }); }
+    catch (e) { updateSkillState(e.message || tr('not deleted')); return; }
+    skillSel = null;
+    renderSection('skills');
+  };
 
   $('sk-text').oninput = () => updateSkillState();
   $('sk-revert').onclick = () => { if (skillSel) loadSkillText(skillSel.name); };

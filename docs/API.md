@@ -93,16 +93,27 @@ Skills are the instruction files Claude reads (`SKILL.md`). They live outside th
 
 | Method & path | Meaning |
 |---|---|
-| `GET /api/skills` | `{roots, board_skill, generic_deploy_skill, items[], board, packaged_skills[]}` — every skill found, with the projects using it; `packaged_skills` are the ones this package ships |
+| `GET /api/skills` | `{roots, board_skill, generic_deploy_skill, items[], board, packaged_skills[], own_skills[]}` — every skill found, with the projects using it; `packaged_skills` are the ones this package ships, `own_skills` the ones the board itself created or adopted |
 | `GET /api/skills/:name` | `{name, path, real_path, symlink, exists, size, mtime, text}` |
 | `GET /api/skills/:name/upstream?lang=` | the shared version: GitHub first, the copy shipped with the package as a fallback; the response says which (`source`, `lang`) and writes nothing |
-| `PUT /api/skills/:name` | `{text, confirm_path}` → writes the file |
+| `PUT /api/skills/:name` | `{text, confirm_path}` → writes the file (and marks it as the board's own) |
+| `POST /api/skills/:name/adopt` | marks an existing skill as the board's own; the file is not touched |
+| `DELETE /api/skills/:name` | `{confirm_path}` → removes it, keeping a snapshot |
 
 `confirm_path` is a lock, not a formality: a skill directory is often a symlink to a file in another
 repository, so the client has to echo back the **resolved** path it meant to overwrite (`real_path`).
 A mismatch is a `409` naming the real path, not a silent write to the wrong file. The previous
 contents are copied into `<data>/backups/skills/` before the write. A name is one path segment
-(`[A-Za-z0-9_-]{1,64}`); a check board started from a backup refuses to write skills at all.
+(`[A-Za-z0-9_-]{1,64}`); a check board started from a backup refuses to write or delete skills at all.
+
+Deleting takes the same confirmed path and snapshots the file first. **A skill directory that is a
+symlink loses only the link** — the file it points to belongs to another tree and is never removed;
+the response says so with `link_only: true`.
+
+`own_skills` exists because a skills directory holds every skill its owner uses in Claude Code,
+most of it unrelated to the board. Nothing on disk distinguishes a skill created here from the rest,
+so the board remembers its own — the ones it wrote or adopted — and shows those alongside the board
+skill and the deploy skills of registered projects.
 
 ## Events (SSE)
 

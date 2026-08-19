@@ -3,6 +3,33 @@
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [semantic versioning](https://semver.org/).
 
+## [1.6.0]
+
+### Changed
+
+- **The skills section lists only what the board is about.** A skills directory holds every skill
+  its owner uses in Claude Code — most of it has nothing to do with the board — and burying the rest
+  behind a "show the others" line was not enough: the section is about deploy instructions. It now
+  shows the board's own skill and deploy skills: the shared one, the ones registered projects use,
+  and the ones created here. The full list is still where it is needed — in the deploy-skill picker
+  on the project page.
+- **A skill created from the board no longer disappears from the list.** Nothing on disk tells a
+  skill created here apart from the rest of the library, so the board now remembers its own.
+  Entering the name of a skill that already exists adopts it into the list instead of failing —
+  without that, a skill outside those groups could be neither opened nor deleted.
+
+### Added
+
+- **A skill can be deleted from the settings**, with the resolved path in the confirmation and a
+  snapshot of the file kept beforehand. **A skill that is a symlink loses only the link** — the file
+  it points to usually lives in another repository and is left alone; the dialog says so before you
+  press the button, not after.
+
+### Fixed
+
+- **"Load the shared version" no longer answers with a raw error on your own skill.** The board has
+  no shared version of a skill it does not ship, so the button is simply disabled there and says why.
+
 ## [1.5.0]
 
 ### Added

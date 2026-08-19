@@ -147,9 +147,13 @@ which usually sits in somebody else's git working tree. The same lock and the sa
 project's `CLAUDE.md`.
 
 The skills directory holds everything its owner uses in Claude Code, most of it unrelated to the
-board, so the section leads with the board's own skill and the deploy skills of registered projects
-and keeps the rest behind a "show the others" line. A new skill is created from here; if the package
-ships one under that name, the file starts as that shared version.
+board, so the section lists only what the board is about: its own skill and deploy skills — the
+shared one, the ones registered projects use, and the ones created here. Nothing on disk marks the
+last group, so the board remembers them itself. A new skill is created from the section; if the
+package ships one under that name, the file starts as that shared version, and entering the name of
+a skill that already exists adopts it into the list instead of failing — otherwise a skill outside
+those groups could be neither opened nor deleted. Deleting keeps a snapshot, and a skill that is a
+symlink loses only the link.
 
 ## GitHub sync
 

@@ -1,5 +1,5 @@
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { skillsExtra } from './config.js';
@@ -96,4 +96,24 @@ export function writeSkill(name, text, confirmPath) {
   mkdirSync(join(info.path, '..'), { recursive: true });
   writeFileSync(info.path, text);
   return { ...skillInfo(name), backup, backup_name: backup ? backup.split(sep).pop() : null };
+}
+
+export function deleteSkill(name, confirmPath) {
+  if (!name || !SKILL_NAME_RE.test(name)) return { error: 'skill name: latin letters, digits, hyphen, underscore only', code: 400 };
+  const info = skillInfo(name);
+  if (!info.exists) return { error: 'there is no such skill', code: 404 };
+  if (confirmPath !== info.real_path) {
+    return { error: 'the file on disk is not the one the page was showing', code: 409, real_path: info.real_path };
+  }
+  const backup = snapshotFile('skills', name, info.path);
+  const dir = join(info.path, '..');
+  let unlinkedOnly = false;
+  try { unlinkedOnly = lstatSync(dir).isSymbolicLink(); } catch {  }
+  if (unlinkedOnly) {
+    unlinkSync(dir);
+  } else {
+    rmSync(info.path, { force: true });
+    try { if (!readdirSync(dir).length) rmSync(dir, { recursive: true, force: true }); } catch {  }
+  }
+  return { name, removed: true, link_only: unlinkedOnly, backup, backup_name: backup ? backup.split(sep).pop() : null };
 }

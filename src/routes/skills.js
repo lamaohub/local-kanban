@@ -1,10 +1,10 @@
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { db } from '../db.js';
+import { db, kvGet, kvSet } from '../db.js';
 import { ROOT } from '../config.js';
 import { gh as ghCli } from '../sync/github.js';
-import { BOARD_SKILL, GENERIC_DEPLOY_SKILL, SKILL_MAX_BYTES, SKILL_NAME_RE, listSkills, readSkill, skillInfo, skillRoots, writeSkill } from '../skills.js';
+import { BOARD_SKILL, GENERIC_DEPLOY_SKILL, SKILL_MAX_BYTES, SKILL_NAME_RE, deleteSkill, listSkills, readSkill, skillInfo, skillRoots, writeSkill } from '../skills.js';
 
 function upstreamRepo() {
   try {
@@ -39,6 +39,16 @@ async function fetchUpstream(name, lang) {
   return null;
 }
 
+const OWN_KEY = 'skills.own';
+function ownSkills() {
+  try {
+    const v = JSON.parse(kvGet(OWN_KEY) || '[]');
+    return Array.isArray(v) ? v.filter((x) => typeof x === 'string' && SKILL_NAME_RE.test(x)) : [];
+  } catch { return []; }
+}
+const rememberOwn = (name) => kvSet(OWN_KEY, JSON.stringify([...new Set([...ownSkills(), name])]));
+const forgetOwn = (name) => kvSet(OWN_KEY, JSON.stringify(ownSkills().filter((x) => x !== name)));
+
 function packagedSkills() {
   try {
     return readdirSync(join(ROOT, 'skills'))
@@ -61,6 +71,7 @@ export default async function skillRoutes(app) {
     })),
     board: skillInfo(BOARD_SKILL),
     packaged_skills: packagedSkills(),
+    own_skills: ownSkills(),
   }));
 
   app.get('/api/skills/:name', (req, reply) => {
@@ -82,6 +93,24 @@ export default async function skillRoutes(app) {
     if (process.env.KB_PREVIEW_TTL_MS) return reply.code(403).send({ error: 'this is a check board opened from a backup — it does not write skills' });
     const r = writeSkill(req.params.name, req.body?.text, req.body?.confirm_path);
     if (r.error) return reply.code(r.code).send(r);
+    rememberOwn(req.params.name);
+    return r;
+  });
+
+  app.post('/api/skills/:name/adopt', (req, reply) => {
+    const { name } = req.params;
+    if (!SKILL_NAME_RE.test(name)) return reply.code(400).send({ error: 'skill name: latin letters, digits, hyphen, underscore only' });
+    const info = skillInfo(name);
+    if (!info.exists) return reply.code(404).send({ error: 'there is no such skill' });
+    rememberOwn(name);
+    return { ...info, adopted: true };
+  });
+
+  app.delete('/api/skills/:name', (req, reply) => {
+    if (process.env.KB_PREVIEW_TTL_MS) return reply.code(403).send({ error: 'this is a check board opened from a backup — it does not delete skills' });
+    const r = deleteSkill(req.params.name, req.body?.confirm_path);
+    if (r.error) return reply.code(r.code).send(r);
+    forgetOwn(req.params.name);
     return r;
   });
 }

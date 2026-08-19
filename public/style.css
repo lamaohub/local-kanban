@@ -1225,6 +1225,7 @@ body.dragging-board .col-add-ghost { display: none; }
 .sk-row:hover { color: var(--accent); }
 .sk-row.active .sk-name { color: var(--accent); font-weight: 600; }
 .sk-name { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; overflow: hidden; }
+.sk-name > .sk-title { white-space: nowrap; flex: none; }
 .sk-name .ps-doc-tag { overflow: hidden; text-overflow: ellipsis; }
 .sk-meta { white-space: nowrap; flex: none; }
 .sk-edit { gap: 8px; }
@@ -1238,6 +1239,7 @@ body.dragging-board .col-add-ghost { display: none; }
 .sk-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .sk-actions .btn-primary { margin-left: 0; }
 .sk-note { font-size: 11.5px; }
+.sk-del { color: var(--danger); border-color: var(--danger-soft, var(--border)); margin-left: auto; }
 .kbh-note.warn {
   color: var(--warn-text); background: var(--warn-bg);
   border: 1px solid var(--warn-border); border-radius: 7px; padding: 6px 10px;
