@@ -74,7 +74,7 @@ function syncThemeColor() {
   if (bg) meta.setAttribute('content', bg);
 }
 
-const SM_SECTIONS = [['general', tr('General')], ['appearance', tr('Appearance')], ['cats', tr('Sections')], ['archive', tr('Archive')], ['sync', tr('Sync')], ['errors', tr('Errors')], ['backups', tr('Backups')], ['keys', tr('Hotkeys')], ['about', tr('About')]];
+const SM_SECTIONS = [['general', tr('General')], ['appearance', tr('Appearance')], ['cats', tr('Sections')], ['skills', tr('Skills')], ['archive', tr('Archive')], ['sync', tr('Sync')], ['errors', tr('Errors')], ['backups', tr('Backups')], ['keys', tr('Hotkeys')], ['about', tr('About')]];
 function settingsModalKey(e) { if (e.key === 'Escape') closeSettingsModal(); }
 function closeSettingsModal() {
   popLayer('settings-overlay');
@@ -395,6 +395,8 @@ async function renderSection(sec) {
       $('bk-up').disabled = false;
     };
     load();
+  } else if (sec === 'skills') {
+    await renderSkillsSection(body);
   } else if (sec === 'keys') {
     body.innerHTML = `<div class="sm-h">${tr('Hotkeys')}<button class="btn-ghost" id="keys-reset">${tr('Reset to defaults')}</button></div>`
       + '<div class="kb-help">'
@@ -469,6 +471,111 @@ async function renderSection(sec) {
       ].map(([k, v]) => `<div class="bk-row"><span>${esc(k)}</span><span class="muted">${esc(String(v))}</span></div>`).join('');
     } catch { $('about-diag').textContent = '—'; }
   }
+}
+
+let skillSel = null;
+function skillDirty() {
+  const ta = $('sk-text');
+  return Boolean(skillSel && ta && ta.value !== skillSel.saved);
+}
+function updateSkillState(note) {
+  const dirty = skillDirty();
+  const save = $('sk-save');
+  if (save) save.disabled = !dirty;
+  const el = $('sk-note');
+  if (!el) return;
+  if (note !== undefined) { el.textContent = note; return; }
+  el.textContent = dirty ? tr('changed — not written to the file yet') : '';
+}
+async function loadSkillText(name) {
+  const ta = $('sk-text');
+  if (!ta) return;
+  ta.value = '';
+  let r;
+  try { r = await api('GET', `/api/skills/${seg(name)}`); }
+  catch (e) { updateSkillState(e.message || tr('could not read the file')); return; }
+  if (!$('sk-text')) return;
+  skillSel = { name, real_path: r.real_path, saved: r.text || '' };
+  ta.value = skillSel.saved;
+  $('sk-path').textContent = r.real_path;
+  $('sk-link-warn').classList.toggle('hidden', !r.symlink);
+  $('sk-link-warn').textContent = r.symlink
+    ? `${tr('this is a symlink — saving rewrites the file it points to:')} ${r.real_path}`
+    : '';
+  updateSkillState(r.exists ? '' : tr('the skill is not installed — the file will be created on save'));
+}
+async function renderSkillsSection(body) {
+  body.innerHTML = `<div class="sm-h">${tr('Skills')}</div>`
+    + `<div class="kbh-note muted">${tr('Skills are the instructions Claude reads. They live outside the board, in ~/.claude/skills, and the board only shows and updates them.')}</div>`
+    + '<div id="sk-list" class="bk-list">…</div>'
+    + `<div class="set-col sk-edit hidden" id="sk-edit">
+        <span class="set-lab">${tr('Skill file')}<small class="sk-path" id="sk-path"></small></span>
+        <div class="kbh-note warn hidden" id="sk-link-warn"></div>
+        <textarea id="sk-text" class="sk-text" spellcheck="false"></textarea>
+        <div class="sk-actions">
+          <button class="btn-ghost" id="sk-fetch">${tr('Load the shared version')}</button>
+          <button class="btn-ghost" id="sk-revert">${tr('Revert')}</button>
+          <button class="btn-primary" id="sk-save" disabled>${tr('Save to the file')}</button>
+          <span class="muted sk-note" id="sk-note"></span>
+        </div>
+      </div>`;
+  let info;
+  try { info = await api('GET', '/api/skills'); }
+  catch { $('sk-list').textContent = '—'; return; }
+  if (!$('sk-list')) return;
+  const items = [...info.items];
+  if (!items.some((s) => s.name === info.board_skill)) items.unshift({ ...info.board, used_by: [], packaged: true });
+  items.sort((a, b) => (a.name === info.board_skill ? -1 : b.name === info.board_skill ? 1 : a.name.localeCompare(b.name)));
+  const tagsFor = (s) => {
+    const tags = [];
+    if (s.name === info.board_skill) tags.push(tr('board skill'));
+    if (s.name === info.generic_deploy_skill) tags.push(tr('shared deploy skill'));
+    if (s.used_by?.length) tags.push(`${tr('used by')} ${s.used_by.map((p) => p.name || p.slug).join(', ')}`);
+    if (!s.exists) tags.push(tr('not installed'));
+    return tags;
+  };
+  $('sk-list').innerHTML = items.map((s) => `<div class="bk-row sk-row" data-name="${esc(s.name)}">
+      <span class="sk-name">${esc(s.name)}${tagsFor(s).map((t) => `<span class="ps-doc-tag">${esc(t)}</span>`).join('')}</span>
+      <span class="muted sk-meta" title="${esc(s.real_path)}">${s.exists ? `${Math.max(1, Math.round((s.size || 0) / 1024))} ${tr('KB')} · ${esc(String(s.mtime || '').slice(0, 10))}` : '—'}</span>
+    </div>`).join('');
+  $('sk-list').querySelectorAll('.sk-row').forEach((row) => {
+    row.onclick = () => {
+      $('sk-list').querySelectorAll('.sk-row').forEach((x) => x.classList.toggle('active', x === row));
+      $('sk-edit').classList.remove('hidden');
+      loadSkillText(row.dataset.name);
+    };
+  });
+  $('sk-list').querySelector('.sk-row')?.click();
+
+  $('sk-text').oninput = () => updateSkillState();
+  $('sk-revert').onclick = () => { if (skillSel) loadSkillText(skillSel.name); };
+  $('sk-fetch').onclick = async () => {
+    if (!skillSel) return;
+    const btn = $('sk-fetch');
+    btn.disabled = true;
+    updateSkillState(tr('fetching…'));
+    try {
+      const r = await api('GET', `/api/skills/${seg(skillSel.name)}/upstream?lang=${LANG}`);
+      $('sk-text').value = r.text;
+      updateSkillState(`${r.source === 'github' ? tr('loaded from GitHub') : tr('loaded from the installed package')}`
+        + ` · ${r.lang.toUpperCase()} · ${tr('nothing is written to disk until you save')}`);
+    } catch (e) { updateSkillState(e.message || tr('could not load')); }
+    btn.disabled = false;
+  };
+  $('sk-save').onclick = async () => {
+    if (!skillSel || !skillDirty()) return;
+    const ok = await styledConfirm(`${tr('Overwrite this file?')}\n${skillSel.real_path}`, { okLabel: tr('Overwrite'), danger: true });
+    if (!ok) return;
+    $('sk-save').disabled = true;
+    try {
+      const r = await api('PUT', `/api/skills/${seg(skillSel.name)}`, { text: $('sk-text').value, confirm_path: skillSel.real_path });
+      skillSel.saved = $('sk-text').value;
+      updateSkillState(r.backup_name ? `${tr('saved ✓ · the previous version is kept as')} ${r.backup_name}` : tr('saved ✓'));
+    } catch (e) {
+      updateSkillState(e.message || tr('not saved'));
+      if (e.status === 409) loadSkillText(skillSel.name);
+    }
+  };
 }
 
 function listenRemap(row) {

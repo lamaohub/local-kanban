@@ -3,6 +3,31 @@
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [semantic versioning](https://semver.org/).
 
+## [1.4.0]
+
+### Added
+
+- **Project settings are a page inside the project instead of a popup at the cursor.** The popup
+  was 250 pixels wide with its own scrollbar and a collapsible "paths & deploy" block, and it had
+  long stopped fitting what belongs there — seven registry fields. The same places open it (the
+  `⋯` button in the topbar, a right-click on a board in the sidebar); clicking `⋯` again, or Esc,
+  goes back to the board.
+- **The page shows what Claude reads before it starts working:** the project's own `CLAUDE.md`
+  (plus `README.md` and the like when they exist) and the deploy skill it uses — the shared one or
+  its own — with absolute paths, a copy button and a read-only viewer. A missing `CLAUDE.md` is
+  listed too: that absence is worth knowing, since the agent will start the task without those
+  notes.
+- **A "Skills" section in the settings.** Skills are the instructions Claude actually reads, and
+  they live outside the board, in `~/.claude/skills`; until now the board only wrote them once, at
+  install time, and never mentioned them again. The section lists every skill it can find, says
+  which projects use which, and shows the text of the selected one.
+- **Loading the shared version of a skill and writing it to disk are two separate buttons.** A
+  skill directory is often a symlink to a file in another repository — a customised copy somebody
+  keeps deliberately — so a single "update" button would silently overwrite it. Loading only fills
+  the editor and names the source (GitHub, or the copy that shipped with the package) and the
+  language; saving is a second, explicit step that asks about the resolved path it is about to
+  overwrite, and keeps a snapshot of the previous contents in the data directory first.
+
 ## [1.3.2]
 
 ### Fixed

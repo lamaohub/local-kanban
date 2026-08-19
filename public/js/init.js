@@ -3,7 +3,7 @@ import { clearSelection, closeOpenSelect, initMarquee, multiAction, renderBoard,
 import { chaosPending } from './chaos.js';
 import { $, ALL, CHAOS, DASH, SETTINGS, api, loadLabelPalette, seg, state } from './core.js';
 import { addChecklistItem, applyCommentDraft, applyKeepDrawer, applyTitleLabelShortcut, closeDrawer, commentDrafts, deleteTask, doAutosave, kbMoveCard, kbMoveCursor, onDrawerPaste, openDrawer, openDrawerMenu, openDrawerNew, openReturnPop, pendingAttachments, renderComments, scheduleAutosave, setKbCursor } from './drawer.js';
-import { openProjectPanel } from './project.js';
+import { closeProjectSettings, openProjectSettings } from './project.js';
 import { applyCompact, applyTheme, getSetting, matchKey, syncLangToServer } from './settings.js';
 import { closeTopLayer, loadTasks, maybeOnboarding, switchProject } from './sidebar.js';
 import { autoGrow, connectSSE, ensureAudio, ensureSSE, refresh, refreshSync } from './sse.js';
@@ -25,7 +25,7 @@ $('d-title').addEventListener('input', (e) => { autoGrow(e.target); applyTitleLa
 $('d-title').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.target.blur(); doAutosave(); }
 });
-$('project-menu').onclick = () => openProjectPanel();
+$('project-menu').onclick = () => openProjectSettings();
 $('c-send').onclick = async () => {
   const body = $('c-input').value.trim();
   if (!body || !state.drawerKey) return;
@@ -58,7 +58,7 @@ $('search').addEventListener('input', (e) => {
 window.addEventListener('resize', scheduleDrawLinks);
 $('board').addEventListener('scroll', scheduleDrawLinks, true);
 
-const POPUP_SELECTOR = '.modal-overlay, #card-menu, #drawer-menu-pop, #return-pop, .lbl-picker, #status-picker, #proj-panel, .lightbox, .kbsel.open';
+const POPUP_SELECTOR = '.modal-overlay, #card-menu, #drawer-menu-pop, #return-pop, .lbl-picker, #status-picker, .lightbox, .kbsel.open';
 
 function escClosePopup() {
   if (document.querySelector('.kbsel.open')) { closeOpenSelect(); return true; }
@@ -70,6 +70,13 @@ function escClosePopup() {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     if (escClosePopup()) { e.stopImmediatePropagation(); return; }
+    if (state.projSettings) {
+      const inp = document.activeElement;
+      if (inp && /^(INPUT|TEXTAREA)$/.test(inp.tagName) && $('projset').contains(inp)) inp.blur();
+      else closeProjectSettings();
+      e.stopImmediatePropagation();
+      return;
+    }
     const ae = document.activeElement;
     if (ae && /^(INPUT|TEXTAREA)$/.test(ae.tagName) && $('drawer').contains(ae)) {
       ae.blur(); e.stopImmediatePropagation(); return;

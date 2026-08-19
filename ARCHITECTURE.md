@@ -37,6 +37,8 @@ These are deliberate and predate most of the features. Changes that break them n
 | `src/routes/projects.js` | project registry, folders, categories, service status |
 | `src/routes/dashboard.js` | aggregate queries behind `/api/stats` and `/api/dashboard` |
 | `src/routes/system.js` | labels, sync config, error log, backups, about/update |
+| `src/routes/skills.js` | reading, updating and fetching the shared version of a skill |
+| `src/skills.js` | where skills live on disk: lookup, read, write with a snapshot |
 | `src/routes/events.js` | the SSE stream |
 | `src/routes/horizons.js` | time-horizon goals |
 | `src/sync/github.js` | every `gh` invocation, the label palette, Projects v2 plumbing |
@@ -118,12 +120,27 @@ through a setter next to its declaration (`setGhSyncOn`, `setScrollToNewCardId`)
 enforced statically by `test/frontend-imports.test.js`, because a module that no browser test
 happens to execute would otherwise fail only in front of a user.
 
+Project settings are a **page inside the project** (`#projset`), not a popup: the topbar `⋯` and a
+right-click on the board in the sidebar open it, `state.projSettings` decides the view while
+`state.slug` stays on the project. It re-renders only when it opens or after a save — a background
+refresh must not rebuild a form somebody is typing into.
+
 SSE updates are applied **surgically**: `applySseEvent` patches the affected card for
 `task.created/updated/deleted` instead of re-fetching the board. A full refresh is the fallback for
 events that change structure.
 
 `localStorage` keys are namespaced (`kb.set.*`, `kb.ui.*`, `kb.chaos.*`, `kb.session.*`). Renaming
 a key silently loses whatever the user had saved, so a rename ships with a one-time value migration.
+
+## Skills
+
+A skill is the instruction file Claude reads, and it lives outside the board — in `~/.claude/skills`,
+often as a symlink to a file in another repository. The board therefore treats **loading** the shared
+version and **writing** it to disk as two separate actions: the button only fills the editor and says
+where the text came from (GitHub, or the copy shipped with the package), and saving is a second,
+explicit step. The write requires the client to echo back the resolved path it meant to overwrite,
+and the previous contents are snapshotted into the data directory first — never next to the original,
+which usually sits in somebody else's git working tree.
 
 ## GitHub sync
 

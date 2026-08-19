@@ -1,11 +1,12 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { join, basename, resolve, sep } from 'node:path';
 import { db, DATA_DIR, genPrefix, usedPrefixes, makePrefix, kvGet, kvSet, logError } from '../db.js';
-import { localRoot, panelUrl, panelInfo, skillsExtra } from '../config.js';
+import { localRoot, panelUrl, panelInfo } from '../config.js';
 import { emit } from '../bus.js';
 import { forgetRepoBase } from '../repo-base.js';
 import { parsePm2Services, serializePm2Services } from '../pm2-services.js';
+import { GENERIC_DEPLOY_SKILL, SKILL_NAME_RE, resolveSkillPath, skillInfo } from '../skills.js';
 
 const DEFAULT_CATEGORY = 'Other';
 const LOCKED_CATEGORIES = new Set([DEFAULT_CATEGORY, 'Local']);
@@ -250,24 +251,6 @@ export default async function projectRoutes(app) {
     return reply.code(201).send({ ...p, created: !existed });
   });
 
-  const SKILL_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
-  const HOME = process.env.HOME;
-  const SKILL_ROOTS = [
-    `${HOME}/.claude/skills`,
-    ...skillsExtra(),
-  ];
-  function resolveSkillPath(name) {
-    if (!name) return null;
-    if (!SKILL_NAME_RE.test(name)) return null;
-    for (const root of SKILL_ROOTS) {
-      const base = resolve(root);
-      const p = resolve(base, name, 'SKILL.md');
-      if (!p.startsWith(base + sep)) continue;
-      if (existsSync(p)) return p;
-    }
-    return null;
-  }
-
   function badDeploySkill(body) {
     const ds = body?.deploy_skill;
     if (ds === undefined || ds === null || ds === '') return null;
@@ -279,6 +262,49 @@ export default async function projectRoutes(app) {
     const p = resolveProject(req.params.slug);
     if (!p) return reply.code(404).send({ error: 'project not found' });
     return { ...p, deploy_skill_path: resolveSkillPath(p.deploy_skill) };
+  });
+
+  const PROJECT_DOCS = ['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', 'README.md', 'ARCHITECTURE.md'];
+  const DOC_MAX_BYTES = 512 * 1024;
+  function docPath(project, name) {
+    if (!project?.path || !PROJECT_DOCS.includes(name)) return null;
+    const base = resolve(project.path);
+    const p = resolve(base, name);
+    return p.startsWith(base + sep) ? p : null;
+  }
+
+  app.get('/api/projects/:slug/docs', (req, reply) => {
+    const p = resolveProject(req.params.slug);
+    if (!p) return reply.code(404).send({ error: 'project not found' });
+    const docs = PROJECT_DOCS.map((name) => {
+      const path = docPath(p, name);
+      let st = null;
+      try { st = path ? statSync(path) : null; } catch {  }
+      return { name, path, exists: Boolean(st?.isFile()), size: st?.size ?? null, mtime: st ? new Date(st.mtimeMs).toISOString() : null };
+    })
+      .filter((d) => d.exists || d.name === 'CLAUDE.md');
+    const skill = p.deploy_skill ? skillInfo(p.deploy_skill) : null;
+    return {
+      path: p.path || null,
+      path_exists: Boolean(p.path && existsSync(p.path)),
+      docs,
+      skill: skill && { ...skill, generic: p.deploy_skill === GENERIC_DEPLOY_SKILL },
+    };
+  });
+
+  app.get('/api/projects/:slug/docs/:name', (req, reply) => {
+    const p = resolveProject(req.params.slug);
+    if (!p) return reply.code(404).send({ error: 'project not found' });
+    const path = docPath(p, req.params.name);
+    if (!path) return reply.code(400).send({ error: 'unknown document' });
+    let buf;
+    try { buf = readFileSync(path); } catch { return reply.code(404).send({ error: 'the file is not there' }); }
+    return {
+      name: req.params.name,
+      path,
+      text: buf.subarray(0, DOC_MAX_BYTES).toString('utf8'),
+      truncated: buf.length > DOC_MAX_BYTES,
+    };
   });
 
   app.get('/api/projects/:slug/status', async (req, reply) => {

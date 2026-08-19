@@ -10,6 +10,7 @@ import projectRoutes from './routes/projects.js';
 import taskRoutes from './routes/tasks.js';
 import dashboardRoutes from './routes/dashboard.js';
 import systemRoutes from './routes/system.js';
+import skillRoutes from './routes/skills.js';
 import eventRoutes from './routes/events.js';
 import horizonRoutes from './routes/horizons.js';
 import { startWorker } from './sync/worker.js';
@@ -55,6 +56,7 @@ app.register(projectRoutes);
 app.register(taskRoutes);
 app.register(dashboardRoutes);
 app.register(systemRoutes);
+app.register(skillRoutes);
 app.register(eventRoutes);
 app.register(horizonRoutes);
 

@@ -167,3 +167,38 @@ test('pm2_services accepts both a JSON array and a comma-separated string', asyn
   await patch('pm2-proj', { pm2_services: '' });
   assert.equal((await get('pm2-proj')).json().pm2_services, null, 'an empty value clears the field');
 });
+
+test('a project reports its docs and the skill it uses', async () => {
+  const { writeFileSync, mkdirSync } = await import('node:fs');
+  const dir = join(projectsRoot, 'docs-proj');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'CLAUDE.md'), '# project notes\n');
+  await create({ slug: 'docs-proj', name: 'docs project', path: dir, deploy_skill: 'deploy' });
+
+  const body = (await app.inject({ method: 'GET', url: '/api/projects/docs-proj/docs' })).json();
+  const claude = body.docs.find((d) => d.name === 'CLAUDE.md');
+  assert.equal(claude.exists, true);
+  assert.equal(claude.path, join(dir, 'CLAUDE.md'));
+  assert.equal(body.docs.some((d) => d.name === 'README.md'), false, 'a file that is not there is not listed');
+  assert.equal(body.skill.name, 'deploy');
+  assert.equal(body.skill.generic, true, 'the generic deploy skill is marked as such');
+
+  const doc = (await app.inject({ method: 'GET', url: '/api/projects/docs-proj/docs/CLAUDE.md' })).json();
+  assert.equal(doc.text, '# project notes\n');
+});
+
+test('CLAUDE.md is listed even when it is missing — that is a signal, not an empty answer', async () => {
+  const { mkdirSync } = await import('node:fs');
+  const dir = join(projectsRoot, 'nodocs-proj');
+  mkdirSync(dir, { recursive: true });
+  await create({ slug: 'nodocs-proj', name: 'no docs', path: dir });
+  const body = (await app.inject({ method: 'GET', url: '/api/projects/nodocs-proj/docs' })).json();
+  assert.deepEqual(body.docs.map((d) => d.name), ['CLAUDE.md']);
+  assert.equal(body.docs[0].exists, false);
+  assert.equal(body.skill, null, 'no deploy skill set — nothing is invented');
+});
+
+test('a document outside the fixed list cannot be read through the project path', async () => {
+  assert.equal((await app.inject({ method: 'GET', url: '/api/projects/docs-proj/docs/.env' })).statusCode, 400);
+  assert.equal((await app.inject({ method: 'GET', url: '/api/projects/docs-proj/docs/..%2f..%2fetc%2fpasswd' })).statusCode, 400);
+});

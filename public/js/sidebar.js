@@ -4,7 +4,7 @@ import { renderChaos } from './chaos.js';
 import { $, ALL, CALENDAR, CHAOS, DASH, HIDDEN_SECTIONS, HORIZON, LANG, SETTINGS, SIDEBAR_SECTIONS, api, esc, ic, seg, setupPrompt, state, tr } from './core.js';
 import { renderDashboard } from './dash.js';
 import { renderCalendar, renderHorizon } from './horizon.js';
-import { openProjectPanel } from './project.js';
+import { openProjectSettings, renderProjectSettings } from './project.js';
 import { openSettingsModal, plural, setSetting, syncLangToServer } from './settings.js';
 import { copyText, refresh, showView } from './sse.js';
 
@@ -26,6 +26,11 @@ export async function loadTasks() {
   if (state.slug === HORIZON) { showView('horizon'); await renderHorizon(); return; }
   if (state.slug === CALENDAR) { showView('calendar'); await renderCalendar(); return; }
   if (state.slug === CHAOS) { const opening = showView('chaos'); await renderChaos(opening); return; }
+  if (state.projSettings && state.projSettings === state.slug) {
+    const opening = showView('projset');
+    await renderProjectSettings(opening);
+    return;
+  }
   showView('board');
   if (!state.slug) { state.tasks = []; renderBoard(); return; }
   try {
@@ -149,7 +154,7 @@ function makeProjEl(p, missing) {
   el.dataset.slug = p.slug;
   el.dataset.category = p.category || 'Other';
   el.onclick = () => selectProject(p.slug);
-  el.oncontextmenu = (e) => { e.preventDefault(); openProjectPanel(p, { left: e.clientX, right: e.clientX, bottom: e.clientY }); };
+  el.oncontextmenu = (e) => { e.preventDefault(); openProjectSettings(p); };
   if (missing) el.querySelector('.proj-missing').onclick = (e) => { e.stopPropagation(); archiveMissing(p.slug, p.name || p.slug); };
   el.querySelector('.proj-pin').onclick = (e) => { e.stopPropagation(); togglePin(p); };
   attachProjDnd(el);
@@ -196,8 +201,9 @@ function attachProjDnd(el) {
   });
 }
 
-export function selectProject(slug) {
+export function selectProject(slug, { settings = false } = {}) {
   state.slug = slug;
+  state.projSettings = settings ? slug : null;
   localStorage.setItem('kb.ui.project', slug);
   sessionStorage.setItem('kb.session.slug', slug);
   if (slug && slug !== ALL && !slug.startsWith('#')) localStorage.setItem('kb.ui.lastProject', slug);
@@ -580,6 +586,7 @@ function openOnboarding() {
 
 export function renderTopbar() {
   $('project-menu').classList.toggle('hidden', [DASH, SETTINGS, HORIZON, CALENDAR, CHAOS].includes(state.slug));
+  $('project-menu').classList.toggle('on', Boolean(state.projSettings));
   if (state.slug === DASH) {
     $('project-title').innerHTML = `${ic('chart', 15)} ${esc(tr('Dashboard'))}`;
     $('project-meta').textContent = '';

@@ -1,9 +1,7 @@
 
 import { $, DASH, api, esc, ic, seg, state, tr } from './core.js';
-import { currentProject, popLayer, pushLayer, selectProject, styledConfirm } from './sidebar.js';
-import { refresh } from './sse.js';
-
-let projPanelSlug = null;
+import { currentProject, overlayLayer, renderSidebar, renderTopbar, selectProject, styledAlert, styledConfirm } from './sidebar.js';
+import { copyText, refresh } from './sse.js';
 
 function parsePm2Services(raw) {
   if (!raw) return [];
@@ -14,95 +12,201 @@ function parsePm2Services(raw) {
   }
   return (list || text.split(',')).map((s) => String(s).trim()).filter(Boolean);
 }
-function placeProjectPanel(anchorRect) {
-  const panel = $('proj-panel');
-  if (!panel) return;
-  const r = anchorRect || $('project-menu').getBoundingClientRect();
-  const left = anchorRect ? r.left : Math.min(r.left, window.innerWidth - panel.offsetWidth - 12);
-  panel.style.left = `${Math.max(8, Math.min(left, window.innerWidth - panel.offsetWidth - 8))}px`;
-  panel.style.top = `${Math.max(8, Math.min(r.bottom + 6, window.innerHeight - panel.offsetHeight - 8))}px`;
-}
-export function openProjectPanel(proj, anchorRect) {
+
+export function openProjectSettings(proj) {
   const p = proj || currentProject();
   if (!p) return;
-  projPanelSlug = p.slug;
-  closeProjectPanel();
-  pushLayer('proj-panel', closeProjectPanel);
-  const panel = document.createElement('div');
-  panel.className = 'proj-panel';
-  panel.id = 'proj-panel';
-  panel.innerHTML = `
-    <div class="pp-head">${tr('Project settings')}</div>
-    <label class="pp-field">${tr('Name')}<input id="pp-name" type="text"></label>
-    <div class="pp-field">${tr('Section')}
-      <div class="pp-select" id="pp-category"></div>
-      <input id="pp-category-new" type="text" placeholder="${tr('name of the new section')}" class="hidden">
-    </div>
-    <label class="pp-field">${tr('Description')}<textarea id="pp-desc" rows="3" placeholder="${tr('what this project is, notes…')}"></textarea></label>
-    <label class="pp-field pp-toggle"><input id="pp-pinned" type="checkbox"><span>${tr('Pin to board')}</span></label>
-    <button type="button" class="pp-more" id="pp-more">${tr('Paths & deploy ▾')}</button>
-    <div class="pp-extra hidden" id="pp-extra">
-      <label class="pp-field">${tr('Local folder')}<input id="pp-path" type="text" placeholder="${tr('/path/to/the/folder — may be empty')}"></label>
-      <label class="pp-field">${tr('SSH host')}<input id="pp-server" type="text" placeholder="${tr('ssh alias or address')}"></label>
-      <label class="pp-field">${tr('Server path')}<input id="pp-spath" type="text"></label>
-      <label class="pp-field">${tr('pm2 processes (comma-separated)')}<input id="pp-pm2" type="text"></label>
-      <label class="pp-field">${tr('Domain')}<input id="pp-domain" type="text"></label>
-      <label class="pp-field">${tr('Deploy skill')}<input id="pp-skill" type="text" placeholder="${tr('empty = no deploy / deploy = the generic one')}"></label>
-    </div>
-    <div class="pp-actions">
-      <button id="pp-save" class="btn-primary">${tr('Save')}</button>
-      <button id="pp-archive" class="btn-ghost" title="${tr('Hide the project from the list')}">${tr('Archive')}</button>
-    </div>
-    ${p.slug === 'demo' ? `<button id="pp-demo-del" class="btn-ghost pp-demo-del">${tr('Delete demo project entirely')}</button>` : ''}`;
-  document.body.appendChild(panel);
-  $('pp-name').value = p.name || '';
-  $('pp-desc').value = p.description || '';
-  $('pp-pinned').checked = !!p.pinned;
-  $('pp-path').value = p.path || '';
-  $('pp-server').value = p.server || '';
-  $('pp-spath').value = p.server_path || '';
-  $('pp-pm2').value = parsePm2Services(p.pm2_services).join(', ');
-  $('pp-domain').value = p.domain || '';
-  $('pp-skill').value = p.deploy_skill || '';
-  $('pp-more').onclick = () => {
-    const ex = $('pp-extra');
-    const open = ex.classList.toggle('hidden');
-    $('pp-more').textContent = open ? tr('Paths & deploy ▾') : tr('Paths & deploy ▴');
-    placeProjectPanel(anchorRect);
-  };
+  if (state.projSettings === p.slug) { closeProjectSettings(); return; }
+  selectProject(p.slug, { settings: true });
+}
+export function closeProjectSettings() {
+  if (!state.projSettings) return;
+  selectProject(state.projSettings);
+}
+
+const FIELDS = { path: 'ps-path', server: 'ps-server', server_path: 'ps-spath', domain: 'ps-domain', deploy_skill: 'ps-skill' };
+
+export async function renderProjectSettings(force) {
+  const host = $('projset');
+  if (!host) return;
+  const p = currentProject();
+  if (!p) {
+    host.innerHTML = `<div class="ps-wrap"><div class="muted">${tr('This project is gone')}</div></div>`;
+    return;
+  }
+  if (!force && host.dataset.slug === p.slug) return;
+  host.dataset.slug = p.slug;
+
   const cur = p.category || 'Other';
   const cats = [...new Set([...state.categories.map((c) => c.name), ...state.projects.map((x) => x.category || 'Other')])]
     .sort((a, b) => a.localeCompare(b, 'ru'));
   if (!cats.includes(cur)) cats.unshift(cur);
+
+  host.innerHTML = `<div class="ps-wrap">
+    <div class="ps-head">
+      <div>
+        <div class="ps-title">${tr('Project settings')}</div>
+        <div class="ps-sub muted">${esc(p.name || p.slug)} · ${esc(p.prefix || '')}${p.slug !== p.name ? ` · ${esc(p.slug)}` : ''}</div>
+      </div>
+      <button class="btn-ghost" id="ps-back">${tr('Back to the board')}</button>
+    </div>
+
+    <div class="panel ps-block">
+      <div class="panel-h">${tr('Basics')}</div>
+      <label class="pp-field">${tr('Name')}<input id="ps-name" type="text"></label>
+      <div class="pp-field">${tr('Section')}
+        <div class="pp-select" id="ps-category"></div>
+        <input id="ps-category-new" type="text" placeholder="${tr('name of the new section')}" class="hidden">
+      </div>
+      <label class="pp-field">${tr('Description')}<textarea id="ps-desc" rows="3" placeholder="${tr('what this project is, notes…')}"></textarea></label>
+      <label class="pp-field pp-toggle"><input id="ps-pinned" type="checkbox"><span>${tr('Pin to board')}</span></label>
+    </div>
+
+    <div class="panel ps-block">
+      <div class="panel-h">${tr('Paths & deploy')}</div>
+      <div class="ps-grid">
+        <label class="pp-field">${tr('Local folder')}<input id="ps-path" type="text" placeholder="${tr('/path/to/the/folder — may be empty')}"></label>
+        <label class="pp-field">${tr('Domain')}<input id="ps-domain" type="text"></label>
+        <label class="pp-field">${tr('SSH host')}<input id="ps-server" type="text" placeholder="${tr('ssh alias or address')}"></label>
+        <label class="pp-field">${tr('Server path')}<input id="ps-spath" type="text"></label>
+        <label class="pp-field">${tr('pm2 processes (comma-separated)')}<input id="ps-pm2" type="text"></label>
+        <label class="pp-field">${tr('Deploy skill')}<input id="ps-skill" type="text" placeholder="${tr('empty = no deploy / deploy = the generic one')}"></label>
+      </div>
+    </div>
+
+    <div class="panel ps-block">
+      <div class="panel-h">${tr('What Claude reads before working')}</div>
+      <div class="kbh-note muted">${tr('The project notes and the deploy skill — Claude opens them before touching the code. Paths are absolute: copy one and paste it into the chat.')}</div>
+      <div id="ps-docs" class="ps-docs">…</div>
+    </div>
+
+    <div class="ps-actions">
+      <button id="ps-save" class="btn-primary">${tr('Save')}</button>
+      <button id="ps-archive" class="btn-ghost" title="${tr('Hide the project from the list')}">${tr('Archive')}</button>
+      <span id="ps-saved" class="muted ps-saved"></span>
+      ${p.slug === 'demo' ? `<button id="ps-demo-del" class="btn-ghost pp-demo-del">${tr('Delete demo project entirely')}</button>` : ''}
+    </div>
+  </div>`;
+
+  $('ps-name').value = p.name || '';
+  $('ps-desc').value = p.description || '';
+  $('ps-pinned').checked = !!p.pinned;
+  $('ps-path').value = p.path || '';
+  $('ps-server').value = p.server || '';
+  $('ps-spath').value = p.server_path || '';
+  $('ps-pm2').value = parsePm2Services(p.pm2_services).join(', ');
+  $('ps-domain').value = p.domain || '';
+  $('ps-skill').value = p.deploy_skill || '';
   buildCatSelect(cur, cats);
-  placeProjectPanel(anchorRect);
-  $('pp-save').onclick = saveProjectPanel;
-  $('pp-archive').onclick = archiveProject;
-  const demoDeleteBtn = $('pp-demo-del');
+
+  $('ps-back').onclick = closeProjectSettings;
+  $('ps-save').onclick = saveProjectSettings;
+  $('ps-archive').onclick = archiveProject;
+  const demoDeleteBtn = $('ps-demo-del');
   if (demoDeleteBtn) {
     demoDeleteBtn.onclick = async () => {
       if (!await styledConfirm(tr('Delete the demo project and all its tasks?'), { okLabel: tr('Delete'), danger: true })) return;
-      closeProjectPanel();
       await api('DELETE', '/api/projects/demo');
-      if (state.slug === 'demo') state.slug = DASH;
+      state.projSettings = null;
+      state.slug = DASH;
       await refresh();
       selectProject(state.slug);
     };
   }
-  panel.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && (e.target.id === 'pp-name' || e.target.id === 'pp-category-new')) saveProjectPanel();
-    if (e.key === 'Escape') closeProjectPanel();
+  host.querySelectorAll('input').forEach((inp) => {
+    inp.onkeydown = (e) => { if (e.key === 'Enter') saveProjectSettings(); };
   });
-  $('pp-name').focus(); $('pp-name').select();
-  setTimeout(() => document.addEventListener('click', projPanelOutside), 0);
+  renderDocs(p);
 }
+
+async function renderDocs(p) {
+  const box = $('ps-docs');
+  if (!box) return;
+  if (!p.path) {
+    box.innerHTML = `<div class="muted">${tr('The project has no local folder — set one above and the notes will show up here.')}</div>`;
+    return;
+  }
+  let info;
+  try { info = await api('GET', `/api/projects/${seg(p.slug)}/docs`, null, { quiet: true }); }
+  catch { box.innerHTML = '—'; return; }
+  if (!$('ps-docs') || $('projset').dataset.slug !== p.slug) return;
+
+  const row = (opts) => `<div class="ps-doc${opts.missing ? ' ps-doc-missing' : ''}">
+      <span class="ps-doc-ic">${ic(opts.icon, 13)}</span>
+      <span class="ps-doc-name">${esc(opts.title)}${opts.tag ? `<span class="ps-doc-tag">${esc(opts.tag)}</span>` : ''}</span>
+      <span class="ps-doc-path" title="${esc(opts.path || '')}">${esc(opts.path || tr('not there'))}</span>
+      <span class="ps-doc-act">
+        ${opts.missing ? '' : `<button class="btn-icon ps-doc-open" data-open="${esc(opts.open)}" title="${tr('Open')}">${ic('eye', 13)}</button>`}
+        ${opts.path ? `<button class="btn-icon ps-doc-copy" data-copy="${esc(opts.path)}" title="${tr('Copy the path')}">${ic('copy', 13)}</button>` : ''}
+      </span>
+    </div>`;
+
+  const parts = info.docs.map((d) => row({
+    icon: 'doc',
+    title: d.name,
+    path: d.path,
+    missing: !d.exists,
+    tag: d.exists ? '' : tr('no file'),
+    open: `doc:${d.name}`,
+  }));
+  if (info.skill) {
+    parts.push(row({
+      icon: 'gear',
+      title: info.skill.name,
+      path: info.skill.real_path,
+      missing: !info.skill.exists,
+      tag: info.skill.generic ? tr('shared skill') : tr('own skill'),
+      open: `skill:${info.skill.name}`,
+    }));
+  } else {
+    parts.push(`<div class="ps-doc ps-doc-missing"><span class="ps-doc-ic">${ic('gear', 13)}</span>`
+      + `<span class="ps-doc-name">${tr('Deploy skill')}<span class="ps-doc-tag">${tr('not set')}</span></span>`
+      + `<span class="ps-doc-path">${tr('the field above takes a skill name — “deploy” is the shared one')}</span><span class="ps-doc-act"></span></div>`);
+  }
+  box.innerHTML = parts.join('');
+
+  box.querySelectorAll('.ps-doc-copy').forEach((b) => {
+    b.onclick = async () => {
+      const was = b.innerHTML;
+      b.innerHTML = await copyText(b.dataset.copy) ? '✓' : '✕';
+      setTimeout(() => { b.innerHTML = was; }, 1200);
+    };
+  });
+  box.querySelectorAll('.ps-doc-open').forEach((b) => {
+    b.onclick = async () => {
+      const [kind, name] = b.dataset.open.split(':');
+      try {
+        const r = kind === 'doc'
+          ? await api('GET', `/api/projects/${seg(p.slug)}/docs/${seg(name)}`)
+          : await api('GET', `/api/skills/${seg(name)}`);
+        openFileViewer(kind === 'doc' ? name : `${name} · SKILL.md`, r.path || r.real_path, r.text || '');
+      } catch (e) { styledAlert(e.message || tr('could not read the file')); }
+    };
+  });
+}
+
+export function openFileViewer(title, path, text) {
+  const prev = $('file-viewer');
+  if (prev) prev.remove();
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'file-viewer';
+  overlay.innerHTML = `<div class="modal fv-modal">
+    <div class="fv-head"><span class="fv-title">${esc(title)}</span><button class="btn-icon fv-close" title="${tr('Close')}">✕</button></div>
+    <div class="fv-path muted">${esc(path || '')}</div>
+    <pre class="fv-body">${esc(text)}</pre>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('.fv-close').onclick = overlayLayer(overlay);
+}
+
 let catDocHandler = null;
 function closeCatList() {
-  $('pp-category')?.classList.remove('open');
+  $('ps-category')?.classList.remove('open');
   if (catDocHandler) { document.removeEventListener('click', catDocHandler); catDocHandler = null; }
 }
 function buildCatSelect(cur, cats) {
-  const box = $('pp-category');
+  const box = $('ps-category');
   box.dataset.value = cur;
   const items = [...cats, '__new__'];
   const label = (v) => (v === '__new__' ? tr('New section…') : v);
@@ -110,15 +214,14 @@ function buildCatSelect(cur, cats) {
     + `<div class="pp-sel-list">${items.map((v) =>
         `<div class="pp-sel-opt${v === cur ? ' active' : ''}" data-v="${esc(v)}">${v === '__new__' ? `${ic('plus', 12)} ${esc(tr('New section…'))}` : esc(v)}</div>`).join('')}</div>`;
   box.onclick = (e) => {
-    e.stopPropagation();
     const opt = e.target.closest('.pp-sel-opt');
     if (opt) {
       const v = opt.dataset.v; const isNew = v === '__new__';
       box.dataset.value = v;
       box.querySelector('.pp-sel-val').textContent = label(v);
       box.querySelectorAll('.pp-sel-opt').forEach((o) => o.classList.toggle('active', o.dataset.v === v));
-      $('pp-category-new').classList.toggle('hidden', !isNew);
-      if (isNew) $('pp-category-new').focus();
+      $('ps-category-new').classList.toggle('hidden', !isNew);
+      if (isNew) $('ps-category-new').focus();
       closeCatList();
       return;
     }
@@ -129,48 +232,50 @@ function buildCatSelect(cur, cats) {
     setTimeout(() => document.addEventListener('click', catDocHandler), 0);
   };
 }
-function projPanelOutside(e) {
-  const panel = $('proj-panel');
-  if (panel && !panel.contains(e.target) && e.target.id !== 'project-menu') closeProjectPanel();
-}
-function closeProjectPanel() {
-  popLayer('proj-panel');
-  closeCatList();
-  $('proj-panel')?.remove();
-  document.removeEventListener('click', projPanelOutside);
-}
-function projPanelTarget() { return state.projects.find((x) => x.slug === projPanelSlug) || currentProject(); }
-async function saveProjectPanel() {
-  const p = projPanelTarget();
+
+async function saveProjectSettings() {
+  const p = currentProject();
   if (!p) return;
   const body = {};
-  const name = $('pp-name').value.trim();
-  const description = $('pp-desc').value.trim();
+  const name = $('ps-name').value.trim();
+  const description = $('ps-desc').value.trim();
   if (name && name !== p.name) body.name = name;
   if (description !== (p.description || '')) body.description = description;
-  let category = $('pp-category').dataset.value;
-  if (category === '__new__') category = $('pp-category-new').value.trim();
+  let category = $('ps-category').dataset.value;
+  if (category === '__new__') category = $('ps-category-new').value.trim();
   if (category && category !== (p.category || 'Other')) body.category = category;
-  const pinned = $('pp-pinned').checked ? 1 : 0;
+  const pinned = $('ps-pinned').checked ? 1 : 0;
   if (pinned !== (p.pinned ? 1 : 0)) body.pinned = pinned;
-  const reg = { path: 'pp-path', server: 'pp-server', server_path: 'pp-spath', domain: 'pp-domain', deploy_skill: 'pp-skill' };
-  for (const [field, id] of Object.entries(reg)) {
+  for (const [field, id] of Object.entries(FIELDS)) {
     const v = $(id).value.trim() || null;
     if (v !== (p[field] || null)) body[field] = v;
   }
-  const pm2 = $('pp-pm2').value.split(',').map((s) => s.trim()).filter(Boolean);
+  const pm2 = $('ps-pm2').value.split(',').map((s) => s.trim()).filter(Boolean);
   const pm2Str = pm2.length ? JSON.stringify(pm2) : null;
   if (pm2Str !== (p.pm2_services || null)) body.pm2_services = pm2Str;
-  closeProjectPanel();
-  if (Object.keys(body).length) await api('PATCH', `/api/projects/${seg(p.slug)}`, body);
+  if (!Object.keys(body).length) { flashSaved(tr('nothing to save')); return; }
+  try { await api('PATCH', `/api/projects/${seg(p.slug)}`, body); }
+  catch (e) { flashSaved(e.message || tr('not saved')); return; }
   await refresh();
+  renderSidebar();
+  renderTopbar();
+  await renderProjectSettings(true);
+  flashSaved(tr('saved ✓'));
 }
+function flashSaved(text) {
+  const el = $('ps-saved');
+  if (!el) return;
+  el.textContent = text;
+  setTimeout(() => { if (el.textContent === text) el.textContent = ''; }, 2200);
+}
+
 async function archiveProject() {
-  const p = projPanelTarget();
+  const p = currentProject();
   if (!p) return;
   if (!await styledConfirm(`${tr('Archive')} "${p.name || p.slug}"? ${tr('Tasks are kept, the project leaves the list.')}`, { okLabel: tr('Archive') })) return;
-  closeProjectPanel();
   await api('PATCH', `/api/projects/${seg(p.slug)}`, { archived: 1 });
-  if (state.slug === p.slug) state.slug = null;
+  state.projSettings = null;
+  state.slug = DASH;
   await refresh();
+  selectProject(state.slug);
 }

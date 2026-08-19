@@ -59,10 +59,19 @@ Statuses: `backlog → todo → prep → doing → deploy → review → done` (
 | `GET /api/projects/:slug/status` | live service statuses (local pm2 by default, or `PANEL_URL` provider) |
 | `GET /api/projects/folders` | folders on disk vs registry: `{root, unregistered, missing}` |
 | `POST /api/projects/folders` | mkdir/adopt a folder under `KB_LOCAL_ROOT` as a project |
+| `GET /api/projects/:slug/docs` | what Claude reads before working: `{path, path_exists, docs[], skill}` |
+| `GET /api/projects/:slug/docs/:name` | the text of one of those documents |
 
 `pm2_services` is stored as a JSON array serialized to a string, e.g. `"[\"my-api\"]"`. On write it
 also accepts a comma-separated string (`"my-api, my-bot"`) or a real array and stores the canonical
 form; on read, older rows holding a bare string are still parsed, so both forms are safe.
+
+`GET /api/projects/:slug/docs` lists the project's own notes — `CLAUDE.md`, `CLAUDE.local.md`,
+`AGENTS.md`, `README.md`, `ARCHITECTURE.md` — with absolute paths, plus the deploy skill the project
+uses (`generic: true` when it is the shared `deploy` one). `CLAUDE.md` is listed even when the file
+is missing: that absence is information, not an empty answer. The name in `/docs/:name` must be one
+of those five — the folder comes from the registry, but a basename from the URL joined onto it would
+be a way out of the folder.
 
 ### Status provider contract (`PANEL_URL`)
 
@@ -73,6 +82,24 @@ If you point `PANEL_URL` at your own endpoint, return either a bare array or `{"
 ```
 
 `uptime` — ms timestamp of process start; only `name` and `status` are required.
+
+## Skills
+
+Skills are the instruction files Claude reads (`SKILL.md`). They live outside the board, in
+`~/.claude/skills` plus any root listed in `KB_SKILLS_EXTRA`.
+
+| Method & path | Meaning |
+|---|---|
+| `GET /api/skills` | `{roots, board_skill, generic_deploy_skill, items[], board}` — every skill found, with the projects using it |
+| `GET /api/skills/:name` | `{name, path, real_path, symlink, exists, size, mtime, text}` |
+| `GET /api/skills/:name/upstream?lang=` | the shared version: GitHub first, the copy shipped with the package as a fallback; the response says which (`source`, `lang`) and writes nothing |
+| `PUT /api/skills/:name` | `{text, confirm_path}` → writes the file |
+
+`confirm_path` is a lock, not a formality: a skill directory is often a symlink to a file in another
+repository, so the client has to echo back the **resolved** path it meant to overwrite (`real_path`).
+A mismatch is a `409` naming the real path, not a silent write to the wrong file. The previous
+contents are copied into `<data>/backups/skills/` before the write. A name is one path segment
+(`[A-Za-z0-9_-]{1,64}`); a check board started from a backup refuses to write skills at all.
 
 ## Events (SSE)
 

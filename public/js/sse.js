@@ -379,6 +379,7 @@ export function showView(view) {
   $('horizon').classList.toggle('hidden', view !== 'horizon');
   $('calendar').classList.toggle('hidden', view !== 'calendar');
   $('chaos').classList.toggle('hidden', view !== 'chaos');
+  $('projset').classList.toggle('hidden', view !== 'projset');
   const changed = lastView !== view;
   lastView = view;
   return changed;
