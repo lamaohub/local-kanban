@@ -505,7 +505,7 @@ async function loadSkillText(name) {
   updateSkillState(r.exists ? '' : tr('the skill is not installed — the file will be created on save'));
 }
 async function renderSkillsSection(body) {
-  body.innerHTML = `<div class="sm-h">${tr('Skills')}</div>`
+  body.innerHTML = `<div class="sm-h">${tr('Skills')}<button class="btn-ghost" id="sk-new">${tr('＋ New skill')}</button></div>`
     + `<div class="kbh-note muted">${tr('Skills are the instructions Claude reads. They live outside the board, in ~/.claude/skills, and the board only shows and updates them.')}</div>`
     + '<div id="sk-list" class="bk-list">…</div>'
     + `<div class="set-col sk-edit hidden" id="sk-edit">
@@ -537,10 +537,29 @@ async function renderSkillsSection(body) {
     if (!s.exists) tags.push(tr('not installed'));
     return tags;
   };
-  $('sk-list').innerHTML = items.map((s) => `<div class="bk-row sk-row" data-name="${esc(s.name)}" title="${esc((s.used_by || []).map((p) => p.name || p.slug).join(', '))}">
+  const row = (s) => `<div class="bk-row sk-row" data-name="${esc(s.name)}" title="${esc((s.used_by || []).map((p) => p.name || p.slug).join(', '))}">
       <span class="sk-name">${esc(s.name)}${tagsFor(s).map((t) => `<span class="ps-doc-tag">${esc(t)}</span>`).join('')}</span>
       <span class="muted sk-meta" title="${esc(s.real_path)}">${s.exists ? `${Math.max(1, Math.round((s.size || 0) / 1024))} ${tr('KB')} · ${esc(String(s.mtime || '').slice(0, 10))}` : '—'}</span>
-    </div>`).join('');
+    </div>`;
+  const isDeploy = (s) => s.name === info.generic_deploy_skill || s.used_by?.length;
+  const groups = [
+    [tr('The board'), items.filter((s) => s.name === info.board_skill)],
+    [tr('Deploy skills of the projects'), items.filter((s) => s.name !== info.board_skill && isDeploy(s))],
+  ];
+  const rest = items.filter((s) => s.name !== info.board_skill && !isDeploy(s));
+  $('sk-list').innerHTML = groups.filter(([, list]) => list.length)
+    .map(([title, list]) => `<div class="sk-group-h">${esc(title)}</div>${list.map(row).join('')}`).join('')
+    + (rest.length
+      ? `<div class="sk-group-h sk-more" id="sk-rest-toggle">${tr('Other Claude skills')} · ${rest.length} <span class="pp-sel-chev">▾</span></div>`
+        + `<div id="sk-rest" class="hidden">${rest.map(row).join('')}</div>`
+      : '');
+  const restToggle = $('sk-rest-toggle');
+  if (restToggle) {
+    restToggle.onclick = () => {
+      const open = $('sk-rest').classList.toggle('hidden');
+      restToggle.classList.toggle('open', !open);
+    };
+  }
   $('sk-list').querySelectorAll('.sk-row').forEach((row) => {
     row.onclick = () => {
       $('sk-list').querySelectorAll('.sk-row').forEach((x) => x.classList.toggle('active', x === row));
@@ -549,6 +568,25 @@ async function renderSkillsSection(body) {
     };
   });
   $('sk-list').querySelector('.sk-row')?.click();
+
+  $('sk-new').onclick = () => styledPrompt(tr('New skill'), {
+    placeholder: tr('name: latin letters, digits, hyphen'),
+    okLabel: tr('Create'),
+    onSubmit: async (raw) => {
+      const name = raw.trim();
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(name)) throw new Error(tr('name: latin letters, digits, hyphen, underscore only'));
+      const cur = await api('GET', `/api/skills/${seg(name)}`);
+      if (cur.exists) throw new Error(tr('a skill with this name already exists'));
+      let text = `---\nname: ${name}\ndescription: \n---\n\n`;
+      if ((info.packaged_skills || []).includes(name)) {
+        try { text = (await api('GET', `/api/skills/${seg(name)}/upstream?lang=${LANG}`, null, { quiet: true })).text; }
+        catch {  }
+      }
+      await api('PUT', `/api/skills/${seg(name)}`, { text, confirm_path: cur.real_path });
+      await renderSection('skills');
+      $('sk-list').querySelector(`.sk-row[data-name="${CSS.escape(name)}"]`)?.click();
+    },
+  });
 
   $('sk-text').oninput = () => updateSkillState();
   $('sk-revert').onclick = () => { if (skillSel) loadSkillText(skillSel.name); };

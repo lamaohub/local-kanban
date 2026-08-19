@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { join, basename, resolve, sep } from 'node:path';
 import { db, DATA_DIR, genPrefix, usedPrefixes, makePrefix, kvGet, kvSet, logError } from '../db.js';
@@ -7,6 +7,7 @@ import { emit } from '../bus.js';
 import { forgetRepoBase } from '../repo-base.js';
 import { parsePm2Services, serializePm2Services } from '../pm2-services.js';
 import { GENERIC_DEPLOY_SKILL, SKILL_NAME_RE, resolveSkillPath, skillInfo } from '../skills.js';
+import { snapshotFile } from '../file-snapshot.js';
 
 const DEFAULT_CATEGORY = 'Other';
 const LOCKED_CATEGORIES = new Set([DEFAULT_CATEGORY, 'Local']);
@@ -292,6 +293,11 @@ export default async function projectRoutes(app) {
     };
   });
 
+  function docRealPath(path) {
+    try { return realpathSync(path); } catch {  }
+    try { return join(realpathSync(join(path, '..')), path.split(sep).pop()); } catch { return path; }
+  }
+
   app.get('/api/projects/:slug/docs/:name', (req, reply) => {
     const p = resolveProject(req.params.slug);
     if (!p) return reply.code(404).send({ error: 'project not found' });
@@ -302,9 +308,30 @@ export default async function projectRoutes(app) {
     return {
       name: req.params.name,
       path,
+      real_path: docRealPath(path),
       text: buf.subarray(0, DOC_MAX_BYTES).toString('utf8'),
       truncated: buf.length > DOC_MAX_BYTES,
     };
+  });
+
+  app.put('/api/projects/:slug/docs/:name', (req, reply) => {
+    if (process.env.KB_PREVIEW_TTL_MS) return reply.code(403).send({ error: 'this is a check board opened from a backup — it does not write files' });
+    const p = resolveProject(req.params.slug);
+    if (!p) return reply.code(404).send({ error: 'project not found' });
+    const path = docPath(p, req.params.name);
+    if (!path) return reply.code(400).send({ error: 'unknown document' });
+    const text = req.body?.text;
+    if (typeof text !== 'string') return reply.code(400).send({ error: 'text is required' });
+    if (Buffer.byteLength(text) > DOC_MAX_BYTES) return reply.code(413).send({ error: `the file is larger than ${Math.round(DOC_MAX_BYTES / 1024)} KB` });
+    if (!existsSync(p.path)) return reply.code(400).send({ error: 'the project folder is not there' });
+    const real = docRealPath(path);
+    if (req.body?.confirm_path !== real) {
+      return reply.code(409).send({ error: 'the file on disk is not the one the page was editing', real_path: real });
+    }
+    const backup = snapshotFile('docs', `${p.slug}-${req.params.name}`, path);
+    writeFileSync(path, text);
+    const st = statSync(path);
+    return { name: req.params.name, path, real_path: real, size: st.size, mtime: new Date(st.mtimeMs).toISOString(), backup, backup_name: backup ? backup.split(sep).pop() : null };
   });
 
   app.get('/api/projects/:slug/status', async (req, reply) => {

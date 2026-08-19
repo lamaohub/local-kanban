@@ -1,16 +1,15 @@
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
-import { DATA_DIR, skillsExtra } from './config.js';
+import { skillsExtra } from './config.js';
+import { snapshotDir, snapshotFile } from './file-snapshot.js';
 
 export const SKILL_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
 export const SKILL_MAX_BYTES = 512 * 1024;
 
 export const BOARD_SKILL = 'kanban';
 export const GENERIC_DEPLOY_SKILL = 'deploy';
-
-const BACKUP_KEEP = 10;
 
 export function skillRoots() {
   const home = process.env.HOME || homedir();
@@ -83,21 +82,7 @@ export function readSkill(name) {
   return { ...info, text: buf.subarray(0, SKILL_MAX_BYTES).toString('utf8'), truncated };
 }
 
-export const SKILL_BACKUP_DIR = () => join(DATA_DIR, 'backups', 'skills');
-
-function backupSkill(name, path) {
-  if (!existsSync(path)) return null;
-  const dir = SKILL_BACKUP_DIR();
-  mkdirSync(dir, { recursive: true });
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const dest = join(dir, `${name}-${stamp}.md`);
-  copyFileSync(path, dest);
-  const mine = readdirSync(dir).filter((f) => f.startsWith(`${name}-`) && f.endsWith('.md')).sort();
-  for (const old of mine.slice(0, Math.max(0, mine.length - BACKUP_KEEP))) {
-    try { rmSync(join(dir, old), { force: true }); } catch {  }
-  }
-  return dest;
-}
+export const SKILL_BACKUP_DIR = () => snapshotDir('skills');
 
 export function writeSkill(name, text, confirmPath) {
   if (!name || !SKILL_NAME_RE.test(name)) return { error: 'skill name: latin letters, digits, hyphen, underscore only', code: 400 };
@@ -107,7 +92,7 @@ export function writeSkill(name, text, confirmPath) {
   if (confirmPath !== info.real_path) {
     return { error: 'the file on disk is not the one the page was editing', code: 409, real_path: info.real_path };
   }
-  const backup = backupSkill(name, info.path);
+  const backup = snapshotFile('skills', name, info.path);
   mkdirSync(join(info.path, '..'), { recursive: true });
   writeFileSync(info.path, text);
   return { ...skillInfo(name), backup, backup_name: backup ? backup.split(sep).pop() : null };

@@ -39,6 +39,7 @@ These are deliberate and predate most of the features. Changes that break them n
 | `src/routes/system.js` | labels, sync config, error log, backups, about/update |
 | `src/routes/skills.js` | reading, updating and fetching the shared version of a skill |
 | `src/skills.js` | where skills live on disk: lookup, read, write with a snapshot |
+| `src/file-snapshot.js` | one copy of the previous contents before the board overwrites someone's file |
 | `src/routes/events.js` | the SSE stream |
 | `src/routes/horizons.js` | time-horizon goals |
 | `src/sync/github.js` | every `gh` invocation, the label palette, Projects v2 plumbing |
@@ -123,7 +124,9 @@ happens to execute would otherwise fail only in front of a user.
 Project settings are a **page inside the project** (`#projset`), not a popup: the topbar `⋯` and a
 right-click on the board in the sidebar open it, `state.projSettings` decides the view while
 `state.slug` stays on the project. It re-renders only when it opens or after a save — a background
-refresh must not rebuild a form somebody is typing into.
+refresh must not rebuild a form somebody is typing into. The deploy skill is picked from the skills
+the board actually found, not typed in; the project's own notes and that skill open in an editor
+right there, so a rule discovered while working on a task can be written down where it was found.
 
 SSE updates are applied **surgically**: `applySseEvent` patches the affected card for
 `task.created/updated/deleted` instead of re-fetching the board. A full refresh is the fallback for
@@ -140,7 +143,13 @@ version and **writing** it to disk as two separate actions: the button only fill
 where the text came from (GitHub, or the copy shipped with the package), and saving is a second,
 explicit step. The write requires the client to echo back the resolved path it meant to overwrite,
 and the previous contents are snapshotted into the data directory first — never next to the original,
-which usually sits in somebody else's git working tree.
+which usually sits in somebody else's git working tree. The same lock and the same snapshot cover a
+project's `CLAUDE.md`.
+
+The skills directory holds everything its owner uses in Claude Code, most of it unrelated to the
+board, so the section leads with the board's own skill and the deploy skills of registered projects
+and keeps the rest behind a "show the others" line. A new skill is created from here; if the package
+ships one under that name, the file starts as that shared version.
 
 ## GitHub sync
 

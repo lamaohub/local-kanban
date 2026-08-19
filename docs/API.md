@@ -60,7 +60,8 @@ Statuses: `backlog → todo → prep → doing → deploy → review → done` (
 | `GET /api/projects/folders` | folders on disk vs registry: `{root, unregistered, missing}` |
 | `POST /api/projects/folders` | mkdir/adopt a folder under `KB_LOCAL_ROOT` as a project |
 | `GET /api/projects/:slug/docs` | what Claude reads before working: `{path, path_exists, docs[], skill}` |
-| `GET /api/projects/:slug/docs/:name` | the text of one of those documents |
+| `GET /api/projects/:slug/docs/:name` | the text of one of those documents (+ `real_path`) |
+| `PUT /api/projects/:slug/docs/:name` | `{text, confirm_path}` → writes it back, keeping a snapshot |
 
 `pm2_services` is stored as a JSON array serialized to a string, e.g. `"[\"my-api\"]"`. On write it
 also accepts a comma-separated string (`"my-api, my-bot"`) or a real array and stores the canonical
@@ -71,7 +72,9 @@ form; on read, older rows holding a bare string are still parsed, so both forms 
 uses (`generic: true` when it is the shared `deploy` one). `CLAUDE.md` is listed even when the file
 is missing: that absence is information, not an empty answer. The name in `/docs/:name` must be one
 of those five — the folder comes from the registry, but a basename from the URL joined onto it would
-be a way out of the folder.
+be a way out of the folder. Writing back takes the same lock as a skill: the client echoes the
+resolved path it meant to overwrite, and the previous contents are snapshotted into
+`<data>/backups/docs/` first.
 
 ### Status provider contract (`PANEL_URL`)
 
@@ -90,7 +93,7 @@ Skills are the instruction files Claude reads (`SKILL.md`). They live outside th
 
 | Method & path | Meaning |
 |---|---|
-| `GET /api/skills` | `{roots, board_skill, generic_deploy_skill, items[], board}` — every skill found, with the projects using it |
+| `GET /api/skills` | `{roots, board_skill, generic_deploy_skill, items[], board, packaged_skills[]}` — every skill found, with the projects using it; `packaged_skills` are the ones this package ships |
 | `GET /api/skills/:name` | `{name, path, real_path, symlink, exists, size, mtime, text}` |
 | `GET /api/skills/:name/upstream?lang=` | the shared version: GitHub first, the copy shipped with the package as a fallback; the response says which (`source`, `lang`) and writes nothing |
 | `PUT /api/skills/:name` | `{text, confirm_path}` → writes the file |

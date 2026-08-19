@@ -1,5 +1,5 @@
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { db } from '../db.js';
 import { ROOT } from '../config.js';
@@ -39,6 +39,14 @@ async function fetchUpstream(name, lang) {
   return null;
 }
 
+function packagedSkills() {
+  try {
+    return readdirSync(join(ROOT, 'skills'))
+      .filter((name) => SKILL_NAME_RE.test(name) && existsSync(join(ROOT, 'skills', name, 'SKILL.md')))
+      .sort();
+  } catch { return []; }
+}
+
 export default async function skillRoutes(app) {
   const usedBy = (name) => db.prepare('SELECT slug, name FROM projects WHERE deploy_skill = ? AND archived = 0 ORDER BY name').all(name);
 
@@ -52,6 +60,7 @@ export default async function skillRoutes(app) {
       packaged: existsSync(join(ROOT, 'skills', s.name, 'SKILL.md')),
     })),
     board: skillInfo(BOARD_SKILL),
+    packaged_skills: packagedSkills(),
   }));
 
   app.get('/api/skills/:name', (req, reply) => {

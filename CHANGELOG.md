@@ -3,6 +3,31 @@
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [semantic versioning](https://semver.org/).
 
+## [1.5.0]
+
+### Added
+
+- **The deploy skill of a project is picked from a list instead of typed in.** The field took a
+  free-form name, so a typo left the project without a deploy and said nothing; now it offers the
+  skills the board actually found, plus "not set", plus a line explaining what the field is for. A
+  name that is stored but not installed stays in the list, marked as such, rather than quietly
+  disappearing on the next save.
+- **A skill can be created from the settings.** "New skill" asks for a name and writes the file; if
+  this package ships a skill under that name, the file starts as that shared version — so taking the
+  ready-made one and starting your own are the same action with a different name. The new skill
+  shows up in the project's deploy-skill list immediately.
+- **The project's own notes and its skill are editable where they are shown.** The viewer opened
+  from project settings was deliberately read-only, which was the wrong call: a rule is worked out
+  while doing a task, and writing it into `CLAUDE.md` belongs right there. Saving takes the same
+  lock as a skill — it confirms the resolved path, the server checks that path itself, and the
+  previous contents are snapshotted into the data directory first.
+
+### Changed
+
+- **The skills list is grouped.** A skills directory holds everything its owner uses in Claude Code,
+  most of it unrelated to the board. The section now leads with the board's own skill and the deploy
+  skills of registered projects, and keeps the rest behind a "other Claude skills" line.
+
 ## [1.4.1]
 
 ### Fixed

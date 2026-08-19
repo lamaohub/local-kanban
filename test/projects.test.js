@@ -202,3 +202,24 @@ test('a document outside the fixed list cannot be read through the project path'
   assert.equal((await app.inject({ method: 'GET', url: '/api/projects/docs-proj/docs/.env' })).statusCode, 400);
   assert.equal((await app.inject({ method: 'GET', url: '/api/projects/docs-proj/docs/..%2f..%2fetc%2fpasswd' })).statusCode, 400);
 });
+
+test('a project document is written back only with the path the page confirmed', async () => {
+  const { writeFileSync, readFileSync, mkdirSync, realpathSync, readdirSync } = await import('node:fs');
+  const dir = realpathSync(projectsRoot) + '/edit-proj';
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'CLAUDE.md'), '# before\n');
+  await create({ slug: 'edit-proj', name: 'edit project', path: dir });
+  const put = (payload) => app.inject({ method: 'PUT', url: '/api/projects/edit-proj/docs/CLAUDE.md', payload });
+
+  assert.equal((await put({ text: '# after\n' })).statusCode, 409, 'no confirmed path — no write');
+  assert.equal(readFileSync(join(dir, 'CLAUDE.md'), 'utf8'), '# before\n');
+
+  const real = (await app.inject({ method: 'GET', url: '/api/projects/edit-proj/docs/CLAUDE.md' })).json().real_path;
+  const ok = await put({ text: '# after\n', confirm_path: real });
+  assert.equal(ok.statusCode, 200);
+  assert.equal(readFileSync(join(dir, 'CLAUDE.md'), 'utf8'), '# after\n');
+  assert.equal(readFileSync(ok.json().backup, 'utf8'), '# before\n', 'the previous text is kept');
+  assert.ok(readdirSync(join(tmp, 'backups', 'docs')).some((f) => f.startsWith('edit-proj-CLAUDE.md-')));
+
+  assert.equal((await app.inject({ method: 'PUT', url: '/api/projects/edit-proj/docs/.env', payload: { text: 'x', confirm_path: real } })).statusCode, 400);
+});
