@@ -3,6 +3,23 @@
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [semantic versioning](https://semver.org/).
 
+## [1.6.3]
+
+### Changed
+
+- **A commercial invoice is asked for by email now, not through a public issue.** Wanting to pay
+  for something you use at work is not a thing anyone should have to announce in public, and the
+  first line of an invoice request is the company name. `docs/COMMERCIAL.md` names an address
+  instead, and asks for the two things an invoice needs: the country and how many people use the
+  board.
+
+### Fixed
+
+- **The install section described a question the wizard never asks.** It said the wizard asks
+  *where* to put the Claude Code skills. There is no choice of place — the path is
+  `~/.claude/skills` — and the question is whether to install them at all; it installs two, the
+  board's own skill and the deploy one. Both READMEs now describe what the program actually does.
+
 ## [1.6.2]
 
 ### Added

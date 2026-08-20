@@ -34,7 +34,7 @@ local-kanban            # setup wizard
 local-kanban start      # board at http://localhost:3100
 ```
 
-The wizard asks for the port, data directory, whether you want GitHub sync and where to install the Claude Code skills — every question has a default, so Enter-Enter-Enter is enough. It also writes `ecosystem.config.cjs` for autostart under [pm2](https://pm2.keymetrics.io/).
+The wizard asks for the port, the data directory, whether you want GitHub sync, and whether to install the two Claude Code skills — the board's own and the deploy one — into `~/.claude/skills`. Every question has a default, so Enter-Enter-Enter is enough. It also writes `ecosystem.config.cjs` for autostart under [pm2](https://pm2.keymetrics.io/).
 
 `local-kanban start` takes `--port <N>` and `--data <dir>`. Data lives in `~/.local-kanban` by default, outside the package directory, so updating the package never touches your board.
 
