@@ -18,14 +18,14 @@ Personal use, studies, hobby projects and non-profits: free, and please keep it 
 
 ## Getting an invoice
 
-Accounting rarely pays without a document, so ask for one:
+Accounting rarely pays without a document, so ask for one: write to
+**thedanielmarkoff@gmail.com** and say
 
-- open an issue titled **Commercial support** in this repository and say which country the company
-  is in and how many people use the board;
-- if it cannot happen in public, say so in the issue and the conversation moves off GitHub.
+- which country the company is in,
+- how many people use the board.
 
-You get an invoice your accounting can process. If you would like the company listed as a supporter
-in the README, say so and it gets added.
+An invoice comes back that your accounting can process. If you would like the company listed as a
+supporter in the README, say so and it gets added.
 
 ## What this is not
 
