@@ -411,7 +411,7 @@ async function renderSection(sec) {
       + `<div class="set-row"><span class="set-lab">${tr('Code version')}<small id="about-ver">…</small></span><span class="about-fresh" id="about-fresh"></span></div>`
       + `<div class="set-row"><span class="set-lab"><span id="about-branch-lab">${tr('Board updates')}</span><small id="about-upd-sub">…</small></span><span class="about-fresh" id="about-upd"></span></div>`
       + `<div class="set-row hidden" id="about-dev-row"><span class="set-lab">${tr('dev branch')}<small id="about-dev-sub">…</small></span><span class="about-fresh" id="about-dev"></span></div>`
-      + `<div class="set-row"><span class="set-lab">${tr('Check for updates')}<small>${tr('re-read branch state from GitHub')}</small></span><button class="btn-ghost" id="about-recheck">${tr('Check')}</button></div>`
+      + `<div class="set-row"><span class="set-lab">${tr('Check for updates')}<small id="about-recheck-sub">${tr('re-read branch state from GitHub')}</small></span><button class="btn-ghost" id="about-recheck">${tr('Check')}</button></div>`
       + `<div class="set-row"><span class="set-lab">${tr('Reload the page')}<small>${tr('re-read the board code right now')}</small></span><button class="btn-ghost" id="about-reload">${tr('Reload now')}</button></div>`
       + `<div class="set-row"><span class="set-lab">${tr('Using the board at work')}<small>${tr('free for everyone, nothing switched off — if it earns you money, $12 a year per person keeps it maintained')}</small></span>`
       + `<a class="btn-ghost" href="https://github.com/lamaohub/local-kanban/blob/main/docs/COMMERCIAL.md" target="_blank" rel="noopener noreferrer">${tr('Read')}</a></div>`
@@ -432,12 +432,21 @@ async function renderSection(sec) {
       const el = $('about-upd'); const sub = $('about-upd-sub'); const lab = $('about-branch-lab');
       if (!el || !sub) return;
       if (lab && u.branch) lab.textContent = `${tr('Branch')} ${u.branch}`;
+      const rs = $('about-recheck-sub');
+      if (rs && about?.packaged) rs.textContent = tr('ask the npm registry again');
+      const what = about?.packaged ? tr('version') : tr('commit');
+      const same = about?.packaged ? tr('matches the registry') : tr('matches GitHub');
       const tag = u.tag ? ` · ${tr('tag')} ${u.tag}` : '';
       el.className = 'about-fresh';
-      if (u.update_available === null) { el.textContent = ''; sub.textContent = tr('cannot check (no network, or the repo is private/not a git checkout)'); }
-      else if (u.update_available) { el.textContent = `⟳ ${tr('update available')} ${u.local} → ${u.remote}`; el.classList.add('stale-ver'); sub.textContent = `${tr('commit')} ${u.local}${tag} · ${updateHint()}`; }
+      if (u.update_available === null) {
+        el.textContent = '';
+        sub.textContent = about?.packaged
+          ? tr('cannot check — the npm registry did not answer')
+          : tr('cannot check (no network, or the repo is private/not a git checkout)');
+      }
+      else if (u.update_available) { el.textContent = `⟳ ${tr('update available')} ${u.local} → ${u.remote}`; el.classList.add('stale-ver'); sub.textContent = `${what} ${u.local}${tag} · ${updateHint()}`; }
       else if (u.dev?.ahead) { el.textContent = `${tr('in dev')} ${u.dev.ahead} ${commitsWord(u.dev.ahead)} ${tr('awaiting release')}`; el.classList.add('stale-ver'); sub.textContent = `${tr('commit')} ${u.local}${tag} · ${tr('matches GitHub')}`; }
-      else { el.textContent = tr('up to date ✓'); sub.textContent = `${tr('commit')} ${u.local}${tag} · ${tr('matches GitHub')}`; }
+      else { el.textContent = tr('up to date ✓'); sub.textContent = `${what} ${u.local}${tag} · ${same}`; }
       const row = $('about-dev-row'); const dEl = $('about-dev'); const dSub = $('about-dev-sub');
       if (!row || !u.dev) return;
       row.classList.remove('hidden');
@@ -461,7 +470,9 @@ async function renderSection(sec) {
     try {
       const a = await api('GET', '/api/about');
       about = a;
-      $('about-ver').textContent = a.commit ? `${tr('commit')} ${a.commit}` : (a.app_mtime ? `app.js ${tr('from')} ${fmtDbTime(a.app_mtime.slice(0, 19).replace('T', ' '))}` : '—');
+      $('about-ver').textContent = (a.packaged && a.version) ? `v${a.version}`
+        : a.commit ? `${tr('commit')} ${a.commit}`
+        : (a.app_mtime ? `app.js ${tr('from')} ${fmtDbTime(a.app_mtime.slice(0, 19).replace('T', ' '))}` : '—');
       const up = a.uptime;
       const upStr = up >= 86400 ? `${Math.floor(up / 86400)}${tr('d')} ${Math.floor((up % 86400) / 3600)}${tr('h')}` : up >= 3600 ? `${Math.floor(up / 3600)}${tr('h')} ${Math.floor((up % 3600) / 60)}${tr('m')}` : `${Math.floor(up / 60)}${tr('m')}`;
       $('about-diag').innerHTML = [

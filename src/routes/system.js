@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { statSync, readdirSync, createReadStream, createWriteStream, existsSync, rmSync } from 'node:fs';
+import { statSync, readdirSync, createReadStream, createWriteStream, existsSync, readFileSync, rmSync } from 'node:fs';
 import { join, dirname, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -13,6 +13,41 @@ import { langOverride, ghOwnerEnv, ghRepoEnv } from '../config.js';
 import { snapshot, TASK_SELECT } from './tasks.js';
 
 const ROOT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+const PACKAGED = ROOT_DIR.split(sep).includes('node_modules');
+
+let selfPkgCache;
+function selfPkg() {
+  if (selfPkgCache === undefined) {
+    try {
+      const { name, version } = JSON.parse(readFileSync(join(ROOT_DIR, 'package.json'), 'utf8'));
+      selfPkgCache = name && version ? { name, version } : null;
+    } catch { selfPkgCache = null; }
+  }
+  return selfPkgCache;
+}
+
+export function isNewer(candidate, current) {
+  const nums = (v) => String(v).split('-')[0].split('.').map((n) => parseInt(n, 10) || 0);
+  const [a, b] = [nums(candidate), nums(current)];
+  for (let i = 0; i < 3; i++) if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0);
+  return false;
+}
+
+export async function registryCheck() {
+  const pkg = selfPkg();
+  if (!pkg) return null;
+  try {
+    const res = await fetch(`https://registry.npmjs.org/${encodeURIComponent(pkg.name)}/latest`, {
+      headers: { 'User-Agent': 'local-kanban', Accept: 'application/vnd.npm.install-v1+json' },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return null;
+    const remote = (await res.json())?.version;
+    if (!remote) return null;
+    return { update_available: isNewer(remote, pkg.version), local: pkg.version, remote, branch: null, tag: null, dev: null };
+  } catch { return null; }
+}
 
 const UPLOAD_FLOOR = 64 * 1024 * 1024;
 function uploadLimit() {
@@ -169,17 +204,20 @@ export default async function systemRoutes(app) {
       tasks: db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n,
       projects: db.prepare('SELECT COUNT(*) AS n FROM projects').get().n,
       node: process.version,
-      packaged: ROOT.split(sep).includes('node_modules'),
+      packaged: PACKAGED,
+      version: selfPkg()?.version || null,
     };
   });
 
-  let updCache = { at: 0, data: null };
+  const CACHE_OK_MS = 3600000;
+  const CACHE_FAIL_MS = 60000;
+  let updCache = { at: 0, ttl: 0, data: null };
   let lastForced = 0;
   const FORCE_EVERY = 15000;
   app.get('/api/update-check', async (req) => {
     const forced = Boolean(req.query?.refresh) && Date.now() - lastForced >= FORCE_EVERY;
     if (forced) lastForced = Date.now();
-    if (!forced && updCache.data && Date.now() - updCache.at < 3600000) return updCache.data;
+    if (!forced && updCache.data && Date.now() - updCache.at < updCache.ttl) return updCache.data;
     const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
     const git = (args) => new Promise((resolve) => {
       execFile('git', args, { cwd: ROOT, timeout: 8000 }, (err, out) => resolve(err ? null : out.trim()));
@@ -224,7 +262,8 @@ export default async function systemRoutes(app) {
         }
       }
     } catch {  }
-    updCache = { at: Date.now(), data };
+    if (data.update_available === null) data = (await registryCheck()) || data;
+    updCache = { at: Date.now(), ttl: data.update_available === null ? CACHE_FAIL_MS : CACHE_OK_MS, data };
     return data;
   });
 

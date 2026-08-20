@@ -3,6 +3,23 @@
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [semantic versioning](https://semver.org/).
 
+## [1.7.0]
+
+### Added
+
+- **An npm install can finally see that a new version is out.** The update check asked git for the
+  current commit, and a package installed from npm has no git repository — so it answered "cannot
+  check" every single time, and the About section showed the date of a frontend file instead of a
+  version number. The board now reports its own version and compares it against the registry:
+  *update available 1.6.3 → 1.7.0*, next to the command that installs it. A clone keeps the git
+  check, which says more: the commit, the tag, and how many commits are waiting for a release.
+
+### Fixed
+
+- **A failed update check no longer sticks around for an hour.** The answer was cached for an hour
+  whether it worked or not, so a single lost request kept the board saying "cannot check" long after
+  the network came back. A failure is now remembered for a minute; a real answer still for an hour.
+
 ## [1.6.3]
 
 ### Changed
