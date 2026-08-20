@@ -39,7 +39,7 @@ export async function registryCheck() {
   if (!pkg) return null;
   try {
     const res = await fetch(`https://registry.npmjs.org/${encodeURIComponent(pkg.name)}/latest`, {
-      headers: { 'User-Agent': 'local-kanban', Accept: 'application/vnd.npm.install-v1+json' },
+      headers: { 'User-Agent': 'local-kanban', Accept: 'application/json' },
       signal: AbortSignal.timeout(8000),
     });
     if (!res.ok) return null;

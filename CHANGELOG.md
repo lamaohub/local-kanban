@@ -3,6 +3,16 @@
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [semantic versioning](https://semver.org/).
 
+## [1.7.1]
+
+### Fixed
+
+- **The update check asked the registry in a format it answers with an error.** The request carried
+  npm's abbreviated media type, which is meant for a package document and not for the `/latest`
+  address: the registry replies 406 with an empty body, so an npm install was told "cannot check"
+  again. A cached response let it through often enough to look like a flaky network — it was not.
+  Caught on a clean install of 1.7.0 minutes after it was published.
+
 ## [1.7.0]
 
 ### Added

@@ -59,6 +59,16 @@ test('a registry that does not answer says "cannot check" instead of guessing', 
   assert.equal(await registryCheck(), null, 'an answer without a version is not an answer');
 });
 
+test('the registry is asked in a format it actually answers on', async () => {
+  const seen = [];
+  globalThis.fetch = async (url, opts) => { seen.push({ url: String(url), accept: opts?.headers?.Accept }); return { ok: true, json: async () => ({ version: '99.0.0' }) }; };
+  await registryCheck();
+  assert.equal(seen.length, 1);
+  assert.match(seen[0].url, /registry\.npmjs\.org\/local-kanban\/latest$/, 'the registry address changed');
+  assert.doesNotMatch(String(seen[0].accept), /install-v1/,
+    'the abbreviated media type is back — /latest answers 406 with an empty body for it');
+});
+
 test('the git check still comes first, and the registry is only the fallback', async () => {
   const src = readFileSync(new URL('../src/routes/system.js', import.meta.url), 'utf8');
   assert.match(src, /if \(data\.update_available === null\) data = \(await registryCheck\(\)\) \|\| data;/,
