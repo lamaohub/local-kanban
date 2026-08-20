@@ -20,6 +20,10 @@ request, including from forks, and needs no secrets.
 
 Releases are cut from `main` and tagged `vX.Y.Z`; the tag is what publishes the package to npm.
 
+By sending a change you agree it can be included in the project and distributed under the project's
+licence, including a later one. The project is MIT today and there is no plan to change that — but a
+contribution that cannot be relicensed freezes the decision for everyone who comes after.
+
 ## The schema rule (the one rule that protects user data)
 
 Any change to the database schema **must** ship in the same commit with:

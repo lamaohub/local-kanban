@@ -1,0 +1,17 @@
+[
+  {
+    "slug": "my-app",
+    "name": "My App",
+    "path": "/absolute/path/to/my-app",
+    "server_path": "/srv/my-app",
+    "deploy_skill": "deploy",
+    "server": "deploy.example.com",
+    "pm2_services": ["my-app-web", "my-app-worker"],
+    "domain": "my-app.example.com",
+    "category": "Web"
+  },
+  {
+    "slug": "notes-bot",
+    "name": "Notes Bot"
+  }
+]

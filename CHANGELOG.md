@@ -3,6 +3,30 @@
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [semantic versioning](https://semver.org/).
 
+## [1.6.2]
+
+### Added
+
+- **A quiet ask for companies that use the board at work.** It stays MIT-licensed and free for
+  everyone — nothing is switched off, nothing to activate, and it still never contacts a server —
+  but if the board earns you money, $12 a year per person keeps it maintained. The ask is one line
+  in the README and one row in Settings → About, both pointing at `docs/COMMERCIAL.md`, which spells
+  out what this is and, just as plainly, what it is not: not a licence purchase, not a support
+  contract, and not a subscription that switches anything off when it lapses.
+
+### Fixed
+
+- **The bulk-registration script sent you to a file that does not exist.** `contrib/bootstrap.js`
+  loads a registry of projects from `contrib/seed-projects.json`, and when that file was missing it
+  told you to run `contrib/seed-from-panel.js` first — a script that is git-ignored and has never
+  been in the repository, as `contrib/README.md` says a few lines below. The directory is not part
+  of the published package, but it is part of the repository, so the first thing a reader of a fresh
+  clone was told to do could not be done at all. The message now names
+  `contrib/seed-projects.example.json`, which sits right next to the script: copy it, edit it, run
+  the script. Only `slug` and `name` are required, and a test keeps the example in step with the
+  fields the script actually reads — an example promising fields that are silently ignored is the
+  same broken promise, only quieter.
+
 ## [1.6.1]
 
 ### Fixed

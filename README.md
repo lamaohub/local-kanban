@@ -133,6 +133,12 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the dev setup, branch flow and the sc
 
 English is the source language of the interface; Russian comes as a translation. The board follows your system language and can be switched in **Settings → General** — a string with no translation yet stays English rather than leaking into the wrong locale.
 
+## Using it at work
+
+The board is MIT-licensed and free for everyone: nothing is switched off and there is nothing to
+activate. If it earns you money — inside a company, or on paid client work — $12 a year per person
+keeps it maintained. A request, not a rule: [docs/COMMERCIAL.md](docs/COMMERCIAL.md).
+
 ## License
 
 [MIT](LICENSE).

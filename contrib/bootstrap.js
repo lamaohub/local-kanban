@@ -7,7 +7,10 @@ import { db } from '../src/db.js';
 const SEED = join(dirname(fileURLToPath(import.meta.url)), 'seed-projects.json');
 
 if (!existsSync(SEED)) {
-  console.error('no seed-projects.json — run node contrib/seed-from-panel.js first');
+  console.error(`no seed-projects.json next to this script (${SEED}).\n`
+    + '  It is a JSON array of projects: copy contrib/seed-projects.example.json to\n'
+    + '  contrib/seed-projects.json and edit it. Only "slug" and "name" are required,\n'
+    + '  every other field is optional and can be filled in later from the board itself.');
   process.exit(1);
 }
 

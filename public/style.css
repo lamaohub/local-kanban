@@ -140,6 +140,7 @@ body {
   padding: 7px 12px; cursor: pointer; color: var(--muted); font: inherit;
 }
 .btn-ghost:hover { color: var(--text); }
+a.btn-ghost { text-decoration: none; }
 .btn-danger {
   background: none; border: 1px solid var(--border); border-radius: 7px;
   padding: 7px 10px; cursor: pointer; color: var(--danger);

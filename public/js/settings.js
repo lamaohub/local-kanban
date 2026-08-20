@@ -413,6 +413,8 @@ async function renderSection(sec) {
       + `<div class="set-row hidden" id="about-dev-row"><span class="set-lab">${tr('dev branch')}<small id="about-dev-sub">…</small></span><span class="about-fresh" id="about-dev"></span></div>`
       + `<div class="set-row"><span class="set-lab">${tr('Check for updates')}<small>${tr('re-read branch state from GitHub')}</small></span><button class="btn-ghost" id="about-recheck">${tr('Check')}</button></div>`
       + `<div class="set-row"><span class="set-lab">${tr('Reload the page')}<small>${tr('re-read the board code right now')}</small></span><button class="btn-ghost" id="about-reload">${tr('Reload now')}</button></div>`
+      + `<div class="set-row"><span class="set-lab">${tr('Using the board at work')}<small>${tr('free for everyone, nothing switched off — if it earns you money, $12 a year per person keeps it maintained')}</small></span>`
+      + `<a class="btn-ghost" href="https://github.com/lamaohub/local-kanban/blob/main/docs/COMMERCIAL.md" target="_blank" rel="noopener noreferrer">${tr('Read')}</a></div>`
       + `<div class="set-col"><span class="set-lab">${tr('Diagnostics')}</span><div class="bk-list" id="about-diag">…</div></div>`
       + `<div class="set-col"><span class="set-lab">${tr('Setup via Claude')}<small>${tr('copy and paste into Claude chat — it will run the setup and ask you questions')}</small></span>`
       + setupPromptBlockHTML() + '</div>';

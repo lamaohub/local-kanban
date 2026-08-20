@@ -53,6 +53,36 @@ test('the update hint matches how the board was installed', () => {
   }
 });
 
+test('the contrib bootstrap points at an example that exists and matches what it reads', () => {
+  const script = readFileSync(join(ROOT, 'contrib', 'bootstrap.js'), 'utf8');
+  assert.match(script, /seed-projects\.example\.json/,
+    'the missing-seed message stopped naming the example to copy');
+  assert.doesNotMatch(script, /seed-from-panel/,
+    'the message sends the reader to a file that is not in git again');
+
+  const example = join(ROOT, 'contrib', 'seed-projects.example.json');
+  assert.ok(existsSync(example), 'the example the message tells you to copy is missing');
+  const seed = JSON.parse(readFileSync(example, 'utf8'));
+  assert.ok(Array.isArray(seed) && seed.length, 'the example is a JSON array of projects');
+  for (const p of seed) assert.ok(p.slug && p.name, 'every example project carries the required slug and name');
+
+  const read = [...script.matchAll(/\w+: p\.(\w+)/g)].map((m) => m[1]);
+  for (const key of Object.keys(seed[0])) {
+    assert.ok(read.includes(key), `${key} is in the example but bootstrap.js never reads it`);
+  }
+});
+
+test('the request to support the project points at a page that exists', () => {
+  assert.ok(existsSync(join(ROOT, 'docs', 'COMMERCIAL.md')), 'docs/COMMERCIAL.md is missing');
+  for (const name of ['README.md', 'README.ru.md']) {
+    assert.match(readFileSync(join(ROOT, name), 'utf8'), /\(docs\/COMMERCIAL\.md\)/,
+      `${name} no longer links to the page that explains it`);
+  }
+  const settings = readFileSync(join(ROOT, 'public', 'js', 'settings.js'), 'utf8');
+  assert.match(settings, /github\.com\/[\w.-]+\/[\w.-]+\/blob\/main\/docs\/COMMERCIAL\.md/,
+    'the About section stopped linking to the page');
+});
+
 test('the install check asks for the page, not only for the API', () => {
   for (const wf of ['test.yml', 'publish.yml']) {
     const yml = readFileSync(new URL(`../.github/workflows/${wf}`, import.meta.url), 'utf8');
