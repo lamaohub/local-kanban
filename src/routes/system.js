@@ -34,6 +34,36 @@ export function isNewer(candidate, current) {
   return false;
 }
 
+export function updatePlan({ packaged, name, root }) {
+  if (!packaged) return { how: 'git', cmd: 'git', args: ['pull', '--ff-only'] };
+  const args = ['install', '-g', `${name}@latest`];
+  const prefix = globalPrefixOf(root, name);
+  if (prefix) args.push('--prefix', prefix);
+  return { how: 'npm', cmd: 'npm', args };
+}
+
+export function globalPrefixOf(root, name) {
+  const parts = String(root || '').split(sep).filter(Boolean);
+  const tail = String(name || '').split('/').filter(Boolean);
+  if (!tail.length || parts.length < tail.length + 3) return null;
+  const own = parts.slice(-tail.length).join('/') === tail.join('/');
+  const cut = parts.slice(0, -tail.length);
+  if (!own || cut.at(-1) !== 'node_modules' || cut.at(-2) !== 'lib') return null;
+  const prefix = cut.slice(0, -2).join(sep);
+  return prefix ? (root.startsWith(sep) ? sep + prefix : prefix) : null;
+}
+
+export function failureReason(output, fallback = '') {
+  const lines = String(output || '').split('\n').map((l) => l.trim()).filter(Boolean);
+  const marked = lines.filter((l) => /^(error\b|fatal:|npm error)/i.test(l));
+  const pick = marked.length ? marked.reduce((a, b) => (b.length > a.length ? b : a)) : lines.at(-1);
+  return (pick || fallback || '').slice(0, 300);
+}
+
+export function restartMode(env = process.env) {
+  return env.pm_id !== undefined && env.pm_id !== '' ? 'pm2' : 'manual';
+}
+
 export async function registryCheck() {
   const pkg = selfPkg();
   if (!pkg) return null;
@@ -265,6 +295,32 @@ export default async function systemRoutes(app) {
     if (data.update_available === null) data = (await registryCheck()) || data;
     updCache = { at: Date.now(), ttl: data.update_available === null ? CACHE_FAIL_MS : CACHE_OK_MS, data };
     return data;
+  });
+
+  let updateRunning = null;
+  app.post('/api/update', async (req, reply) => {
+    if (updateRunning) return reply.code(409).send({ error: 'an update is already running' });
+    const pkg = selfPkg();
+    const plan = updatePlan({ packaged: PACKAGED, name: pkg?.name, root: ROOT_DIR });
+    if (plan.how === 'npm' && !pkg?.name) return reply.code(500).send({ error: 'cannot tell which package to update' });
+
+    const run = new Promise((resolve) => {
+      execFile(plan.cmd, plan.args, { cwd: ROOT_DIR, timeout: 300000, maxBuffer: 4 * 1024 * 1024 },
+        (err, out, errOut) => resolve({ err, text: `${out || ''}${errOut || ''}`.trim() }));
+    });
+    updateRunning = run;
+    let res;
+    try { res = await run; } finally { if (updateRunning === run) updateRunning = null; }
+
+    const output = res.text.slice(-2000);
+    if (res.err) {
+      logError('server', 'update', `update via ${plan.how} failed: ${res.err.message}`, output);
+      return reply.code(500).send({ ok: false, how: plan.how, output, error: failureReason(output, res.err.message) });
+    }
+    const restart = restartMode();
+    if (restart === 'pm2') setTimeout(() => process.exit(0), 400).unref();
+    updCache = { at: 0, ttl: 0, data: null };
+    return { ok: true, how: plan.how, restart, output };
   });
 
   app.get('/api/lang', () => ({ lang: uiLang(), source: langOverride() ? 'env' : 'kv' }));

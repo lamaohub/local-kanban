@@ -3,6 +3,19 @@
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [semantic versioning](https://semver.org/).
 
+## [1.8.0]
+
+### Added
+
+- **The board updates itself from a button.** Until now the update line told you a command to type
+  in a terminal; now there is a button next to it, and it appears only when an update is actually
+  waiting. It installs the update the way the board was installed — `git pull` for a clone,
+  `npm install -g` for a package — and installs it into the copy that is running, not into whatever
+  prefix the machine happens to prefer. Under pm2 the board then restarts itself and the tab
+  reloads on its own; started by hand, it says plainly that the update is in place and the board
+  has to be started again, because promising a restart nobody can perform would leave you looking
+  at a dead tab.
+
 ## [1.7.1]
 
 ### Fixed

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
 
-let app, tmp, isNewer, registryCheck, pkg;
+let app, tmp, isNewer, registryCheck, updatePlan, restartMode, globalPrefixOf, failureReason, pkg;
 const realFetch = globalThis.fetch;
 
 before(async () => {
@@ -15,7 +15,7 @@ before(async () => {
   const { ghState } = await import('../src/sync/worker.js');
   ghState.available = false; ghState.lastCheck = Date.now() + 1e9;
   const system = await import('../src/routes/system.js');
-  ({ isNewer, registryCheck } = system);
+  ({ isNewer, registryCheck, updatePlan, restartMode, globalPrefixOf, failureReason } = system);
   pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   app = Fastify();
   await app.register(system.default);
@@ -73,4 +73,49 @@ test('the git check still comes first, and the registry is only the fallback', a
   const src = readFileSync(new URL('../src/routes/system.js', import.meta.url), 'utf8');
   assert.match(src, /if \(data\.update_available === null\) data = \(await registryCheck\(\)\) \|\| data;/,
     'the fallback to the registry is gone, or it stopped being a fallback');
+});
+
+test('a clone updates itself with git, a package with npm', () => {
+  assert.deepEqual(updatePlan({ packaged: false }), { how: 'git', cmd: 'git', args: ['pull', '--ff-only'] });
+  const plan = updatePlan({ packaged: true, name: 'local-kanban', root: '/opt/npm/lib/node_modules/local-kanban' });
+  assert.equal(plan.how, 'npm');
+  assert.deepEqual(plan.args, ['install', '-g', 'local-kanban@latest', '--prefix', '/opt/npm']);
+});
+
+test('the update lands where the running copy lives, not in whatever prefix the machine prefers', () => {
+  assert.equal(globalPrefixOf('/opt/npm/lib/node_modules/local-kanban', 'local-kanban'), '/opt/npm');
+  assert.equal(globalPrefixOf('/opt/npm/lib/node_modules/@acme/board', '@acme/board'), '/opt/npm');
+  assert.equal(globalPrefixOf('/tmp/x/node_modules/local-kanban', 'local-kanban'), null);
+  assert.equal(globalPrefixOf('', 'local-kanban'), null);
+  const plan = updatePlan({ packaged: true, name: 'local-kanban', root: '/tmp/x/node_modules/local-kanban' });
+  assert.equal(plan.args.includes('--prefix'), false, 'a made-up prefix is worse than none');
+});
+
+test('the board promises a restart only where something can restart it', () => {
+  assert.equal(restartMode({ pm_id: '3' }), 'pm2');
+  assert.equal(restartMode({}), 'manual', 'started by hand — nobody brings it back');
+  assert.equal(restartMode({ pm_id: '' }), 'manual', 'an empty pm_id is not pm2');
+});
+
+test('the process exits only in the pm2 case, and only after the answer is sent', () => {
+  const src = readFileSync(new URL('../src/routes/system.js', import.meta.url), 'utf8');
+  assert.match(src, /if \(restart === 'pm2'\) setTimeout\(\(\) => process\.exit\(0\), \d+\)/,
+    'the board either stopped restarting itself, or started exiting where nothing will bring it back');
+  assert.match(src, /if \(updateRunning\) return reply\.code\(409\)/,
+    'two updates can run at once again — they race for the same tree');
+});
+
+test('a failed update says why, not just that it failed', () => {
+  const git = ['Updating a..b', 'From /tmp/origin', '   a..b  dev -> origin/dev',
+    'error: Your local changes to the following files would be overwritten by merge:',
+    '\tdocs/API.md', 'Please commit your changes or stash them before you merge.', 'Aborting'].join('\n');
+  assert.match(failureReason(git), /^error: Your local changes/);
+
+  const npm = ['npm error code EACCES', 'npm error syscall mkdir', 'npm error errno -13',
+    "npm error Error: EACCES: permission denied, mkdir '/usr/local/lib/node_modules/local-kanban'",
+    'npm error A complete log of this run can be found in: /home/user/.npm/_logs/x.log'].join('\n');
+  assert.match(failureReason(npm), /EACCES: permission denied/);
+
+  assert.equal(failureReason('first\nsecond'), 'second', 'with nothing marked as an error, the last line is the best guess');
+  assert.equal(failureReason('', 'the command failed'), 'the command failed', 'empty output still owes the caller a reason');
 });
