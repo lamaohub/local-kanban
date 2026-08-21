@@ -119,3 +119,10 @@ test('a failed update says why, not just that it failed', () => {
   assert.equal(failureReason('first\nsecond'), 'second', 'with nothing marked as an error, the last line is the best guess');
   assert.equal(failureReason('', 'the command failed'), 'the command failed', 'empty output still owes the caller a reason');
 });
+
+test('the update endpoints are documented where integrators look', () => {
+  const api = readFileSync(new URL('../docs/API.md', import.meta.url), 'utf8');
+  assert.match(api, /`POST \/api\/update`/, 'the endpoint that updates the board is undocumented');
+  assert.match(api, /restart: "pm2"/, 'the doc no longer explains what the caller must do after an update');
+  assert.match(api, /update_available: null/, 'the doc stopped warning that "cannot check" is not "up to date"');
+});

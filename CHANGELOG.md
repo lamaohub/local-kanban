@@ -3,6 +3,17 @@
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [semantic versioning](https://semver.org/).
 
+## [1.8.1]
+
+### Changed
+
+- **The documentation caught up with the update button.** `POST /api/update` was missing from
+  `docs/API.md` altogether, and both READMEs still sent you to a terminal for something the board
+  now does itself. The API reference explains what the endpoint answers and — the part that is easy
+  to get wrong — that `update_available: null` means the check could not be made, not that you are
+  up to date. `ARCHITECTURE.md` states the rule behind it: the board never promises a restart it
+  cannot perform.
+
 ## [1.8.0]
 
 ### Added

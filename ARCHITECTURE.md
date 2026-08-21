@@ -20,6 +20,10 @@ These are deliberate and predate most of the features. Changes that break them n
   the driver moves that range in both directions — check the low end too, not just the new high one.
 - **Synchronous database access.** better-sqlite3 is sync by design; route handlers read and write
   the DB directly, with no connection pool or async layer to reason about.
+- **The board never promises a restart it cannot perform.** It can install its own update, but
+  picking it up means starting again — and only a process manager can do that. Under pm2 the board
+  exits and comes back; started by hand it says the update is in place and stops there, because a
+  button that silently kills the board is worse than a button that asks for one more step.
 - **Token-efficient CLI.** `kb` exists so an AI agent can drive the board with one line of output
   per action instead of scraping a web page. Terse output is a feature.
 

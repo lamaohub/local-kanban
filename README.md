@@ -80,6 +80,12 @@ Set the owner and issues repo in **Settings → Sync** on the board (or env `KB_
 
 From npm:
 
+The board checks for a new version itself and offers a button in **Settings → About** — it installs
+the update the way the board was installed and, under a process manager, restarts and reloads the
+page on its own. Started by hand, it says the update is in place and waits for you to start it again.
+
+By hand, from an npm install:
+
 ```bash
 npm install -g local-kanban@latest
 local-kanban skills          # refresh the Claude Code skills — they are a copy, not a link

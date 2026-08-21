@@ -17,7 +17,7 @@ The server binds to **127.0.0.1 only** and has **no authentication**: the local 
 ## Stability contract
 
 **Public (kept backward-compatible):** `/api/tasks*`, `/api/projects` (GET/POST/PATCH), `/api/events` and its event types, `/api/sync` (GET), `/api/stats`.
-**Internal (may change without notice):** `/api/dashboard`, `/api/about`, `/api/update-check`, `/api/backups`, `/api/horizons`, wizard helpers (`/api/projects/clone`, `/api/projects/server-git`, `/api/projects/demo`), `/api/sync/*` mutations.
+**Internal (may change without notice):** `/api/dashboard`, `/api/about`, `/api/update-check`, `/api/update`, `/api/backups`, `/api/horizons`, wizard helpers (`/api/projects/clone`, `/api/projects/server-git`, `/api/projects/demo`), `/api/sync/*` mutations.
 
 New fields may be added to responses at any time — parse leniently.
 
@@ -125,6 +125,18 @@ Types: `task.created`, `task.updated` (includes `prev_status` on real transition
 
 - `GET /api/sync` — queue state: `{pending, failed, errors, paused, configured, owner, repo, source, last_ok}`. `configured: false` = local-only mode.
 - `GET /api/stats` — weekly done/time counters.
+- `GET /api/about` — `{version, commit, app_mtime, db_path, db_size, uptime, tasks, projects, node, packaged}`.
+  `packaged: true` means the code runs from an npm install rather than a clone; `version` comes from
+  `package.json`.
+- `GET /api/update-check` — `{update_available, local, remote, branch, tag, dev}`. A clone is compared
+  by commit against GitHub, an npm install by version against the registry, and `update_available: null`
+  means the check could not be made — never that you are up to date. `?refresh=1` skips the cache
+  (throttled to once per 15s).
+- `POST /api/update` — installs the waiting update the way the board was installed (`git pull` for a
+  clone, `npm install -g` for a package) and answers `{ok, how, restart, output}`. `restart: "pm2"`
+  means the board is exiting on purpose and something will bring it back, so poll until it answers
+  again; `restart: "manual"` means the update is in place but starting the board again is up to the
+  person. A failure answers 500 with `error` — the line worth showing — plus the full `output`.
 
 ## Examples
 
