@@ -3,6 +3,16 @@
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [semantic versioning](https://semver.org/).
 
+## [1.8.4]
+
+### Changed
+
+- **Releases publish themselves again, and carry provenance.** Publishing is now authorised by a
+  trusted publisher — npm trusts this repository's release workflow directly — instead of a token
+  that the account's two-factor policy would not accept anyway. Every version from here on is signed
+  by the build that produced it, which anyone can check on the package page; 1.6.3 through 1.8.3 were
+  published by hand and carry no such signature.
+
 ## [1.8.3]
 
 ### Added
