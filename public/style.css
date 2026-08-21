@@ -614,7 +614,7 @@ body.dragging-board .col-add-ghost { display: none; }
 .modal-actions { display: flex; gap: 8px; }
 
 .modal.wiz { width: 400px; max-width: calc(100vw - 32px); }
-.wiz-body { display: flex; flex-direction: column; gap: 9px; max-height: 62vh; overflow-y: auto; }
+.wiz-body { display: flex; flex-direction: column; gap: 9px; max-height: calc(100vh - 190px); overflow-y: auto; }
 .wiz-type {
   display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 10px 12px;
   border: 1px solid var(--border); border-radius: 9px; background: var(--panel); cursor: pointer; font: inherit; color: var(--text);
@@ -1037,6 +1037,7 @@ body.dragging-board .col-add-ghost { display: none; }
   box-shadow: 0 10px 28px var(--shadow); padding: 4px; max-height: 280px; overflow-y: auto;
 }
 .kbsel.open .kbsel-list { display: block; }
+.kbsel-list.up { top: auto; bottom: calc(100% + 4px); }
 .kbsel-search { position: sticky; top: -4px; background: var(--panel); padding: 2px 2px 5px; margin: -4px -4px 2px; z-index: 1; }
 .kbsel-search-input {
   width: 100%; box-sizing: border-box; padding: 6px 9px; font: inherit; font-size: 12.5px;

@@ -6,7 +6,7 @@ import { renderChaos } from './chaos.js';
 import { $, ALL, CALENDAR, CHAOS, DASH, HIDDEN_SECTIONS, HORIZON, LANG, SETTINGS, SIDEBAR_SECTIONS, api, esc, ic, seg, setupPrompt, state, tr } from './core.js';
 import { renderDashboard } from './dash.js';
 import { renderCalendar, renderHorizon } from './horizon.js';
-import { openProjectSettings, renderProjectSettings, skillOptions } from './project.js';
+import { openProjectSettings, renderProjectSettings, skillOptions, deploySkills } from './project.js';
 import { openSettingsModal, plural, setSetting, syncLangToServer } from './settings.js';
 import { copyText, refresh, showView } from './sse.js';
 
@@ -442,17 +442,17 @@ function openProjectWizard() {
     if (folderSel) {
       const options = [
         ...(type === 'local' ? [{ value: '', label: tr('no folder — just a task list') }] : []),
-        ...folders.map((f) => ({ value: f, label: `${tr('folder')} ${f} (${state.folders.root || '~'})` })),
-        { value: '__manual__', label: tr('another folder on this computer…') },
+        { value: '__manual__', label: tr('a folder on this computer') },
         ...(type === 'localserver' ? [{ value: '__clone__', label: tr('clone from a git URL…') }] : []),
       ];
       const onFolderChange = (v) => {
         $('wiz-path-row').classList.toggle('hidden', v !== '__manual__');
         $('wiz-browser').classList.add('hidden');
         $('wiz-git').classList.toggle('hidden', v !== '__clone__');
-        if (v === '__manual__') openFolderPicker();
       };
-      buildSelect(folderSel, { value: type === 'local' ? '' : (options[0]?.value ?? ''), options, onChange: onFolderChange });
+      const start = type === 'local' ? '' : '__manual__';
+      buildSelect(folderSel, { value: start, options, onChange: onFolderChange });
+      onFolderChange(start);
       $('wiz-browse').onclick = openFolderPicker;
     }
     const skillHost = $('wiz-skill');
@@ -462,8 +462,7 @@ function openProjectWizard() {
         .then((info) => {
           if (!$('wiz-skill')) return;
           const generic = info.generic_deploy_skill || GENERIC_DEPLOY;
-          const own = new Set(info.own_skills || []);
-          const deployish = (info.items || []).filter((s) => s.name === generic || s.used_by?.length || own.has(s.name));
+          const deployish = deploySkills(info);
           const has = deployish.some((s) => s.name === generic);
           buildSelect($('wiz-skill'), { value: has ? generic : '', options: skillOptions(generic, deployish) });
         })
@@ -498,8 +497,6 @@ function openProjectWizard() {
           btn.textContent = tr('cloning…');
           const r = await api('POST', '/api/projects/clone', { url, name: slug });
           body.path = r.path;
-        } else if (mode) {
-          body.path = `${state.folders.root}/${mode}`;
         }
         if (type === 'local') body.category = 'Local';
       }

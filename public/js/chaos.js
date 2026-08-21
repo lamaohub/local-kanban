@@ -1,6 +1,6 @@
 
 import { buildSelect, selVal } from './board.js';
-import { $, LABEL_COLORS, LABEL_SELECTABLE, PRI_ICON, PRI_LEVELS, api, esc, ic, state, tr } from './core.js';
+import { $, api, esc, ic, LABEL_COLORS, LABEL_SELECTABLE, popoverPlacement, PRI_ICON, PRI_LEVELS, state, tr } from './core.js';
 import { openDrawer, openLightbox, uploadAttachment } from './drawer.js';
 import { loadProjects } from './sidebar.js';
 import { autoGrow, refresh, titleOr } from './sse.js';
@@ -159,11 +159,8 @@ function chaosPopover(anchor, items, onPick) {
   pop.innerHTML = items.map((o) => `<div class="chaos-pop-opt${o.active ? ' active' : ''}" data-v="${esc(String(o.v))}">${o.html}</div>`).join('');
   document.body.appendChild(pop);
   const r = anchor.getBoundingClientRect();
-  const margin = 10;
-  const below = innerHeight - r.bottom - margin;
-  const above = r.top - margin;
-  const openUp = below < 200 && above > below;
-  pop.style.maxHeight = `${Math.max(120, (openUp ? above : below) - 5)}px`;
+  const { openUp, maxHeight } = popoverPlacement(anchor);
+  pop.style.maxHeight = `${maxHeight}px`;
   let left = r.left;
   if (left + pop.offsetWidth > innerWidth - 8) left = innerWidth - pop.offsetWidth - 8;
   const top = openUp ? (r.top - pop.offsetHeight - 5) : (r.bottom + 5);

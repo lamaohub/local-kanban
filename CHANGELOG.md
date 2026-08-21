@@ -3,6 +3,35 @@
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [semantic versioning](https://semver.org/).
 
+## [1.10.0]
+
+### Fixed
+
+- **The deploy skill list only offers deploy skills.** On the project settings page it listed
+  everything in your skills folder — on a real board that is ten entries when one of them is an
+  actual deploy skill, and the board's own skill sits among them, offered as a way to deploy your
+  project. The wizard already filtered this; the project page did not, because the rule lived in
+  the wizard's file. Now both ask the same function. A skill your project already points at stays
+  in the list even if it falls outside the filter, so saving never quietly clears the field.
+
+- **A dropdown opens where there is room.** The custom select always opened downward with a fixed
+  height, so near the bottom of a dialog its list ran past the dialog and under the buttons. It now
+  measures the space first — against the dialog, not just the window — and flips up when it has to.
+  The rule already existed for the picker menus; there is one copy of it now instead of one and a
+  half.
+
+- **The Add project form is not cut off.** Its body was capped at 62% of the window height while
+  the dialog itself used far less, so on a 800px-tall window the last field lost 37 pixels and the
+  hint under it never showed at all. The cap now follows the space actually available.
+
+- **Picking the project folder starts with the folder, not with a list.** The step opened with
+  every unregistered folder in your projects directory — 31 entries on a real machine, eight of
+  them visible — and the path field and "Choose…" button were hidden behind an entry near the
+  bottom of that same list. The list now holds only the three modes (a folder, no folder, clone
+  from git), and the folder one — the default — shows the path field and the button straight away.
+  The system dialog no longer opens by itself just because you reached the step. Your project
+  folders are still one click away: the built-in browser opens on that very directory.
+
 ## [1.9.0]
 
 ### Added

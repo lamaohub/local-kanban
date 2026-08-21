@@ -83,7 +83,7 @@ const I18N_RU = {
   'All projects': 'Все проекты',
   'all self-healed': 'всё починилось само',
   'All set!': 'Готово!',
-  'another folder on this computer…': 'другая папка на этом компьютере…',
+  'a folder on this computer': 'папка на этом компьютере',
   'Appearance': 'Оформление',
   'applies after page reload': 'применится после перезагрузки страницы',
   'Archive': 'Архивировать',
@@ -757,6 +757,15 @@ export const state = {
 };
 
 export function $(id) { return document.getElementById(id); }
+
+export function popoverPlacement(anchor, { flipBelow = 200, floor = 120, gap = 10 } = {}) {
+  const r = anchor.getBoundingClientRect();
+  const box = anchor.closest?.('.modal')?.getBoundingClientRect();
+  const below = Math.min(window.innerHeight, box ? box.bottom : Infinity) - r.bottom - gap;
+  const above = r.top - Math.max(0, box ? box.top : 0) - gap;
+  const openUp = below < flipBelow && above > below;
+  return { openUp, maxHeight: Math.max(floor, (openUp ? above : below) - 5) };
+}
 
 export const SETUP_PROMPT = {
   ru: `Запусти скилл kanban.

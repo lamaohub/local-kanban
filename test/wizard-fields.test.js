@@ -22,8 +22,35 @@ test('the option list lives in one place, not two', () => {
 });
 
 test('the wizard offers deploy skills, not everything in the skills folder', () => {
-  assert.match(sidebar, /s\.name === generic \|\| s\.used_by\?\.length \|\| own\.has\(s\.name\)/,
+  assert.match(project, /s\.name === generic \|\| s\.used_by\?\.length \|\| own\.has\(s\.name\)/,
+    'the rule that tells a deploy skill from the rest of the skills folder is gone');
+  assert.match(sidebar, /deploySkills\(info\)/,
     'the wizard would offer the board skill and every unrelated skill as a way to deploy');
+});
+
+test('the project page filters deploy skills the same way the wizard does', () => {
+  assert.match(project, /export function deploySkills\(/, 'the shared filter is gone');
+  assert.match(project, /buildSkillSelect\(p, deploySkills\(info\)\)/,
+    'the project page is back to listing every skill in the skills folder, the board own skill included');
+  assert.doesNotMatch(project, /buildSkillSelect\(p, info\.items/, 'the unfiltered list came back');
+  assert.match(project, /if \(cur && !names\.includes\(cur\)\) names\.unshift\(cur\)/,
+    'a project pointing at a skill outside the filter would silently lose it on save');
+});
+
+test('a dropdown opens where there is room, and the wizard form is not cut off', () => {
+  const core = readFileSync(new URL('../public/js/core.js', import.meta.url), 'utf8');
+  const board = readFileSync(new URL('../public/js/board.js', import.meta.url), 'utf8');
+  const chaos = readFileSync(new URL('../public/js/chaos.js', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+  assert.match(core, /export function popoverPlacement\(/, 'the placement rule is gone');
+  assert.match(core, /closest\?\.\('\.modal'\)/,
+    'placement stopped measuring against the dialog — a list fits the window and still leaves the modal');
+  assert.match(board, /popoverPlacement\(host\.querySelector\('\.kbsel-btn'\)\)/,
+    'buildSelect no longer checks for room and can reopen under the modal buttons');
+  assert.match(chaos, /popoverPlacement\(anchor\)/, 'chaosPopover grew its own copy of the rule again');
+  assert.match(css, /\.kbsel-list\.up \{[^}]*bottom: calc\(100% \+ 4px\)/, 'a dropdown can no longer flip up');
+  assert.doesNotMatch(css, /\.wiz-body \{[^}]*max-height: \d+vh/,
+    'the wizard body is back to a fixed share of the window, which cut the last field off');
 });
 
 test('the sync section warns that tasks leave the machine, and that the repo should be private', () => {

@@ -1,5 +1,5 @@
 
-import { $, ALL, ALL_STATUSES, DONE_LIMIT, LABEL_COLORS, LABEL_SELECTABLE, PRI_ICON, PRI_LEVELS, api, esc, ic, noteUnsaved, seg, state, tr } from './core.js';
+import { $, ALL, ALL_STATUSES, api, DONE_LIMIT, esc, ic, LABEL_COLORS, LABEL_SELECTABLE, noteUnsaved, popoverPlacement, PRI_ICON, PRI_LEVELS, seg, state, tr } from './core.js';
 import { markKbCursor, openCardMenu, openDrawer, openDrawerNew, setKbCursor, statusOptionList } from './drawer.js';
 import { getSetting, plural } from './settings.js';
 import { styledAlert, styledConfirm } from './sidebar.js';
@@ -676,6 +676,9 @@ export function buildSelect(host, opts) {
     if (host.classList.contains('open')) { close(); return; }
     document.querySelectorAll('.kbsel.open').forEach((el) => { if (el !== host) el.classList.remove('open'); });
     host.classList.add('open');
+    const place = popoverPlacement(host.querySelector('.kbsel-btn'));
+    list.classList.toggle('up', place.openUp);
+    list.style.maxHeight = `${place.maxHeight}px`;
     if (opts.search) { const si = host.querySelector('.kbsel-search-input'); si.value = ''; filterOpts(''); setTimeout(() => si.focus(), 0); }
     setTimeout(() => document.addEventListener('click', outside), 0);
   };

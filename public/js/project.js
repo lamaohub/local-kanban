@@ -124,6 +124,12 @@ export async function renderProjectSettings(force) {
   renderDocs(p);
 }
 
+export function deploySkills(info) {
+  const generic = info?.generic_deploy_skill || 'deploy';
+  const own = new Set(info?.own_skills || []);
+  return (info?.items || []).filter((s) => s.name === generic || s.used_by?.length || own.has(s.name));
+}
+
 export function skillOptions(cur, list) {
   const names = list ? list.map((s) => s.name) : (cur ? [cur] : []);
   if (cur && !names.includes(cur)) names.unshift(cur);
@@ -145,7 +151,7 @@ async function loadSkillOptions(p) {
   try { info = await api('GET', '/api/skills', null, { quiet: true }); }
   catch { return; }
   if (!$('ps-skill') || $('projset').dataset.slug !== p.slug) return;
-  buildSkillSelect(p, info.items || []);
+  buildSkillSelect(p, deploySkills(info));
 }
 
 async function renderDocs(p) {
