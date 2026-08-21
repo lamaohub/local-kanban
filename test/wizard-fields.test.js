@@ -53,6 +53,22 @@ test('a dropdown opens where there is room, and the wizard form is not cut off',
     'the wizard body is back to a fixed share of the window, which cut the last field off');
 });
 
+test('the server fields say whether they mean the server or this computer', () => {
+  const core = readFileSync(new URL('../public/js/core.js', import.meta.url), 'utf8');
+  for (const [src, name] of [[sidebar, 'the wizard'], [project, 'the project page']]) {
+    assert.match(src, /about the SERVER|the server this project is deployed to/i,
+      `${name} stopped saying that these fields are about the server, not about this computer`);
+    assert.match(src, /~\/\.ssh\/config/, `${name} no longer says where the ssh user, port and key come from`);
+  }
+  const prose = [...sidebar.matchAll(/placeholder="([^"$][^"]*)"/g)].map((m) => m[1])
+    .filter((t) => /\s(for|or|in|the)\s/.test(t));
+  assert.deepEqual(prose, [], `these placeholders bypass tr() and stay English on a Russian board: ${prose}`);
+  assert.match(project, /id="ps-spath"[^>]*placeholder=/, 'the server path field on the project page lost its example again');
+  for (const key of ['where the project lies ON THE SERVER', 'user, port and key come from your ~/.ssh/config']) {
+    assert.ok(core.includes(key), `no Russian translation for: ${key}`);
+  }
+});
+
 test('the sync section warns that tasks leave the machine, and that the repo should be private', () => {
   const settings = readFileSync(new URL('../public/js/settings.js', import.meta.url), 'utf8');
   assert.match(settings, /make it private/i, 'the privacy warning next to the sync fields is gone');

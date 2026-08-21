@@ -3,6 +3,18 @@
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [semantic versioning](https://semver.org/).
 
+## [1.11.0]
+
+### Fixed
+
+- **The server fields say which side they are about.** "SSH host" and "Server path" gave no hint of
+  whether they meant this computer or the machine you deploy to — a fair question, and the owner of
+  the board asked it. A line above the group now answers it, and the ssh field says the part you
+  cannot guess: the user, port and key come from your own `~/.ssh/config`, and the board stores no
+  secrets. Leaving them empty is a normal state — the project simply stays local. On a Russian board
+  the ssh placeholder used to stay in English, and the server path field on the project page had no
+  example at all.
+
 ## [1.10.0]
 
 ### Fixed

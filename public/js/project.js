@@ -32,7 +32,7 @@ export async function renderProjectSettings(force) {
   if (!host) return;
   const p = currentProject();
   if (!p) {
-    host.innerHTML = `<div class="ps-wrap"><div class="muted">${tr('This project is gone')}</div></div>`;
+  host.innerHTML = `<div class="ps-wrap"><div class="muted">${tr('This project is gone')}</div></div>`;
     return;
   }
   if (!force && host.dataset.slug === p.slug) return;
@@ -65,12 +65,18 @@ export async function renderProjectSettings(force) {
 
     <div class="panel ps-block">
       <div class="panel-h">${tr('Paths & deploy')}</div>
+      <div class="kbh-note muted">${tr('“Local folder” is on this computer. The rest describes the server this project is deployed to — leave it empty and the project simply stays local.')}</div>
       <div class="ps-grid">
-        <label class="pp-field">${tr('Local folder')}<input id="ps-path" type="text" placeholder="${tr('/path/to/the/folder — may be empty')}"></label>
-        <label class="pp-field">${tr('Domain')}<input id="ps-domain" type="text"></label>
-        <label class="pp-field">${tr('SSH host')}<input id="ps-server" type="text" placeholder="${tr('ssh alias or address')}"></label>
-        <label class="pp-field">${tr('Server path')}<input id="ps-spath" type="text"></label>
-        <label class="pp-field">${tr('pm2 processes (comma-separated)')}<input id="ps-pm2" type="text"></label>
+        <label class="pp-field">${tr('Local folder')}<input id="ps-path" type="text" placeholder="${tr('/path/to/the/folder — may be empty')}">
+          <small class="ps-hint">${tr('where the code lies on this computer — Claude edits and commits it here')}</small></label>
+        <label class="pp-field">${tr('Domain')}<input id="ps-domain" type="text" placeholder="example.com">
+          <small class="ps-hint">${tr('opened after a deploy to check the site answers')}</small></label>
+        <label class="pp-field">${tr('SSH host')}<input id="ps-server" type="text" placeholder="${tr('ssh alias or address')}">
+          <small class="ps-hint">${tr('the board runs ssh &lt;host&gt; — user, port and key come from your ~/.ssh/config, no secrets are kept here')}</small></label>
+        <label class="pp-field">${tr('Server path')}<input id="ps-spath" type="text" placeholder="/var/www/my-project">
+          <small class="ps-hint">${tr('where the project lies ON THE SERVER — the deploy pulls into this folder')}</small></label>
+        <label class="pp-field">${tr('pm2 processes (comma-separated)')}<input id="ps-pm2" type="text" placeholder="my-api, my-web">
+          <small class="ps-hint">${tr('restarted on the server after a deploy; empty means there is nothing to restart')}</small></label>
         <div class="pp-field">${tr('Deploy skill')}
           <div class="kbsel" id="ps-skill"></div>
           <small class="ps-hint" id="ps-skill-hint">${tr('the skill Claude follows to ship this project; “deploy” is the shared one. A new one is created in Settings → Skills.')}</small>

@@ -420,10 +420,12 @@ function openProjectWizard() {
           <button type="button" class="btn-ghost" id="wiz-browse">${tr('Choose…')}</button>
         </div>
         <div id="wiz-browser" class="wiz-browser hidden"></div>
-        <input id="wiz-git" type="text" class="hidden" placeholder="git@github.com:me/repo.git or https://…"></div>`;
+        <input id="wiz-git" type="text" class="hidden" placeholder="git@github.com:me/repo.git"></div>`;
     }
     if (withServer) {
-      html += `<label class="pp-field">${tr('SSH host')}<input id="wiz-server" type="text" placeholder="host for ssh (keys in ~/.ssh/config)"></label>`
+      html += `<div class="kbh-note muted">${tr('Below is about the SERVER this project is deployed to, not about this computer. Empty means the project stays local.')}</div>`
+        + `<label class="pp-field">${tr('SSH host')}<input id="wiz-server" type="text" placeholder="${tr('ssh alias or address')}">`
+        + `<small class="pp-hint">${tr('user, port and key come from your ~/.ssh/config — the board keeps no secrets')}</small></label>`
         + `<label class="pp-field">${tr('Server path')}<input id="wiz-spath" type="text" placeholder="/var/www/my-project"></label>`
         + `<label class="pp-field">${tr('pm2 processes (comma-separated)')}<input id="wiz-pm2" type="text" placeholder="my-api, my-web"></label>`
         + `<label class="pp-field">${tr('Domain (to verify after deploy)')}<input id="wiz-domain" type="text" placeholder="example.com"></label>`

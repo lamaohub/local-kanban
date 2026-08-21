@@ -614,7 +614,7 @@ body.dragging-board .col-add-ghost { display: none; }
 .modal-actions { display: flex; gap: 8px; }
 
 .modal.wiz { width: 400px; max-width: calc(100vw - 32px); }
-.wiz-body { display: flex; flex-direction: column; gap: 9px; max-height: calc(100vh - 190px); overflow-y: auto; }
+.wiz-body { display: flex; flex-direction: column; gap: 8px; max-height: calc(100vh - 170px); overflow-y: auto; }
 .wiz-type {
   display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 10px 12px;
   border: 1px solid var(--border); border-radius: 9px; background: var(--panel); cursor: pointer; font: inherit; color: var(--text);
