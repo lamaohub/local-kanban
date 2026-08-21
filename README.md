@@ -163,6 +163,24 @@ The board is MIT-licensed and free for everyone: nothing is switched off and the
 activate. If it earns you money — inside a company, or on paid client work — $12 a year per person
 keeps it maintained. A request, not a rule: [docs/COMMERCIAL.md](docs/COMMERCIAL.md).
 
+## What's planned
+
+Not promises — the direction the project is heading:
+
+- **More interface languages.** English and Russian are in. The dictionary is a single file, so a
+  translation is a pull request rather than a project.
+- **Working with Codex** the way it works with Claude Code. The `kb` CLI and the status model are not
+  Claude-specific; only the skills are.
+- **Plugins, done properly** — a manifest with declared permissions and a sandboxed frame, not a
+  checkbox that trusts whatever you installed. A plugin that can read your tasks and reach the
+  network has to say so before it runs.
+- **A board a team can share** — over one local network to start with, without turning a local-first
+  tool into a service that needs accounts, a server and someone to run it.
+- **Attaching a CLI straight to the board**, so an agent can be driven from the card instead of from
+  a terminal window next to it.
+
+And the long one: get the dream job at Anthropic and build this for everyone.
+
 ## License
 
 [MIT](LICENSE).

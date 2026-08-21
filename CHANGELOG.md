@@ -3,6 +3,15 @@
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [semantic versioning](https://semver.org/).
 
+## [1.8.3]
+
+### Added
+
+- **A roadmap at the end of both READMEs.** More interface languages, working with Codex the way it
+  works with Claude Code, plugins with declared permissions instead of blind trust, a board a team
+  can share over a local network, and attaching a CLI straight to a card. Plans, not promises —
+  written down so the direction is visible to anyone deciding whether to build on this.
+
 ## [1.8.2]
 
 ### Added
