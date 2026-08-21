@@ -1,10 +1,12 @@
 
-import { renderBoard } from './board.js';
+import { buildSelect, renderBoard, selVal } from './board.js';
+
+const GENERIC_DEPLOY = 'deploy';
 import { renderChaos } from './chaos.js';
 import { $, ALL, CALENDAR, CHAOS, DASH, HIDDEN_SECTIONS, HORIZON, LANG, SETTINGS, SIDEBAR_SECTIONS, api, esc, ic, seg, setupPrompt, state, tr } from './core.js';
 import { renderDashboard } from './dash.js';
 import { renderCalendar, renderHorizon } from './horizon.js';
-import { openProjectSettings, renderProjectSettings } from './project.js';
+import { openProjectSettings, renderProjectSettings, skillOptions } from './project.js';
 import { openSettingsModal, plural, setSetting, syncLangToServer } from './settings.js';
 import { copyText, refresh, showView } from './sse.js';
 
@@ -344,6 +346,37 @@ function wizSlugify(name) {
     .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
 }
 
+export async function openFolderPicker() {
+  const box = $('wiz-browser'); const input = $('wiz-path');
+  if (!box || !input) return;
+  try {
+    const r = await api('POST', '/api/fs/pick', null, { quiet: true });
+    if (r?.path) { input.value = r.path; box.classList.add('hidden'); return; }
+    if (r?.cancelled) return;
+  } catch {  }
+  await renderFolderBrowser(input.value.trim() || undefined);
+}
+
+export async function renderFolderBrowser(path) {
+  const box = $('wiz-browser');
+  if (!box) return;
+  let d;
+  const ask = (p) => api('GET', p ? `/api/fs?path=${encodeURIComponent(p)}` : '/api/fs', null, { quiet: true });
+  try { d = await ask(path); } catch { try { d = await ask(); } catch { return; } }
+  const child = (n) => (d.path.endsWith('/') ? d.path + n : `${d.path}/${n}`);
+  box.classList.remove('hidden');
+  box.innerHTML = `<div class="wizb-path">${esc(d.path)}</div>`
+    + '<div class="wizb-list">'
+    + (d.parent ? `<div class="wizb-row wizb-up" data-p="${esc(d.parent)}">..</div>` : '')
+    + d.dirs.map((n) => `<div class="wizb-row" data-p="${esc(child(n))}">${esc(n)}</div>`).join('')
+    + (d.dirs.length ? '' : `<div class="wizb-note">${tr('no folders inside')}</div>`)
+    + (d.truncated ? `<div class="wizb-note">${tr('too many folders to show them all')}</div>` : '')
+    + '</div>'
+    + `<button type="button" class="btn-primary wizb-pick">${tr('Use this folder')}</button>`;
+  box.querySelectorAll('.wizb-row').forEach((r) => { r.onclick = () => renderFolderBrowser(r.dataset.p); });
+  box.querySelector('.wizb-pick').onclick = () => { $('wiz-path').value = d.path; box.classList.add('hidden'); };
+}
+
 function openProjectWizard() {
   document.getElementById('proj-wizard')?.remove();
   const overlay = document.createElement('div');
@@ -380,14 +413,13 @@ function openProjectWizard() {
     let html = `<label class="pp-field">${tr('Project name')}<input id="wiz-name" type="text" placeholder="my project"></label>`
       + `<label class="pp-field">${tr('Key (slug + task prefix)')}<input id="wiz-slug" type="text" placeholder="my-project"></label>`;
     if (withLocal) {
-      html += `<div class="pp-field">${tr('Project key')}
-        <select id="wiz-folder" class="wiz-select">
-          ${type === 'local' ? `<option value="">${tr('no folder — just a task list')}</option>` : ''}
-          ${folders.map((f) => `<option value="${esc(f)}">${tr('folder')} ${esc(f)} (${esc(state.folders.root || '~')})</option>`).join('')}
-          <option value="__manual__">${tr('enter the folder path…')}</option>
-          ${type === 'localserver' ? `<option value="__clone__">${tr('clone from a git URL…')}</option>` : ''}
-        </select>
-        <input id="wiz-path" type="text" class="hidden" placeholder="/full/path/to/the/folder">
+      html += `<div class="pp-field">${tr('Project folder')}
+        <div id="wiz-folder"></div>
+        <div id="wiz-path-row" class="wiz-path-row hidden">
+          <input id="wiz-path" type="text" placeholder="/full/path/to/the/folder">
+          <button type="button" class="btn-ghost" id="wiz-browse">${tr('Choose…')}</button>
+        </div>
+        <div id="wiz-browser" class="wiz-browser hidden"></div>
         <input id="wiz-git" type="text" class="hidden" placeholder="git@github.com:me/repo.git or https://…"></div>`;
     }
     if (withServer) {
@@ -395,7 +427,8 @@ function openProjectWizard() {
         + `<label class="pp-field">${tr('Server path')}<input id="wiz-spath" type="text" placeholder="/var/www/my-project"></label>`
         + `<label class="pp-field">${tr('pm2 processes (comma-separated)')}<input id="wiz-pm2" type="text" placeholder="my-api, my-web"></label>`
         + `<label class="pp-field">${tr('Domain (to verify after deploy)')}<input id="wiz-domain" type="text" placeholder="example.com"></label>`
-        + `<label class="pp-field">${tr('Custom deploy skill')}<input id="wiz-skill" type="text"></label>`;
+        + `<div class="pp-field">${tr('Deploy skill')}<div id="wiz-skill"></div>`
+        + `<small class="pp-hint">${tr('your own deploy skill is created and edited in Settings → Skills')}</small></div>`;
     }
     body.innerHTML = html;
     actions.innerHTML = `<button class="btn-primary wiz-create">${tr('Create')}</button><button class="btn-ghost wiz-back">${tr('‹ Back')}</button>`;
@@ -407,10 +440,34 @@ function openProjectWizard() {
     nameEl.oninput = () => { if (!slugTouched) slugEl.value = wizSlugify(nameEl.value); };
     const folderSel = $('wiz-folder');
     if (folderSel) {
-      folderSel.onchange = () => {
-        $('wiz-path').classList.toggle('hidden', folderSel.value !== '__manual__');
-        $('wiz-git').classList.toggle('hidden', folderSel.value !== '__clone__');
+      const options = [
+        ...(type === 'local' ? [{ value: '', label: tr('no folder — just a task list') }] : []),
+        ...folders.map((f) => ({ value: f, label: `${tr('folder')} ${f} (${state.folders.root || '~'})` })),
+        { value: '__manual__', label: tr('another folder on this computer…') },
+        ...(type === 'localserver' ? [{ value: '__clone__', label: tr('clone from a git URL…') }] : []),
+      ];
+      const onFolderChange = (v) => {
+        $('wiz-path-row').classList.toggle('hidden', v !== '__manual__');
+        $('wiz-browser').classList.add('hidden');
+        $('wiz-git').classList.toggle('hidden', v !== '__clone__');
+        if (v === '__manual__') openFolderPicker();
       };
+      buildSelect(folderSel, { value: type === 'local' ? '' : (options[0]?.value ?? ''), options, onChange: onFolderChange });
+      $('wiz-browse').onclick = openFolderPicker;
+    }
+    const skillHost = $('wiz-skill');
+    if (skillHost) {
+      buildSelect(skillHost, { value: GENERIC_DEPLOY, options: skillOptions(GENERIC_DEPLOY, null) });
+      api('GET', '/api/skills', null, { quiet: true })
+        .then((info) => {
+          if (!$('wiz-skill')) return;
+          const generic = info.generic_deploy_skill || GENERIC_DEPLOY;
+          const own = new Set(info.own_skills || []);
+          const deployish = (info.items || []).filter((s) => s.name === generic || s.used_by?.length || own.has(s.name));
+          const has = deployish.some((s) => s.name === generic);
+          buildSelect($('wiz-skill'), { value: has ? generic : '', options: skillOptions(generic, deployish) });
+        })
+        .catch(() => {  });
     }
     actions.querySelector('.wiz-create').onclick = () => wizCreate(type).catch((e) => err(e.message));
     nameEl.focus();
@@ -428,10 +485,12 @@ function openProjectWizard() {
     btn.disabled = true;
     try {
       if (type !== 'server') {
-        const mode = $('wiz-folder')?.value ?? '';
+        const mode = $('wiz-folder') ? selVal($('wiz-folder')) : '';
         if (mode === '__manual__') {
           const p = $('wiz-path').value.trim();
           if (!p) throw new Error(tr('give the folder path'));
+          try { await api('GET', `/api/fs?path=${encodeURIComponent(p)}`, null, { quiet: true }); }
+          catch { throw new Error(`${tr('no such folder on this computer')}: ${p}`); }
           body.path = p;
         } else if (mode === '__clone__') {
           const url = $('wiz-git').value.trim();
@@ -454,7 +513,8 @@ function openProjectWizard() {
         if (pm2.length) body.pm2_services = JSON.stringify(pm2);
         const domain = $('wiz-domain').value.trim();
         if (domain) body.domain = domain;
-        body.deploy_skill = $('wiz-skill').value.trim() || 'deploy';
+        const skill = selVal($('wiz-skill'));
+        if (skill) body.deploy_skill = skill;
       }
       if (type === 'server') {
         btn.textContent = tr('checking git on the server…');

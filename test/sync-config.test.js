@@ -73,7 +73,7 @@ test('the validator rejects a leading hyphen and dot segments', async () => {
   assert.equal((await post({ repo: '-a/b' })).statusCode, 400, 'a repo segment with a leading hyphen');
   assert.equal((await post({ repo: 'a/b/c' })).statusCode, 400, 'an extra segment in repo');
 
-  const ok = await post({ owner: 'lamaohub', repo: 'lamaohub/tickets' });
+  const ok = await post({ owner: 'octocat', repo: 'octocat/hello-world' });
   assert.equal(ok.statusCode, 200, 'normal values still pass');
 
   await post({ owner: '', repo: '' });

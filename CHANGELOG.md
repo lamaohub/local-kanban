@@ -3,6 +3,51 @@
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [semantic versioning](https://semver.org/).
 
+## [1.9.0]
+
+### Added
+
+- **You can pick the project folder instead of typing it.** The wizard offered a list of folders
+  from one directory and, past that, a text field where a typo produced a project pointing nowhere.
+  There is now a "Choose…" button: it opens the real system folder dialog, and where there isn't one
+  (a server with no desktop, another OS) the board falls back to its own folder browser. Either way
+  the path is checked before the project is created. A browser page cannot read an absolute path by
+  itself, so the board's own server does the looking.
+
+- **The sync section explains itself now.** It used to be two empty fields and no context: what
+  this does, whether it applies to one project or the whole board, and what exactly ends up on
+  GitHub. It now says all of it before you type anything, including the part that matters most:
+  the repository holds the issues for the whole board, you should make it private, and task titles,
+  descriptions and comments are copied there in full. That is the only feature here that sends
+  anything off your machine, so it says so out loud.
+
+- **The deploy skill is picked from a list now.** The wizard asked for a "custom deploy skill" as
+  free text, which assumes you already know which skills you have, and an empty field quietly turned
+  into the shared `deploy` skill: nobody chose it, it was simply assigned. The list shows deploy
+  skills rather than everything in your skills folder, says where to make your own, and "not set"
+  stays a real answer, because a project without a deploy is a normal project.
+
+### Fixed
+
+- **The folder dropdown was drawn by the operating system**, which ignores everything about how the
+  rest of the board looks. It now uses the same control as every other dropdown here. The field was
+  also labelled "Project key", the same words as the task-key field two rows above it.
+
+- **A failed update now ends with the command to run.** The most common way an update fails is that
+  the global package directory is not writable, and there is nothing the board can do about that
+  by itself — only you, in a terminal, can. It used to answer with the path to an npm debug log,
+  because it picked the longest line npm marked as an error, and npm's longest lines are its own
+  stack frames and file paths. It now names the cause and shows the exact command it just tried,
+  with the same `--prefix`, so the one you run updates the copy that is actually running.
+
+- **The update dialog says what happens to your work.** Two things you cannot check for yourself:
+  your tasks are untouched, because they live in the data directory apart from the code, and — for
+  an npm install — the Claude Code skills are a *copy*, so after updating they need
+  `local-kanban skills`. Without that Claude keeps reading the instructions from the old version
+  and gives no sign of it.
+
+- **The sync section links to the README**, where the same thing is written out in more detail.
+
 ## [1.8.4]
 
 ### Changed

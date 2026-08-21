@@ -124,18 +124,21 @@ export async function renderProjectSettings(force) {
   renderDocs(p);
 }
 
+export function skillOptions(cur, list) {
+  const names = list ? list.map((s) => s.name) : (cur ? [cur] : []);
+  if (cur && !names.includes(cur)) names.unshift(cur);
+  const known = new Set((list || []).map((s) => s.name));
+  return [{ value: '', label: tr('not set — no deploy') }, ...names.map((name) => ({
+    value: name,
+    label: name === 'deploy' ? `${name} · ${tr('shared')}` : (list && !known.has(name) ? `${name} · ${tr('not installed')}` : name),
+  }))];
+}
+
 function buildSkillSelect(p, list) {
   const host = $('ps-skill');
   if (!host) return;
   const cur = p.deploy_skill || '';
-  const names = list ? list.map((s) => s.name) : (cur ? [cur] : []);
-  if (cur && !names.includes(cur)) names.unshift(cur);
-  const known = new Set((list || []).map((s) => s.name));
-  const options = [{ value: '', label: tr('not set — no deploy') }, ...names.map((name) => ({
-    value: name,
-    label: name === 'deploy' ? `${name} · ${tr('shared')}` : (list && !known.has(name) ? `${name} · ${tr('not installed')}` : name),
-  }))];
-  buildSelect(host, { value: cur, options });
+  buildSelect(host, { value: cur, options: skillOptions(cur, list) });
 }
 async function loadSkillOptions(p) {
   let info;

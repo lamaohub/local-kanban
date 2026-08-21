@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { join, basename, resolve, sep } from 'node:path';
+import { homedir } from 'node:os';
 import { db, DATA_DIR, genPrefix, usedPrefixes, makePrefix, kvGet, kvSet, logError } from '../db.js';
 import { localRoot, panelUrl, panelInfo } from '../config.js';
 import { emit } from '../bus.js';
@@ -222,6 +223,47 @@ export default async function projectRoutes(app) {
   });
 
   app.get('/api/projects/folders', () => scanFolders());
+
+  const FS_LIMIT = 500;
+  app.get('/api/fs', (req, reply) => {
+    const raw = req.query?.path;
+    if (raw !== undefined && typeof raw !== 'string') return reply.code(400).send({ error: 'path: expected a string' });
+    const dir = raw ? resolve(String(raw).replace(/^~(?=$|\/)/, homedir())) : localRoot();
+    let st;
+    try { st = statSync(dir); } catch { return reply.code(404).send({ error: 'no such folder' }); }
+    if (!st.isDirectory()) return reply.code(400).send({ error: 'not a folder' });
+    let names;
+    try { names = readdirSync(dir, { withFileTypes: true }); }
+    catch (e) { return reply.code(403).send({ error: `cannot read the folder: ${e.code || e.message}` }); }
+    const dirs = names.filter((d) => d.isDirectory() && !d.name.startsWith('.')).map((d) => d.name).sort();
+    const parent = resolve(dir, '..');
+    return {
+      path: dir,
+      parent: parent === dir ? null : parent,
+      dirs: dirs.slice(0, FS_LIMIT),
+      truncated: dirs.length > FS_LIMIT,
+      home: homedir(),
+      root: localRoot(),
+    };
+  });
+
+  const PICKERS = {
+    darwin: ['osascript', ['-e', 'tell application "System Events" to activate', '-e', 'POSIX path of (choose folder with prompt "Choose the project folder")']],
+    linux: ['zenity', ['--file-selection', '--directory', '--title=Choose the project folder']],
+  };
+  app.post('/api/fs/pick', async (req, reply) => {
+    const spec = PICKERS[process.platform];
+    if (!spec) return reply.code(501).send({ error: `no folder dialog on ${process.platform}` });
+    const [cmd, args] = spec;
+    const res = await new Promise((done) => {
+      execFile(cmd, args, { timeout: 180000 }, (err, out, errOut) => done({ err, out: String(out || '').trim(), errOut: String(errOut || '') }));
+    });
+    if (res.err) {
+      if (!res.out) return { path: null, cancelled: true };
+      return reply.code(500).send({ error: res.errOut.trim() || res.err.message });
+    }
+    return { path: res.out || null, cancelled: !res.out };
+  });
 
   app.post('/api/projects/folders', (req, reply) => {
     const raw = req.body?.name;

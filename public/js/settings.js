@@ -257,6 +257,15 @@ async function renderSection(sec) {
     });
   } else if (sec === 'sync') {
     body.innerHTML = `<div class="sm-h">${tr('GitHub sync')}</div>`
+      + `<div class="sync-about">`
+      + `<p>${tr('The board can mirror its tasks to GitHub: every task becomes an issue, and each project gets its own Projects v2 board. Handy when someone else needs to see the work, or when you want the history somewhere besides this machine.')}</p>`
+      + `<p>${tr('One repository for the whole board, not one per project. Create it yourself first, and make it private: task titles, descriptions and comments are copied there in full. This is the only thing on this board that leaves your machine.')}</p>`
+      + `<p>${tr('The mirror is one-way: the board writes to GitHub and never reads back. Turning it off is emptying these fields.')}</p>`
+      + `<p class="muted">${tr('Needs the gh CLI, signed in with the project scope:')}</p>`
+      + '<pre class="onb-code">gh auth login &amp;&amp; gh auth refresh -s project</pre>'
+      + `<p class="muted">${tr('Without that scope an issue is still created, but the card never lands on the Projects board.')}</p>`
+      + `<p class="muted"><a href="https://github.com/lamaohub/local-kanban#github-sync-optional" target="_blank" rel="noopener noreferrer">${tr('The same in the README, in more detail')}</a></p>`
+      + `</div>`
       + `<div class="set-col"><span class="set-lab">${tr('Owner and issues repository')}<small id="sync-cfg-hint">${tr('empty — sync is off, the board runs locally')}</small></span>`
       + `<div class="sync-cfg-row"><input type="text" id="sync-owner" placeholder="${tr('owner (GitHub user)')}"><input type="text" id="sync-repo" placeholder="${tr('owner/repo for issues')}"><button class="btn-ghost" id="sync-cfg-save">${tr('Save')}</button></div></div>`
       + `<div class="set-row"><span class="set-lab" id="set-sync">…<small id="set-sync-last"></small></span><button class="btn-ghost" id="set-sync-retry">${tr('Retry failed')}</button></div>`
@@ -412,6 +421,8 @@ async function renderSection(sec) {
       + `<div class="set-row upd-row"><span class="set-lab"><span id="about-branch-lab">${tr('Board updates')}</span><small id="about-upd-sub">…</small></span>`
       + `<span class="about-upd-side"><span class="about-fresh" id="about-upd"></span>`
       + `<button class="btn-ghost hidden" id="about-do-upd">${tr('Install the update')}</button></span></div>`
+      + `<div class="set-col hidden" id="about-upd-fail"><span class="set-lab">${tr('Run it yourself')}<small>${tr('the board is not allowed to do this — the command is the same one it just tried')}</small></span>`
+      + '<pre class="onb-code" id="about-upd-cmd"></pre></div>'
       + `<div class="set-row hidden" id="about-dev-row"><span class="set-lab">${tr('dev branch')}<small id="about-dev-sub">…</small></span><span class="about-fresh" id="about-dev"></span></div>`
       + `<div class="set-row"><span class="set-lab">${tr('Check for updates')}<small id="about-recheck-sub">${tr('re-read branch state from GitHub')}</small></span><button class="btn-ghost" id="about-recheck">${tr('Check')}</button></div>`
       + `<div class="set-row"><span class="set-lab">${tr('Reload the page')}<small>${tr('re-read the board code right now')}</small></span><button class="btn-ghost" id="about-reload">${tr('Reload now')}</button></div>`
@@ -467,9 +478,19 @@ async function renderSection(sec) {
     api('GET', '/api/about').catch(() => null).then((a) => { about = a; })
       .then(() => api('GET', '/api/update-check')).then(renderUpd)
       .catch(() => { const s = $('about-upd-sub'); if (s) s.textContent = '—'; });
+    const showFailCmd = (cmd) => {
+      const wrap = $('about-upd-fail');
+      if (!wrap) return;
+      $('about-upd-cmd').textContent = cmd || '';
+      wrap.classList.toggle('hidden', !cmd);
+    };
     $('about-do-upd').onclick = async () => {
       const btn = $('about-do-upd'); const sub = $('about-upd-sub'); const el = $('about-upd');
-      if (!(await styledConfirm(tr('Update the board now? It will restart.')))) return;
+      const ask = [tr('Update the board now? It will restart.'),
+        tr('Your tasks are not touched: they live in the data directory, apart from the code.')];
+      if (about?.packaged) ask.push(`${tr('Afterwards refresh the skills Claude reads:')} local-kanban skills`);
+      if (!(await styledConfirm(ask.join('\n')))) return;
+      showFailCmd('');
       const label = btn.textContent;
       let phase = tr('installing…'); let sec = 0;
       const paint = () => { el.textContent = `${phase} ${sec}${tr('s')}`; };
@@ -483,10 +504,21 @@ async function renderSection(sec) {
         btn.textContent = label;
       };
       let r;
-      try { r = await api('POST', '/api/update', null, { quiet: true }); }
-      catch (err) { stop(tr('Did not work out'), true); sub.textContent = `${tr('the update did not go through')}: ${err.message || err}`; btn.disabled = false; return; }
-      if (!r?.ok) { stop(tr('Did not work out'), true); sub.textContent = `${tr('the update did not go through')}: ${(r?.output || '').split('\n').pop() || '—'}`; btn.disabled = false; return; }
-      if (r.restart !== 'pm2') { stop('', false); sub.textContent = tr('updated — start the board again to pick it up'); return; }
+      try {
+        r = await api('POST', '/api/update', null, { quiet: true });
+      } catch (err) {
+        stop(tr('Did not work out'), true);
+        sub.textContent = `${tr('the update did not go through')}: ${err.message || err}`;
+        showFailCmd(err.body?.cmd);
+        btn.disabled = false; return;
+      }
+      if (!r?.ok) { stop(tr('Did not work out'), true); sub.textContent = `${tr('the update did not go through')}: ${(r?.output || '').split('\n').pop() || '—'}`; showFailCmd(r?.cmd); btn.disabled = false; return; }
+      if (r.restart !== 'pm2') {
+        stop('', false);
+        sub.textContent = tr('updated — start the board again to pick it up')
+          + (about?.packaged ? ` · ${tr('and refresh the skills:')} local-kanban skills` : '');
+        return;
+      }
       phase = tr('restarting…'); sec = 0; paint();
       for (let i = 0; i < 60; i++) {
         await new Promise((ok) => setTimeout(ok, 1000));

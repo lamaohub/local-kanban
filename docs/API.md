@@ -136,7 +136,10 @@ Types: `task.created`, `task.updated` (includes `prev_status` on real transition
   clone, `npm install -g` for a package) and answers `{ok, how, restart, output}`. `restart: "pm2"`
   means the board is exiting on purpose and something will bring it back, so poll until it answers
   again; `restart: "manual"` means the update is in place but starting the board again is up to the
-  person. A failure answers 500 with `error` — the line worth showing — plus the full `output`.
+  person. A failure answers 500 with `error` — the line worth showing — plus the full `output` and
+  `cmd`, the exact command the board just tried. Show `cmd` to the person: the most common failure
+  is no write permission on the global package directory, and that is not something the board can
+  fix for itself.
 
 ## Examples
 

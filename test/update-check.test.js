@@ -120,6 +120,53 @@ test('a failed update says why, not just that it failed', () => {
   assert.equal(failureReason('', 'the command failed'), 'the command failed', 'empty output still owes the caller a reason');
 });
 
+test('a real npm permission failure names the cause, not the debug log', () => {
+  const npm = [
+    'npm error     at async [reifyPackages] (/opt/node/lib/node_modules/npm/node_modules/@npmcli/arborist/lib/arborist/reify.js:325:11)',
+    'npm error     at async Arborist.reify (/opt/node/lib/node_modules/npm/node_modules/@npmcli/arborist/lib/arborist/reify.js:142:5)',
+    'npm error   errno: -13,',
+    "npm error   code: 'EACCES',",
+    "npm error   syscall: 'rename',",
+    "npm error   path: '/usr/local/lib/node_modules/local-kanban',",
+    "npm error   dest: '/usr/local/lib/node_modules/.local-kanban-09BIK8wD'",
+    'npm error }',
+    'npm error',
+    'npm error The operation was rejected by your operating system.',
+    'npm error It is likely you do not have the permissions to access this file as the current user',
+    'npm notice New major version of npm available! 10.9.0 -> 12.0.2',
+    'npm error A complete log of this run can be found in: /opt/npm-cache/_logs/2026-08-21T16_41_53_985Z-debug-0.log',
+  ].join('\n');
+  const said = failureReason(npm);
+  assert.doesNotMatch(said, /A complete log of this run/, 'the path to a debug log is not a reason');
+  assert.doesNotMatch(said, /arborist/, 'a stack frame of npm itself is not a reason either');
+  assert.match(said, /permissions/, 'the one thing the person has to know is that it is about permissions');
+});
+
+test('a failed update hands back the command to run by hand', () => {
+  const src = readFileSync(new URL('../src/routes/system.js', import.meta.url), 'utf8');
+  assert.match(src, /cmd: \[plan\.cmd, \.\.\.plan\.args\]\.join\(' '\)/,
+    'the failure answer stopped carrying the command, so the person has nothing to run');
+  const front = readFileSync(new URL('../public/js/settings.js', import.meta.url), 'utf8');
+  assert.match(front, /showFailCmd\(err\.body\?\.cmd\)/, 'the tab stopped showing that command');
+  assert.match(front, /about-upd-cmd/, 'there is nowhere to show it anymore');
+  const core = readFileSync(new URL('../public/js/core.js', import.meta.url), 'utf8');
+  assert.match(core, /apiError\(data\.error \|\| res\.status, \{ status: res\.status, body: data \}\)/,
+    'the body of a refusal no longer reaches the caller, so `cmd` cannot get through');
+});
+
+test('the update dialog says what happens to tasks and to the skills', () => {
+  const front = readFileSync(new URL('../public/js/settings.js', import.meta.url), 'utf8');
+  assert.match(front, /Your tasks are not touched/, 'the dialog stopped promising that tasks survive');
+  assert.match(front, /Afterwards refresh the skills Claude reads:[\s\S]{0,80}local-kanban skills/,
+    'the packaged install is no longer told to refresh its copied skills');
+  assert.match(front, /and refresh the skills:[\s\S]{0,80}local-kanban skills/,
+    'the same reminder is gone from the line shown after a manual-restart update');
+  const core = readFileSync(new URL('../public/js/core.js', import.meta.url), 'utf8');
+  for (const key of ['Your tasks are not touched', 'Afterwards refresh the skills Claude reads:', 'Run it yourself']) {
+    assert.ok(core.includes(key), `no Russian translation for: ${key}`);
+  }
+});
+
 test('the update endpoints are documented where integrators look', () => {
   const api = readFileSync(new URL('../docs/API.md', import.meta.url), 'utf8');
   assert.match(api, /`POST \/api\/update`/, 'the endpoint that updates the board is undocumented');

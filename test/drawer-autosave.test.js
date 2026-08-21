@@ -35,8 +35,8 @@ test('renderBoard drops its reference to the previous generation of cards', () =
 test('api() reports the status code, so 404 is not confused with a dead server', () => {
   assert.match(core, /export function apiError\(/, 'apiError is gone from core.js');
   assert.match(core, /throw apiError\(e\.message, \{ offline: true \}\)/, 'a network failure no longer carries offline:true');
-  assert.match(core, /throw apiError\(data\.error \|\| res\.status, \{ status: res\.status \}\)/,
-    'an HTTP failure no longer carries its status code');
+  assert.match(core, /throw apiError\(data\.error \|\| res\.status, \{ status: res\.status, body: data \}\)/,
+    'an HTTP failure no longer carries its status code and body');
   assert.match(drawer, /e\?\.status === 404/, 'the drawer no longer treats only 404 as "the task is gone"');
 });
 

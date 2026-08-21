@@ -94,6 +94,8 @@ ln -s "$(pwd)/skills/deploy" ~/.claude/skills/deploy
 
 Set the owner and issues repo in **Settings → Sync** on the board (or env `KB_GH_OWNER` / `KB_GH_REPO`). Without them the board runs in local-only mode: no queue, no warnings. With them, every task becomes an issue and every project gets a `kb: <slug>` GitHub Project with matching columns. Sync is one-way (board → GitHub) and runs in the background.
 
+One repository holds the issues for the whole board, not one per project, and you create it yourself before filling the fields. **Make it private:** titles, descriptions and comments are copied there in full, and this is the only feature that sends anything off your machine. The `gh` CLI has to be signed in with the `project` scope (`gh auth login && gh auth refresh -s project`) - without that scope the issue is still created, but the card never appears on the Projects board, which is a confusing way to find out.
+
 ## Updating
 
 From npm:

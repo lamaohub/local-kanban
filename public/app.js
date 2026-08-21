@@ -2,7 +2,7 @@
 import './js/init.js';
 import { state, api, retryUnsaved } from './js/core.js';
 import { refresh } from './js/sse.js';
-import { selectProject, loadProjects, loadTasks, styledConfirm, styledPrompt } from './js/sidebar.js';
+import { loadProjects, loadTasks, openFolderPicker, renderFolderBrowser, selectProject, styledConfirm, styledPrompt } from './js/sidebar.js';
 import { openDrawer, closeDrawer, deleteTask, cancelTask, setKbCursor } from './js/drawer.js';
 import { openProjectSettings, closeProjectSettings } from './js/project.js';
 import { openSettingsModal, getSetting, setSetting, applyTheme } from './js/settings.js';
@@ -14,5 +14,6 @@ Object.assign(window, {
   openDrawer, closeDrawer, deleteTask, cancelTask, setKbCursor,
   openProjectSettings, closeProjectSettings, openSettingsModal, getSetting, setSetting, applyTheme,
   renderDashboard, styledConfirm, styledPrompt, checkVersion,
+  openFolderPicker, renderFolderBrowser,
   retryUnsaved,
 });

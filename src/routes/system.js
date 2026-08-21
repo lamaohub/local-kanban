@@ -53,10 +53,13 @@ export function globalPrefixOf(root, name) {
   return prefix ? (root.startsWith(sep) ? sep + prefix : prefix) : null;
 }
 
+const NPM_NOISE = /^npm error(\s+at\b|\s*[{}]|\s+A complete log of this run\b|\s+(errno|syscall|path|dest|stack|code|signal|cmd|args|file):)/i;
 export function failureReason(output, fallback = '') {
   const lines = String(output || '').split('\n').map((l) => l.trim()).filter(Boolean);
   const marked = lines.filter((l) => /^(error\b|fatal:|npm error)/i.test(l));
-  const pick = marked.length ? marked.reduce((a, b) => (b.length > a.length ? b : a)) : lines.at(-1);
+  const pool = marked.filter((l) => !NPM_NOISE.test(l));
+  const best = (pool.length ? pool : marked);
+  const pick = best.length ? best.reduce((a, b) => (b.length > a.length ? b : a)) : lines.at(-1);
   return (pick || fallback || '').slice(0, 300);
 }
 
@@ -315,7 +318,11 @@ export default async function systemRoutes(app) {
     const output = res.text.slice(-2000);
     if (res.err) {
       logError('server', 'update', `update via ${plan.how} failed: ${res.err.message}`, output);
-      return reply.code(500).send({ ok: false, how: plan.how, output, error: failureReason(output, res.err.message) });
+
+      return reply.code(500).send({
+        ok: false, how: plan.how, output, cmd: [plan.cmd, ...plan.args].join(' '),
+        error: failureReason(output, res.err.message),
+      });
     }
     const restart = restartMode();
     if (restart === 'pm2') setTimeout(() => process.exit(0), 400).unref();
