@@ -3,6 +3,29 @@
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [semantic versioning](https://semver.org/).
 
+## [1.8.2]
+
+### Added
+
+- **The README now opens with how you actually use the thing.** It described what the board is and
+  how to install it, and left the loop itself — the part someone came for — to be inferred: write
+  the task in *Backlog*, move it to *To do*, copy that column as a job for Claude, and let it work
+  until it stops at *Review* for you to accept. Including the trick that makes it pay off: let
+  *Review* pile up, then ask for the whole column to be checked in one pass, from a fresh chat.
+
+### Fixed
+
+- **The update line no longer draws over itself.** With both a status and a button on the right,
+  the two together were wider than the row had left, and the status — which was not allowed to
+  shrink — spilled leftwards across the label: 104 pixels of one text printed on top of another.
+  The status and the button now wrap onto their own line, and the command hint next to the button
+  is gone, because the button is the action and two instructions for one thing only made the row
+  longer.
+- **Pressing the button now visibly does something.** `npm install -g` takes tens of seconds and
+  says nothing while it runs, so the board looked frozen and inviting a second click. It counts
+  out loud instead — *installing… 12s*, then *restarting… 3s* — and the button reads *Updating…*
+  until the page reloads itself.
+
 ## [1.8.1]
 
 ### Changed

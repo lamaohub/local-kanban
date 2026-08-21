@@ -10,6 +10,24 @@ A local kanban board built for working **in tandem with Claude Code**: the human
 
 ![Dashboard](docs/screenshot-dashboard.png)
 
+## How you use it
+
+1. **Write the task** in the project's **Backlog** — a title is enough, the description can come later.
+2. **Move it to *To do*** once it is ready to be picked up. That column is the queue.
+3. **Press the copy button on the *To do* column** (*"Copy the tasks as a job for Claude"*) and paste
+   what it copied into Claude Code — the chat or the terminal, either works.
+4. **Claude takes it from there.** It reads the task, does the work, leaves comments as it goes,
+   commits and pushes, deploys if the project has a deploy skill, ties the commit to a GitHub issue
+   if sync is on — and stops at **Review**. It never marks anything done.
+5. **You accept.** Look at what came out and move the card to **Done**, or send it back with a note.
+   That note is the first thing Claude reads when it picks the task up again.
+
+**A trick worth knowing.** Let *Review* pile up — ten, twenty, thirty cards. Then add one more task to
+the board: *go through everything in Review, try to break it, move what survives to Done*. Claude will
+take the whole column in one pass, and it saves a lot of clicking. Do that one **in a fresh chat**: the
+session that just wrote the code is the worst judge of it, because it remembers what it meant rather
+than what it actually shipped.
+
 ## Why
 
 - **A queue for Claude, not just a board.** Statuses model the real loop: `backlog → todo → prep → doing → deploy → review → done`. Claude pulls the next task with `kb take`, works, and stops at *review* — accepting is always the human's call.

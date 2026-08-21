@@ -409,7 +409,7 @@ async function renderSection(sec) {
   } else {
     body.innerHTML = `<div class="sm-h">${tr('About')}</div>`
       + `<div class="set-row"><span class="set-lab">${tr('Code version')}<small id="about-ver">…</small></span><span class="about-fresh" id="about-fresh"></span></div>`
-      + `<div class="set-row"><span class="set-lab"><span id="about-branch-lab">${tr('Board updates')}</span><small id="about-upd-sub">…</small></span>`
+      + `<div class="set-row upd-row"><span class="set-lab"><span id="about-branch-lab">${tr('Board updates')}</span><small id="about-upd-sub">…</small></span>`
       + `<span class="about-upd-side"><span class="about-fresh" id="about-upd"></span>`
       + `<button class="btn-ghost hidden" id="about-do-upd">${tr('Install the update')}</button></span></div>`
       + `<div class="set-row hidden" id="about-dev-row"><span class="set-lab">${tr('dev branch')}<small id="about-dev-sub">…</small></span><span class="about-fresh" id="about-dev"></span></div>`
@@ -449,7 +449,7 @@ async function renderSection(sec) {
       else if (u.update_available) {
         el.textContent = `⟳ ${tr('update available')} ${u.local} → ${u.remote}`;
         el.classList.add('stale-ver');
-        sub.textContent = `${what} ${u.local}${tag} · ${updateHint()}`;
+        sub.textContent = `${what} ${u.local}${tag}`;
         $('about-do-upd')?.classList.remove('hidden');
       }
       else if (u.dev?.ahead) { el.textContent = `${tr('in dev')} ${u.dev.ahead} ${commitsWord(u.dev.ahead)} ${tr('awaiting release')}`; el.classList.add('stale-ver'); sub.textContent = `${tr('commit')} ${u.local}${tag} · ${tr('matches GitHub')}`; }
@@ -468,19 +468,31 @@ async function renderSection(sec) {
       .then(() => api('GET', '/api/update-check')).then(renderUpd)
       .catch(() => { const s = $('about-upd-sub'); if (s) s.textContent = '—'; });
     $('about-do-upd').onclick = async () => {
-      const btn = $('about-do-upd'); const sub = $('about-upd-sub');
+      const btn = $('about-do-upd'); const sub = $('about-upd-sub'); const el = $('about-upd');
       if (!(await styledConfirm(tr('Update the board now? It will restart.')))) return;
-      btn.disabled = true; sub.textContent = tr('updating…');
+      const label = btn.textContent;
+      let phase = tr('installing…'); let sec = 0;
+      const paint = () => { el.textContent = `${phase} ${sec}${tr('s')}`; };
+      btn.disabled = true; btn.textContent = tr('Updating…');
+      el.classList.add('stale-ver'); paint();
+      const timer = setInterval(() => { sec += 1; paint(); }, 1000);
+      const stop = (text, keepAccent) => {
+        clearInterval(timer);
+        el.textContent = text || '';
+        el.classList.toggle('stale-ver', !!keepAccent);
+        btn.textContent = label;
+      };
       let r;
       try { r = await api('POST', '/api/update', null, { quiet: true }); }
-      catch (err) { sub.textContent = `${tr('the update did not go through')}: ${err.message || err}`; btn.disabled = false; return; }
-      if (!r?.ok) { sub.textContent = `${tr('the update did not go through')}: ${(r?.output || '').split('\n').pop() || '—'}`; btn.disabled = false; return; }
-      if (r.restart !== 'pm2') { sub.textContent = tr('updated — start the board again to pick it up'); return; }
-      sub.textContent = tr('waiting for the board to come back…');
+      catch (err) { stop(tr('Did not work out'), true); sub.textContent = `${tr('the update did not go through')}: ${err.message || err}`; btn.disabled = false; return; }
+      if (!r?.ok) { stop(tr('Did not work out'), true); sub.textContent = `${tr('the update did not go through')}: ${(r?.output || '').split('\n').pop() || '—'}`; btn.disabled = false; return; }
+      if (r.restart !== 'pm2') { stop('', false); sub.textContent = tr('updated — start the board again to pick it up'); return; }
+      phase = tr('restarting…'); sec = 0; paint();
       for (let i = 0; i < 60; i++) {
         await new Promise((ok) => setTimeout(ok, 1000));
-        try { await api('GET', '/api/about', null, { quiet: true }); location.reload(); return; } catch {  }
+        try { await api('GET', '/api/about', null, { quiet: true }); clearInterval(timer); location.reload(); return; } catch {  }
       }
+      stop(tr('Did not work out'), true);
       sub.textContent = tr('updated, but the board did not come back — start it yourself');
     };
 

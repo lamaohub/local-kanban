@@ -141,7 +141,10 @@ body {
 }
 .btn-ghost:hover { color: var(--text); }
 a.btn-ghost { text-decoration: none; }
-.about-upd-side { display: flex; align-items: center; gap: 10px; justify-content: flex-end; }
+.about-upd-side { display: flex; align-items: center; gap: 10px; justify-content: flex-end; flex-shrink: 0; }
+.set-row.upd-row { flex-wrap: wrap; }
+.set-row.upd-row .set-lab { flex: 1 1 200px; min-width: 0; }
+.set-row.upd-row .set-lab small { overflow-wrap: anywhere; }
 .btn-danger {
   background: none; border: 1px solid var(--border); border-radius: 7px;
   padding: 7px 10px; cursor: pointer; color: var(--danger);
