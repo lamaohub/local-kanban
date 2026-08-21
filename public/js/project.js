@@ -71,8 +71,8 @@ export async function renderProjectSettings(force) {
           <small class="ps-hint">${tr('where the code lies on this computer — Claude edits and commits it here')}</small></label>
         <label class="pp-field">${tr('Domain')}<input id="ps-domain" type="text" placeholder="example.com">
           <small class="ps-hint">${tr('opened after a deploy to check the site answers')}</small></label>
-        <label class="pp-field">${tr('SSH host')}<input id="ps-server" type="text" placeholder="${tr('ssh alias or address')}">
-          <small class="ps-hint">${tr('the board runs ssh &lt;host&gt; — user, port and key come from your ~/.ssh/config, no secrets are kept here')}</small></label>
+        <label class="pp-field">${tr('SSH host')}<input id="ps-server" type="text" placeholder="192.168.1.10">
+          <small class="ps-hint">${tr('no key or password is entered here: access comes from your ~/.ssh/config, and a password will not do — a key is required. If ssh &lt;host&gt; works in your terminal, it works here.')}</small></label>
         <label class="pp-field">${tr('Server path')}<input id="ps-spath" type="text" placeholder="/var/www/my-project">
           <small class="ps-hint">${tr('where the project lies ON THE SERVER — the deploy pulls into this folder')}</small></label>
         <label class="pp-field">${tr('pm2 processes (comma-separated)')}<input id="ps-pm2" type="text" placeholder="my-api, my-web">

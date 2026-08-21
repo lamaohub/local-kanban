@@ -440,6 +440,28 @@ export default async function projectRoutes(app) {
     return { git: !r.err && r.out === 'true' };
   });
 
+  app.post('/api/projects/ssh-check', async (req, reply) => {
+    const server = String(req.body?.server || '').trim();
+    const path = String(req.body?.path || '').trim();
+    if (!server) return reply.code(400).send({ error: 'server is required' });
+    if (!/^[\w.@][\w.@-]*$/.test(server)) return reply.code(400).send({ error: 'server: an ssh alias or host, no options or spaces' });
+    if (path && /["'`;|&$\\]/.test(path)) return reply.code(400).send({ error: 'path: invalid characters' });
+    const cmd = path ? `test -d "${path}" && echo dir || echo nodir` : 'echo ok';
+    const res = await new Promise((done) => execFile('ssh',
+      ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', '--', server, cmd],
+      { timeout: 20000 }, (err, out, serr) => done({ err, out: String(out || '').trim(), serr: String(serr || '').trim() })));
+    if (res.err) {
+      const t = res.serr;
+      const why = /permission denied|publickey/i.test(t) ? 'key_refused'
+        : /host key verification/i.test(t) ? 'host_key'
+          : /could not resolve|name or service not known|no address/i.test(t) ? 'unknown_host'
+            : /connection refused|timed out|no route/i.test(t) || res.err.killed ? 'unreachable'
+              : 'failed';
+      return reply.code(502).send({ ok: false, reason: why, detail: t.split('\n').filter(Boolean).at(-1) || res.err.message });
+    }
+    return { ok: true, path_exists: path ? res.out.includes('dir') && !res.out.includes('nodir') : null };
+  });
+
   const DEMO_TEXTS = {
     ru: {
       name: 'Демо-проект',

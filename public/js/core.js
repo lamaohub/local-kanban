@@ -413,8 +413,30 @@ const I18N_RU = {
   'the skill is not installed — the file will be created on save': 'скилл не установлен — файл появится при сохранении',
   'the update did not go through': 'обновиться не удалось',
   'Run it yourself': 'Выполни сам',
-  'Below is about the SERVER this project is deployed to, not about this computer. Empty means the project stays local.': 'Ниже — про СЕРВЕР, на который выкатывается проект, а не про этот компьютер. Пусто — проект остаётся локальным.',
-  'user, port and key come from your ~/.ssh/config — the board keeps no secrets': 'пользователь, порт и ключ берутся из твоего ~/.ssh/config — секретов доска не хранит',
+  'Server': 'Сервер',
+  'Check': 'Проверить',
+  'checking…': 'проверяю…',
+  'connecting…': 'подключаюсь…',
+  'connected': 'подключились',
+  'the server path is there': 'путь на сервере есть',
+  'but there is no such path on the server': 'но такого пути на сервере нет',
+  'give the ssh host': 'укажи ssh-хост',
+  'the folder is there': 'папка на месте',
+  'subfolders': 'подпапок',
+  'key is free': 'ключ свободен',
+  'task prefix': 'префикс задач',
+  'this key is already taken by': 'этот ключ уже занят проектом',
+  'no such host — check the name, or add it to your ~/.ssh/config': 'такого хоста нет — проверь имя или добавь его в свой ~/.ssh/config',
+  'the server refused the key — a password will not help here, the key has to be authorized': 'сервер не принял ключ — пароль тут не поможет, ключ надо разрешить на сервере',
+  'the host key is unknown — connect once from your terminal and confirm the fingerprint': 'ключ хоста неизвестен — подключись разок из терминала и подтверди отпечаток',
+  'the server did not answer — wrong address, wrong port, or it is down': 'сервер не ответил — не тот адрес, не тот порт или он лежит',
+  'could not connect': 'подключиться не вышло',
+  'on create, git clone puts it on THIS computer at': 'при создании git clone положит его на ЭТОТ компьютер в',
+  'An existing folder is refused, not overwritten. Git credentials are not asked here — access comes from your own git and ssh setup.': 'Если папка уже есть — откажет, а не перезапишет. Логин git тут не спрашивается: доступ берётся из твоих git-настроек и ssh-ключей.',
+  'or let Claude do it': 'или пусть настроит Claude',
+  'Claude looks at the folder itself, checks the server access, and asks you one question at a time. Paste this into your Claude Code chat.': 'Claude сам посмотрит папку, проверит доступ к серверу и задаст вопросы по одному. Вставь это в чат Claude Code.',
+  'Not about this computer. Empty means the project simply stays local.': 'Не про этот компьютер. Пусто — проект просто останется локальным.',
+  'no key or password is entered here: access comes from your ~/.ssh/config, and a password will not do — a key is required. If ssh &lt;host&gt; works in your terminal, it works here.': 'ключ и пароль здесь не вводятся: доступ берётся из твоего ~/.ssh/config, и пароль не подойдёт — нужен ключ. Работает ssh &lt;хост&gt; в терминале — заработает и здесь.',
   '“Local folder” is on this computer. The rest describes the server this project is deployed to — leave it empty and the project simply stays local.': '«Папка на компьютере» — это здесь, на твоей машине. Остальное про сервер, на который выкатывается проект: оставь пустым — и проект просто останется локальным.',
   'the board runs ssh &lt;host&gt; — user, port and key come from your ~/.ssh/config, no secrets are kept here': 'доска выполняет ssh &lt;хост&gt; — пользователь, порт и ключ берутся из твоего ~/.ssh/config, секретов доска не хранит',
   'where the project lies ON THE SERVER — the deploy pulls into this folder': 'где проект лежит НА СЕРВЕРЕ — именно в эту папку деплой делает git pull',
@@ -798,6 +820,30 @@ You are helping me set up a freshly installed local-kanban board. Run the setup 
 Do not touch my files or servers without asking.`,
 };
 export const setupPrompt = () => SETUP_PROMPT[LANG] || SETUP_PROMPT.ru;
+
+export const ADD_PROJECT_PROMPT = {
+  ru: `Заведи мне проект на канбан-доске (local-kanban). Спрашивай по одному вопросу и жди ответа — ничего не додумывай за меня.
+
+1. Спроси, что за проект и где на этом компьютере лежит его код. Проверь, что папка существует, и загляни в неё: посмотри package.json или другой манифест, есть ли git и куда он смотрит.
+2. Если проект куда-то выкатывается — спроси ssh-хост и путь на сервере. ПРОВЕРЬ доступ сам: ssh -o BatchMode=yes <хост> "test -d <путь> && echo ok". Не сработало — скажи мне, в чём дело, и не выдумывай значения.
+3. Спроси, надо ли перезапускать что-то после выкатки (имена процессов pm2) и по какому домену проверять, что всё поднялось.
+4. Реши, каким деплой-скиллом его выкатывать: посмотри kb p и деплой-скиллы соседних проектов, предложи подходящий или «без деплоя». Свой скилл заводится в «Настройках → Скиллы».
+5. Заведи проект через API доски (POST /api/projects) со всем, что выяснили, и покажи мне kb info <ключ>.
+6. Если у проекта есть CLAUDE.md или README — прочитай и предложи 3-5 первых задач в бэклог, но НЕ создавай их без моего «да».
+
+Ничего не меняй в самом проекте и на сервере: эта задача — только про запись в реестр доски.`,
+  en: `Set up a project on my kanban board (local-kanban). Ask one question at a time and wait for the answer — do not assume anything on my behalf.
+
+1. Ask what the project is and where its code lives on this computer. Check that the folder exists and look inside: package.json or another manifest, whether there is a git repo and where it points.
+2. If the project gets deployed somewhere, ask for the ssh host and the path on the server. CHECK the access yourself: ssh -o BatchMode=yes <host> "test -d <path> && echo ok". If it fails, tell me why and do not invent values.
+3. Ask whether anything needs restarting after a deploy (pm2 process names) and which domain to check afterwards.
+4. Decide which deploy skill should ship it: look at kb p and at the deploy skills of neighbouring projects, then suggest one or "no deploy". A skill of your own is created in Settings → Skills.
+5. Register the project through the board API (POST /api/projects) with everything we worked out, and show me kb info <key>.
+6. If the project has a CLAUDE.md or a README, read it and suggest 3-5 first backlog tasks — but do NOT create them without my go-ahead.
+
+Change nothing in the project itself and nothing on the server: this task is only about the board's registry.`,
+};
+export const addProjectPrompt = () => ADD_PROJECT_PROMPT[LANG] || ADD_PROJECT_PROMPT.en;
 
 export const seg = (s) => encodeURIComponent(String(s));
 export let ghSyncOn = true;

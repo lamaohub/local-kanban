@@ -38,6 +38,12 @@ than what it actually shipped.
 
 The server listens on **127.0.0.1 only** and has **no authentication**. The board is strictly local: your machine is the trust boundary. **Never expose the port to the network** (no reverse proxies, no `0.0.0.0`, no port forwarding). Third-party integrations should run on the same machine and talk to `127.0.0.1` (see [docs/API.md](docs/API.md)).
 
+**The board holds no credentials.** A project can name an SSH host to deploy to, but neither a key
+nor a password is ever entered here: the board simply runs `ssh <host>`, and who you are, on which
+port and with which key is decided by your own `~/.ssh/config` — the same file your terminal uses.
+A password will not work at all, because the board connects without prompts, so key-based access is
+required. The short test: if `ssh <host>` works in your terminal, it works here.
+
 ## Requirements
 
 - **Node.js ≥ 22** (macOS or Linux) — 24 LTS or newer is what most people have

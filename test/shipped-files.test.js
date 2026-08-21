@@ -72,6 +72,20 @@ test('the contrib bootstrap points at an example that exists and matches what it
   }
 });
 
+test('the changelog is edited at the top, not inside a version that already shipped', () => {
+  const log = readFileSync(join(ROOT, 'CHANGELOG.md'), 'utf8');
+  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
+  const versions = [...log.matchAll(/^## \[(\d+\.\d+\.\d+)\]/gm)].map((m) => m[1]);
+  assert.ok(versions.length, 'the changelog has no version sections at all');
+  const num = (v) => v.split('.').map(Number);
+  const cmp = (a, b) => { const [x, y] = [num(a), num(b)]; for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; };
+  assert.ok(cmp(versions[0], pkg.version) >= 0,
+    `the newest changelog section is ${versions[0]} but the package is already ${pkg.version} — a shipped version is being edited`);
+  for (let i = 1; i < versions.length; i++) {
+    assert.ok(cmp(versions[i - 1], versions[i]) > 0, `changelog sections out of order: ${versions[i - 1]} above ${versions[i]}`);
+  }
+});
+
 test('the request to support the project points at a page that exists', () => {
   assert.ok(existsSync(join(ROOT, 'docs', 'COMMERCIAL.md')), 'docs/COMMERCIAL.md is missing');
   for (const name of ['README.md', 'README.ru.md']) {

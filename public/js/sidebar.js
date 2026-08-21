@@ -3,7 +3,7 @@ import { buildSelect, renderBoard, selVal } from './board.js';
 
 const GENERIC_DEPLOY = 'deploy';
 import { renderChaos } from './chaos.js';
-import { $, ALL, CALENDAR, CHAOS, DASH, HIDDEN_SECTIONS, HORIZON, LANG, SETTINGS, SIDEBAR_SECTIONS, api, esc, ic, seg, setupPrompt, state, tr } from './core.js';
+import { $, ALL, CALENDAR, CHAOS, DASH, HIDDEN_SECTIONS, HORIZON, LANG, SETTINGS, SIDEBAR_SECTIONS, addProjectPrompt, api, esc, ic, seg, setupPrompt, state, tr } from './core.js';
 import { renderDashboard } from './dash.js';
 import { renderCalendar, renderHorizon } from './horizon.js';
 import { openProjectSettings, renderProjectSettings, skillOptions, deploySkills } from './project.js';
@@ -346,6 +346,63 @@ function wizSlugify(name) {
     .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
 }
 
+function setState(id, text, kind) {
+  const el = $(id);
+  if (!el) return;
+  el.textContent = text || '';
+  el.classList.remove('ok', 'bad');
+  if (text && kind) el.classList.add(kind);
+}
+
+function wizPrefix(slug, used = new Set(state.projects.map((p) => p.prefix).filter(Boolean))) {
+  const words = slug.replace(/[^a-z0-9-]/gi, '').split('-').filter(Boolean);
+  let base = words.length >= 2
+    ? words.map((w) => w[0]).join('').slice(0, 3).toUpperCase()
+    : slug.slice(0, 3).toUpperCase();
+  if (base.length < 2) base = (base + 'XX').slice(0, 2);
+  let prefix = base;
+  let n = 2;
+  while (used.has(prefix)) prefix = base + n++;
+  return prefix;
+}
+
+export async function checkPath(path) {
+  if (!path) { setState('wiz-path-state', tr('give the folder path'), 'bad'); return false; }
+  setState('wiz-path-state', tr('checking…'));
+  try {
+    const r = await api('GET', `/api/fs?path=${encodeURIComponent(path)}`, null, { quiet: true });
+    setState('wiz-path-state', `${tr('the folder is there')} · ${r.dirs.length} ${tr('subfolders')}`, 'ok');
+    return true;
+  } catch (e) {
+    setState('wiz-path-state', `${tr('no such folder on this computer')}: ${e.message || path}`, 'bad');
+    return false;
+  }
+}
+
+const SSH_WHY = {
+  unknown_host: 'no such host — check the name, or add it to your ~/.ssh/config',
+  key_refused: 'the server refused the key — a password will not help here, the key has to be authorized',
+  host_key: 'the host key is unknown — connect once from your terminal and confirm the fingerprint',
+  unreachable: 'the server did not answer — wrong address, wrong port, or it is down',
+  failed: 'could not connect',
+};
+export async function checkSsh() {
+  const server = $('wiz-server')?.value.trim();
+  const path = $('wiz-spath')?.value.trim();
+  if (!server) { setState('wiz-ssh-state', tr('give the ssh host'), 'bad'); return; }
+  const btn = $('wiz-ssh-check');
+  if (btn) btn.disabled = true;
+  setState('wiz-ssh-state', tr('connecting…'));
+  try {
+    const r = await api('POST', '/api/projects/ssh-check', { server, path }, { quiet: true });
+    const dir = r.path_exists === null ? '' : ` · ${r.path_exists ? tr('the server path is there') : tr('but there is no such path on the server')}`;
+    setState('wiz-ssh-state', `${tr('connected')}${dir}`, r.path_exists === false ? 'bad' : 'ok');
+  } catch (e) {
+    setState('wiz-ssh-state', tr(SSH_WHY[e.body?.reason] || SSH_WHY.failed), 'bad');
+  }
+  if (btn) btn.disabled = false;
+}
+
 export async function openFolderPicker() {
   const box = $('wiz-browser'); const input = $('wiz-path');
   if (!box || !input) return;
@@ -399,10 +456,21 @@ function openProjectWizard() {
   const stepType = () => {
     err('');
     body.innerHTML = WIZ_TYPES.map(([id, title, sub]) =>
-      `<button type="button" class="wiz-type" data-type="${id}"><b>${esc(title)}</b><small>${esc(sub)}</small></button>`).join('');
+      `<button type="button" class="wiz-type" data-type="${id}"><b>${esc(title)}</b><small>${esc(sub)}</small></button>`).join('')
+      + `<div class="wiz-h">${tr('or let Claude do it')}</div>`
+      + `<div class="kbh-note muted">${tr('Claude looks at the folder itself, checks the server access, and asks you one question at a time. Paste this into your Claude Code chat.')}</div>`
+      + `<div class="setup-prompt"><pre class="onb-code setup-prompt-text">${esc(addProjectPrompt())}</pre>`
+      + `<button type="button" class="btn-ghost wiz-ai-copy">${ic('copy', 13)} ${tr('Copy the prompt')}</button></div>`;
     actions.innerHTML = `<button class="btn-ghost wiz-cancel">${tr('Cancel')}</button>`;
     actions.querySelector('.wiz-cancel').onclick = close;
     body.querySelectorAll('.wiz-type').forEach((b) => { b.onclick = () => stepForm(b.dataset.type); });
+    const aiBtn = body.querySelector('.wiz-ai-copy');
+    aiBtn.onclick = async () => {
+      const okCopy = await copyText(addProjectPrompt());
+      const was = aiBtn.innerHTML;
+      aiBtn.innerHTML = okCopy ? `✓ ${tr('Copied')}` : `✕ ${tr('did not work — select and copy manually')}`;
+      setTimeout(() => { aiBtn.innerHTML = was; }, 2000);
+    };
   };
 
   const stepForm = (type) => {
@@ -411,21 +479,28 @@ function openProjectWizard() {
     const withLocal = type !== 'server';
     const folders = state.folders.unregistered || [];
     let html = `<label class="pp-field">${tr('Project name')}<input id="wiz-name" type="text" placeholder="my project"></label>`
-      + `<label class="pp-field">${tr('Key (slug + task prefix)')}<input id="wiz-slug" type="text" placeholder="my-project"></label>`;
+      + `<label class="pp-field">${tr('Key (slug + task prefix)')}<input id="wiz-slug" type="text" placeholder="my-project">`
+      + `<small class="pp-hint" id="wiz-slug-state"></small></label>`;
     if (withLocal) {
       html += `<div class="pp-field">${tr('Project folder')}
         <div id="wiz-folder"></div>
         <div id="wiz-path-row" class="wiz-path-row hidden">
           <input id="wiz-path" type="text" placeholder="/full/path/to/the/folder">
           <button type="button" class="btn-ghost" id="wiz-browse">${tr('Choose…')}</button>
+          <button type="button" class="btn-ghost" id="wiz-path-check">${tr('Check')}</button>
         </div>
+        <small class="pp-hint" id="wiz-path-state"></small>
         <div id="wiz-browser" class="wiz-browser hidden"></div>
-        <input id="wiz-git" type="text" class="hidden" placeholder="git@github.com:me/repo.git"></div>`;
+        <input id="wiz-git" type="text" class="hidden" placeholder="git@github.com:me/repo.git">
+        <small class="pp-hint hidden" id="wiz-git-hint"></small></div>`;
     }
     if (withServer) {
-      html += `<div class="kbh-note muted">${tr('Below is about the SERVER this project is deployed to, not about this computer. Empty means the project stays local.')}</div>`
-        + `<label class="pp-field">${tr('SSH host')}<input id="wiz-server" type="text" placeholder="${tr('ssh alias or address')}">`
-        + `<small class="pp-hint">${tr('user, port and key come from your ~/.ssh/config — the board keeps no secrets')}</small></label>`
+      html += `<div class="wiz-h">${tr('Server')}</div>`
+        + `<div class="kbh-note muted">${tr('Not about this computer. Empty means the project simply stays local.')}</div>`
+        + `<div class="pp-field">${tr('SSH host')}`
+        + `<div class="wiz-path-row"><input id="wiz-server" type="text" placeholder="192.168.1.10">`
+        + `<button type="button" class="btn-ghost" id="wiz-ssh-check">${tr('Check')}</button></div>`
+        + `<small class="pp-hint" id="wiz-ssh-state">${tr('no key or password is entered here: access comes from your ~/.ssh/config, and a password will not do — a key is required. If ssh &lt;host&gt; works in your terminal, it works here.')}</small></div>`
         + `<label class="pp-field">${tr('Server path')}<input id="wiz-spath" type="text" placeholder="/var/www/my-project"></label>`
         + `<label class="pp-field">${tr('pm2 processes (comma-separated)')}<input id="wiz-pm2" type="text" placeholder="my-api, my-web"></label>`
         + `<label class="pp-field">${tr('Domain (to verify after deploy)')}<input id="wiz-domain" type="text" placeholder="example.com"></label>`
@@ -438,8 +513,19 @@ function openProjectWizard() {
     const nameEl = $('wiz-name');
     const slugEl = $('wiz-slug');
     let slugTouched = false;
-    slugEl.oninput = () => { slugTouched = true; };
-    nameEl.oninput = () => { if (!slugTouched) slugEl.value = wizSlugify(nameEl.value); };
+    const showSlugState = () => {
+      const el = $('wiz-slug-state');
+      if (!el) return;
+      const v = slugEl.value.trim();
+      const taken = v && state.projects.find((p) => p.slug === v);
+      el.classList.remove('ok', 'bad');
+      if (!v) { el.textContent = ''; return; }
+      if (!/^[a-z0-9-]{2,40}$/.test(v)) { el.textContent = tr('key: lowercase latin letters, digits and hyphens'); el.classList.add('bad'); return; }
+      el.textContent = taken ? `${tr('this key is already taken by')} ${taken.name || taken.slug}` : `${tr('key is free')} · ${tr('task prefix')} ${wizPrefix(v)}`;
+      el.classList.add(taken ? 'bad' : 'ok');
+    };
+    slugEl.oninput = () => { slugTouched = true; showSlugState(); };
+    nameEl.oninput = () => { if (!slugTouched) slugEl.value = wizSlugify(nameEl.value); showSlugState(); };
     const folderSel = $('wiz-folder');
     if (folderSel) {
       const options = [
@@ -449,13 +535,29 @@ function openProjectWizard() {
       ];
       const onFolderChange = (v) => {
         $('wiz-path-row').classList.toggle('hidden', v !== '__manual__');
+        $('wiz-path-state').classList.toggle('hidden', v !== '__manual__');
         $('wiz-browser').classList.add('hidden');
         $('wiz-git').classList.toggle('hidden', v !== '__clone__');
+        const gh = $('wiz-git-hint');
+        gh.classList.toggle('hidden', v !== '__clone__');
+        if (v === '__clone__') {
+          const root = state.folders.root || '~';
+          const key = $('wiz-slug').value.trim() || 'my-project';
+          gh.textContent = `${tr('on create, git clone puts it on THIS computer at')} ${root}/${key}. `
+            + tr('An existing folder is refused, not overwritten. Git credentials are not asked here — access comes from your own git and ssh setup.');
+        }
       };
       const start = type === 'local' ? '' : '__manual__';
       buildSelect(folderSel, { value: start, options, onChange: onFolderChange });
       onFolderChange(start);
       $('wiz-browse').onclick = openFolderPicker;
+      $('wiz-path-check').onclick = () => checkPath($('wiz-path').value.trim());
+      $('wiz-path').oninput = () => setState('wiz-path-state', '');
+    }
+    if ($('wiz-ssh-check')) {
+      $('wiz-ssh-check').onclick = checkSsh;
+      $('wiz-server').oninput = () => setState('wiz-ssh-state', '');
+      $('wiz-spath').oninput = () => setState('wiz-ssh-state', '');
     }
     const skillHost = $('wiz-skill');
     if (skillHost) {

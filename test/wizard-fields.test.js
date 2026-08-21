@@ -55,18 +55,90 @@ test('a dropdown opens where there is room, and the wizard form is not cut off',
 
 test('the server fields say whether they mean the server or this computer', () => {
   const core = readFileSync(new URL('../public/js/core.js', import.meta.url), 'utf8');
+  assert.match(sidebar, /class="wiz-h">\$\{tr\('Server'\)\}/, 'the server group lost its heading');
+  assert.match(project, /the server this project is deployed to/i,
+    'the project page stopped saying which side these fields are about');
+  assert.match(sidebar, /Not about this computer/i,
+    'the wizard stopped saying these fields are not about this computer');
+
   for (const [src, name] of [[sidebar, 'the wizard'], [project, 'the project page']]) {
-    assert.match(src, /about the SERVER|the server this project is deployed to/i,
-      `${name} stopped saying that these fields are about the server, not about this computer`);
-    assert.match(src, /~\/\.ssh\/config/, `${name} no longer says where the ssh user, port and key come from`);
+    assert.match(src, /no key or password is entered here/i,
+      `${name} no longer answers where the ssh key or password goes`);
+    assert.match(src, /a password will not do/i, `${name} stopped saying a password cannot work at all`);
+    assert.match(src, /~\/\.ssh\/config/, `${name} no longer says where access comes from`);
   }
+  const routes = readFileSync(new URL('../src/routes/projects.js', import.meta.url), 'utf8');
+  assert.match(routes, /'BatchMode=yes'/, 'ssh can prompt for a password again, and the hint now lies');
+
+  const ssh = sidebar.match(/id="wiz-server"[^>]*placeholder="([^"]*)"/)?.[1];
+  assert.ok(ssh && /^\d{1,3}(\.\d{1,3}){3}$/.test(ssh), `the ssh field lost its address example: ${ssh}`);
+  assert.match(ssh, /^(127\.|10\.|192\.168\.)/, `a routable IP in the source fails the release audit: ${ssh}`);
+
   const prose = [...sidebar.matchAll(/placeholder="([^"$][^"]*)"/g)].map((m) => m[1])
     .filter((t) => /\s(for|or|in|the)\s/.test(t));
   assert.deepEqual(prose, [], `these placeholders bypass tr() and stay English on a Russian board: ${prose}`);
   assert.match(project, /id="ps-spath"[^>]*placeholder=/, 'the server path field on the project page lost its example again');
-  for (const key of ['where the project lies ON THE SERVER', 'user, port and key come from your ~/.ssh/config']) {
+
+  for (const name of ['README.md', 'README.ru.md']) {
+    const readme = readFileSync(new URL(`../${name}`, import.meta.url), 'utf8');
+    assert.match(readme, /ssh <[^>]+>/, `${name} does not explain how the board reaches a server`);
+    assert.match(readme, /~\/\.ssh\/config/, `${name} stopped saying credentials are not kept by the board`);
+  }
+  for (const key of ['where the project lies ON THE SERVER', 'no key or password is entered here', 'Server']) {
     assert.ok(core.includes(key), `no Russian translation for: ${key}`);
   }
+});
+
+test('the prefix the wizard promises is the prefix the server will give', async () => {
+  const { genPrefix } = await import('../src/db.js');
+  const src = sidebar.match(/function wizPrefix\([\s\S]*?\) \{\n([\s\S]*?)\n\}/);
+  assert.ok(src, 'wizPrefix is gone from the wizard, or its shape changed beyond the guard');
+  const mirror = new Function('slug', 'used', src[1]);
+  const cases = ['kanban', 'a', 'my-project', 'demo', 'totally-new-thing', 'a-b-c-d', 'x1', 'z', 'server-panel', '2gis'];
+  for (const slug of cases) {
+    assert.equal(mirror(slug, new Set()), genPrefix(slug, new Set()), `wizard and server disagree on "${slug}"`);
+  }
+  const used = new Set([genPrefix('my-project', new Set())]);
+  assert.equal(mirror('my-project', used), genPrefix('my-project', used), 'the mirror ignores taken prefixes');
+});
+
+test('the wizard can check the ssh host and the folder before creating anything', () => {
+  const routes = readFileSync(new URL('../src/routes/projects.js', import.meta.url), 'utf8');
+  const handler = routes.match(/app\.post\('\/api\/projects\/ssh-check'[\s\S]*?\n  \}\);/);
+  assert.ok(handler, 'the connection check endpoint is gone');
+  const body = handler[0];
+  assert.match(body, /'BatchMode=yes'/,
+    'the check can prompt for a password again, which the hint says is impossible');
+  assert.match(body, /\[\\w\.@\]\[\\w\.@-\]\*/, 'a host starting with a hyphen would be taken by ssh as an option');
+  assert.match(body, /\/\["'`;\|&\$\\\\\]\//, 'the server path is no longer checked for shell metacharacters');
+  assert.match(body, /'--', server, cmd/, 'the host is no longer separated from options by --');
+  for (const [what, re] of [['ssh', /id="wiz-ssh-check"/], ['folder', /id="wiz-path-check"/]]) {
+    assert.match(sidebar, re, `the ${what} check button is gone`);
+  }
+  assert.match(sidebar, /checkSsh|wiz-ssh-check'\)\.onclick/, 'the ssh button is not wired to anything');
+  assert.match(sidebar, /checkPath\(\$\('wiz-path'\)\.value\.trim\(\)\)/, 'the folder button is not wired to anything');
+  assert.match(sidebar, /\$\('wiz-server'\)\.oninput = \(\) => setState\('wiz-ssh-state', ''\)/,
+    'a stale "connected" can now sit next to a freshly typed host');
+});
+
+test('the clone mode says where the repository will land', () => {
+  assert.match(sidebar, /git clone puts it on THIS computer at/i, 'the clone hint is gone');
+  assert.match(sidebar, /state\.folders\.root/, 'the hint stopped showing the real destination path');
+  assert.match(sidebar, /An existing folder is refused, not overwritten/i,
+    'the hint no longer says what happens when the folder is already there');
+});
+
+test('the wizard offers to hand the setup to Claude', () => {
+  const core = readFileSync(new URL('../public/js/core.js', import.meta.url), 'utf8');
+  const block = core.match(/export const ADD_PROJECT_PROMPT = \{[\s\S]*?\n\};/);
+  assert.ok(block, 'the prompt is gone');
+  for (const lang of ['ru', 'en']) {
+    assert.match(block[0], new RegExp(`\\n  ${lang}: \``), `the add-project prompt has no ${lang} version`);
+  }
+  assert.match(block[0], /BatchMode=yes/, 'the prompt no longer tells Claude how to verify the ssh access itself');
+  assert.match(block[0], /POST \/api\/projects/, 'the prompt no longer tells Claude how to register the project');
+  assert.match(sidebar, /wiz-ai-copy/, 'the copy button is gone from the first step');
+  assert.match(sidebar, /copyText\(addProjectPrompt\(\)\)/, 'the button copies something other than the prompt');
 });
 
 test('the sync section warns that tasks leave the machine, and that the repo should be private', () => {

@@ -3,9 +3,39 @@
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [semantic versioning](https://semver.org/).
 
+## [1.12.0]
+
+### Added
+
+- **The wizard answers before you press Create.** Three checks with one result line each: the ssh host
+  ("Check" runs a real connection, and says *why* it failed — unknown host, refused key, unknown host
+  key, no answer — rather than handing you ssh's stderr), the project folder, and the project key,
+  whose availability now shows while you type instead of arriving as a refusal after Create. The key
+  line also shows the task prefix you are going to get, which until now you first saw on your first
+  task and could never change.
+
+- **A third way to add a project: let Claude do it.** Half of the form (ssh host, server path, pm2,
+  deploy skill) needs you to go and look something up, and Claude is right there and can look. The
+  first step now offers a ready prompt to copy: it makes Claude inspect the folder, verify the ssh
+  access itself, ask you one question at a time, and register the project when you have both agreed.
+
+- **The git clone mode says where the repository lands.** It was called "clone from a git URL…" and
+  said nothing else. It now shows the actual destination path on this computer, and the two facts you
+  could not have guessed: an existing folder is refused rather than overwritten, and git credentials
+  are never asked for here.
+
 ## [1.11.0]
 
 ### Fixed
+
+- **Where the SSH key or password goes: nowhere, and that is now said out loud.** The fields told
+  you access "comes from your `~/.ssh/config`", which answers where it comes from and not what you
+  are supposed to do. The board holds no credentials at all: it runs `ssh <host>`, and a password
+  cannot work even in principle, because it connects without prompts — key-based access is required.
+  The short test is in the hint now: if `ssh <host>` works in your terminal, it works here. The same
+  paragraph went into the security section of both READMEs, which said nothing about ssh until now.
+  The server fields also got a heading of their own, and the host field shows an address as an
+  example rather than a description of one.
 
 - **The server fields say which side they are about.** "SSH host" and "Server path" gave no hint of
   whether they meant this computer or the machine you deploy to — a fair question, and the owner of
