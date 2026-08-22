@@ -159,3 +159,12 @@ test('the sync section warns that tasks leave the machine, and that the repo sho
   const heads = [...readFileSync(new URL('../README.md', import.meta.url), 'utf8').matchAll(/^#{2,3} (.+)$/gm)].map((m) => slug(m[1]));
   assert.ok(heads.includes(anchor), `README.md has no heading for the anchor #${anchor} — the link lands nowhere`);
 });
+
+test('the folder check tells "not there" apart from "no permission" and "could not check"', () => {
+  const fn = sidebar.slice(sidebar.indexOf('export async function checkPath'), sidebar.indexOf('const SSH_WHY'));
+  assert.match(fn, /e\.status/, 'the folder check stopped looking at the answer code — every refusal reads as "no such folder" again');
+  assert.match(fn, /404:/, 'the "no such folder" case lost its own code');
+  assert.match(fn, /403:/, 'a folder the board may not read is called missing again');
+  assert.match(fn, /400:/, 'a file given instead of a folder is called missing again');
+  assert.match(fn, /could not check the folder/, 'an unknown failure (a dead server) still claims the folder is not there');
+});

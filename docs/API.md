@@ -17,7 +17,7 @@ The server binds to **127.0.0.1 only** and has **no authentication**: the local 
 ## Stability contract
 
 **Public (kept backward-compatible):** `/api/tasks*`, `/api/projects` (GET/POST/PATCH), `/api/events` and its event types, `/api/sync` (GET), `/api/stats`.
-**Internal (may change without notice):** `/api/dashboard`, `/api/about`, `/api/update-check`, `/api/update`, `/api/backups`, `/api/horizons`, wizard helpers (`/api/projects/clone`, `/api/projects/server-git`, `/api/projects/demo`), `/api/sync/*` mutations.
+**Internal (may change without notice):** `/api/dashboard`, `/api/about`, `/api/update-check`, `/api/update`, `/api/whats-new`, `/api/backups`, `/api/horizons`, wizard helpers (`/api/projects/clone`, `/api/projects/server-git`, `/api/projects/demo`), `/api/sync/*` mutations.
 
 New fields may be added to responses at any time — parse leniently.
 
@@ -132,6 +132,13 @@ Types: `task.created`, `task.updated` (includes `prev_status` on real transition
   by commit against GitHub, an npm install by version against the registry, and `update_available: null`
   means the check could not be made — never that you are up to date. `?refresh=1` skips the cache
   (throttled to once per 15s).
+- `GET /api/whats-new` — `{version, notes, source, url}`. `notes` is the markdown of one changelog
+  section, `version` says which release it belongs to. By default the section comes from the
+  `CHANGELOG.md` shipped next to the code — the version you are running, read with no network at
+  all. `?remote=1` asks the GitHub release page instead, so you can read what changed in a version
+  you do not have yet (`source: "github"`, `url` links to that page); if there is no release page,
+  no network, or a release with an empty body, it falls back to the local section rather than
+  answering nothing. `?refresh=1` skips the one-hour cache on the remote answer.
 - `POST /api/update` — installs the waiting update the way the board was installed (`git pull` for a
   clone, `npm install -g` for a package) and answers `{ok, how, restart, output}`. `restart: "pm2"`
   means the board is exiting on purpose and something will bring it back, so poll until it answers

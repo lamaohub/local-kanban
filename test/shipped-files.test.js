@@ -72,15 +72,20 @@ test('the contrib bootstrap points at an example that exists and matches what it
   }
 });
 
-test('the changelog is edited at the top, not inside a version that already shipped', () => {
+test('the changelog is edited under Unreleased, not inside a version that already shipped', () => {
   const log = readFileSync(join(ROOT, 'CHANGELOG.md'), 'utf8');
   const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
-  const versions = [...log.matchAll(/^## \[(\d+\.\d+\.\d+)\]/gm)].map((m) => m[1]);
+  const heads = [...log.matchAll(/^## \[([^\]]+)\]/gm)].map((m) => m[1]);
+  assert.equal(heads[0], 'Unreleased', 'the top section of the changelog must be [Unreleased] — that is where new notes go');
+  assert.equal(heads.filter((h) => h === 'Unreleased').length, 1, 'there is exactly one [Unreleased] section');
+  const versions = heads.slice(1);
   assert.ok(versions.length, 'the changelog has no version sections at all');
+  const odd = versions.find((v) => !/^\d+\.\d+\.\d+$/.test(v));
+  assert.ok(!odd, `every section below Unreleased is a version, but there is [${odd}]`);
   const num = (v) => v.split('.').map(Number);
   const cmp = (a, b) => { const [x, y] = [num(a), num(b)]; for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; };
-  assert.ok(cmp(versions[0], pkg.version) >= 0,
-    `the newest changelog section is ${versions[0]} but the package is already ${pkg.version} — a shipped version is being edited`);
+  assert.equal(versions[0], pkg.version,
+    `the newest changelog section is ${versions[0]} but the package is ${pkg.version} — version sections are written by releasing, not by hand`);
   for (let i = 1; i < versions.length; i++) {
     assert.ok(cmp(versions[i - 1], versions[i]) > 0, `changelog sections out of order: ${versions[i - 1]} above ${versions[i]}`);
   }

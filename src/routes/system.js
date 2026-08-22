@@ -20,8 +20,8 @@ let selfPkgCache;
 function selfPkg() {
   if (selfPkgCache === undefined) {
     try {
-      const { name, version } = JSON.parse(readFileSync(join(ROOT_DIR, 'package.json'), 'utf8'));
-      selfPkgCache = name && version ? { name, version } : null;
+      const { name, version, repository } = JSON.parse(readFileSync(join(ROOT_DIR, 'package.json'), 'utf8'));
+      selfPkgCache = name && version ? { name, version, repository: repository?.url || repository || null } : null;
     } catch { selfPkgCache = null; }
   }
   return selfPkgCache;
@@ -80,6 +80,32 @@ export async function registryCheck() {
     if (!remote) return null;
     return { update_available: isNewer(remote, pkg.version), local: pkg.version, remote, branch: null, tag: null, dev: null };
   } catch { return null; }
+}
+
+export async function ghApi(path) {
+  try {
+    const res = await fetch(`https://api.github.com/${path}`, {
+      headers: { 'User-Agent': 'local-kanban', Accept: 'application/vnd.github+json' },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (res.ok) return await res.json();
+  } catch {  }
+  try { return JSON.parse(await ghCli(['api', path], { timeout: 10000 })); }
+  catch { return null; }
+}
+
+export function changelogSection(text, version) {
+  const head = new RegExp(`^##\\s*\\[?${String(version).replace(/\./g, '\\.')}\\]?`, 'm');
+  const m = head.exec(String(text || ''));
+  if (!m) return null;
+  const rest = text.slice(m.index + m[0].length);
+  const end = rest.search(/^## /m);
+  return (end === -1 ? rest : rest.slice(0, end)).trim() || null;
+}
+
+export function repoSlug(url) {
+  const m = String(url || '').match(/github\.com[:/]([\w.-]+)\/([\w.-]+?)(?:\.git)?(?:#.*)?$/);
+  return m ? `${m[1]}/${m[2]}` : null;
 }
 
 const UPLOAD_FLOOR = 64 * 1024 * 1024;
@@ -255,17 +281,6 @@ export default async function systemRoutes(app) {
     const git = (args) => new Promise((resolve) => {
       execFile('git', args, { cwd: ROOT, timeout: 8000 }, (err, out) => resolve(err ? null : out.trim()));
     });
-    const ghApi = async (path) => {
-      try {
-        const res = await fetch(`https://api.github.com/${path}`, {
-          headers: { 'User-Agent': 'local-kanban', Accept: 'application/vnd.github+json' },
-          signal: AbortSignal.timeout(8000),
-        });
-        if (res.ok) return await res.json();
-      } catch {  }
-      try { return JSON.parse(await ghCli(['api', path], { timeout: 10000 })); }
-      catch { return null; }
-    };
     let data = { update_available: null, local: null, remote: null, branch: null, tag: null, dev: null };
     try {
       const [local, branch, origin, tag] = await Promise.all([
@@ -297,6 +312,30 @@ export default async function systemRoutes(app) {
     } catch {  }
     if (data.update_available === null) data = (await registryCheck()) || data;
     updCache = { at: Date.now(), ttl: data.update_available === null ? CACHE_FAIL_MS : CACHE_OK_MS, data };
+    return data;
+  });
+
+  const NEWS_OK_MS = 3600000;
+  const NEWS_FAIL_MS = 60000;
+  let newsCache = { at: 0, ttl: 0, data: null };
+  app.get('/api/whats-new', async (req) => {
+    const version = selfPkg()?.version || null;
+    const own = () => {
+      let text = null;
+      try { text = readFileSync(join(ROOT_DIR, 'CHANGELOG.md'), 'utf8'); } catch {  }
+      return { version, notes: (text && version) ? changelogSection(text, version) : null, source: 'changelog', url: null };
+    };
+    if (!req.query?.remote) return own();
+    if (!req.query?.refresh && newsCache.data && Date.now() - newsCache.at < newsCache.ttl) return newsCache.data;
+    const repo = repoSlug(selfPkg()?.repository);
+    const rel = repo ? await ghApi(`repos/${repo}/releases/latest`) : null;
+    const tag = String(rel?.tag_name || '').replace(/^v/, '');
+    const body = String(rel?.body || '').trim();
+    const got = Boolean(tag && body);
+    const data = got
+      ? { version: tag, notes: body, source: 'github', url: rel.html_url || null }
+      : own();
+    newsCache = { at: Date.now(), ttl: got ? NEWS_OK_MS : NEWS_FAIL_MS, data };
     return data;
   });
 

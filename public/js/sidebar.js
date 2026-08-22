@@ -374,7 +374,10 @@ export async function checkPath(path) {
     setState('wiz-path-state', `${tr('the folder is there')} · ${r.dirs.length} ${tr('subfolders')}`, 'ok');
     return true;
   } catch (e) {
-    setState('wiz-path-state', `${tr('no such folder on this computer')}: ${e.message || path}`, 'bad');
+    const said = { 404: tr('no such folder on this computer'),
+      400: tr('this path is not a folder'),
+      403: tr('the folder is there, but the board cannot read it — check its permissions') }[e.status];
+    setState('wiz-path-state', said || `${tr('could not check the folder')}: ${e.message || path}`, 'bad');
     return false;
   }
 }

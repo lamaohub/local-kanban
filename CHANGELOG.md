@@ -3,6 +3,32 @@
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [semantic versioning](https://semver.org/).
 
+Anything not shipped yet is collected under **Unreleased**; releasing renames that section to the
+version it goes out as and opens an empty one again. Released sections are history and stay as they are.
+
+## [Unreleased]
+
+## [1.13.0]
+
+### Added
+
+- **The board tells you what's new.** The changelog was written for every release and shown nowhere:
+  the only place to read it was the package page on npm. The About screen now has a "What's new"
+  block. For the version you are running it reads the `CHANGELOG.md` that ships next to the code, so
+  it needs no network at all. When an update is waiting, it shows the notes of the version you do
+  *not* have yet, read from that release's page on GitHub — the decision to update is made on what
+  actually changed, not on a version number. Releases now get such a page: publishing puts the
+  changelog section for that version into it, which also gives the npm page real releases to link to.
+
+### Fixed
+
+- **A folder the board is not allowed to read is no longer reported as missing.** The Check button
+  next to the project folder answered every refusal the same way — "no such folder on this computer" —
+  whether the folder was absent, was a file, or simply could not be read. For a folder without
+  permissions that is plainly untrue: it is there, the board was not let in, and the answer sent you
+  off to fix a path that was already correct. Each case now says what actually happened, and a check
+  that could not reach the server says so instead of blaming the path.
+
 ## [1.12.0]
 
 ### Added

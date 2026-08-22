@@ -6,6 +6,35 @@ import { checkVersion, pendingReload } from './init.js';
 import { loadProjects, popLayer, pushLayer, setupPromptBlockHTML, styledAlert, styledConfirm, styledPrompt, wireSetupPrompt } from './sidebar.js';
 import { SHORT_MONTHS, SOUND_LIB, STATUS_LABELS, audioCtx, lastMissedAt, lastSseAt, missedSounds, pageLoadedAt, playNamedSound, refresh, relTime, titleOr, updateSoundBadge } from './sse.js';
 
+function mdInline(text) {
+  return esc(text)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*([^*\n]+)\*/g, '<em>$1</em>')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+}
+export function mdLite(md) {
+  const out = [];
+  let list = false;
+  const closeList = () => { if (list) { out.push('</ul>'); list = false; } };
+  for (const block of String(md || '').split(/\n\s*\n/).map((b) => b.trim()).filter(Boolean)) {
+    const flat = block.split('\n').map((l) => l.trim()).join(' ');
+    const head = flat.match(/^#{1,6}\s+(.*)$/);
+    if (head) { closeList(); out.push(`<h4>${mdInline(head[1])}</h4>`); continue; }
+    if (/^[-*]\s+/.test(block)) {
+      if (!list) { out.push('<ul>'); list = true; }
+      for (const item of block.split(/\n(?=[-*]\s)/)) {
+        out.push(`<li>${mdInline(item.replace(/^[-*]\s+/, '').split('\n').map((l) => l.trim()).join(' '))}</li>`);
+      }
+      continue;
+    }
+    closeList();
+    out.push(`<p>${mdInline(flat)}</p>`);
+  }
+  closeList();
+  return out.join('');
+}
+
 const SETTINGS_DEFAULTS = { sound: true, soundReview: 'ding', soundDone: 'click', startScreen: 'dashboard', dashRange: 'week', theme: 'system', keepDrawer: false, notifyReview: false, compactCards: false, linkLines: true, keymap: {} };
 export function getSetting(k) {
   const v = localStorage.getItem('kb.set.' + k);
@@ -424,6 +453,7 @@ async function renderSection(sec) {
       + `<div class="set-col hidden" id="about-upd-fail"><span class="set-lab">${tr('Run it yourself')}<small>${tr('the board is not allowed to do this — the command is the same one it just tried')}</small></span>`
       + '<pre class="onb-code" id="about-upd-cmd"></pre></div>'
       + `<div class="set-row hidden" id="about-dev-row"><span class="set-lab">${tr('dev branch')}<small id="about-dev-sub">…</small></span><span class="about-fresh" id="about-dev"></span></div>`
+      + `<div class="set-col"><span class="set-lab">${tr("What's new")}<small id="about-news-sub">…</small></span><div class="about-news" id="about-news">…</div></div>`
       + `<div class="set-row"><span class="set-lab">${tr('Check for updates')}<small id="about-recheck-sub">${tr('re-read branch state from GitHub')}</small></span><button class="btn-ghost" id="about-recheck">${tr('Check')}</button></div>`
       + `<div class="set-row"><span class="set-lab">${tr('Reload the page')}<small>${tr('re-read the board code right now')}</small></span><button class="btn-ghost" id="about-reload">${tr('Reload now')}</button></div>`
       + `<div class="set-row"><span class="set-lab">${tr('Using the board at work')}<small>${tr('free for everyone, nothing switched off — if it earns you money, $12 a year per person keeps it maintained')}</small></span>`
@@ -475,8 +505,21 @@ async function renderSection(sec) {
         ? `${u.dev.sha}${u.dev.date ? ` ${tr('at')} ${fmtDbTime(u.dev.date.slice(0, 19).replace('T', ' '))}` : ''}${u.dev.message ? ` · ${u.dev.message}` : ''}`
         : tr('dev has no commits beyond main');
     };
+    const loadNews = async (upd, forced) => {
+      const box = $('about-news'); const sub = $('about-news-sub');
+      if (!box || !sub) return;
+      try {
+        const remote = upd?.update_available === true ? `?remote=1${forced ? '&refresh=1' : ''}` : '';
+        const n = await api('GET', `/api/whats-new${remote}`, null, { quiet: true });
+        box.innerHTML = n?.notes ? mdLite(n.notes) : `<p class="muted">${esc(tr('no notes for this version'))}</p>`;
+        const ver = n?.version ? `${tr('version')} ${n.version}${n.source === 'github' ? ` · ${tr('not installed yet')}` : ''}` : '';
+        const link = /^https:\/\//.test(n?.url || '')
+          ? ` · <a href="${esc(n.url)}" target="_blank" rel="noopener noreferrer">${esc(tr('release page'))}</a>` : '';
+        sub.innerHTML = esc(ver) + link;
+      } catch { box.textContent = '—'; sub.textContent = ''; }
+    };
     api('GET', '/api/about').catch(() => null).then((a) => { about = a; })
-      .then(() => api('GET', '/api/update-check')).then(renderUpd)
+      .then(() => api('GET', '/api/update-check')).then((u) => { renderUpd(u); return loadNews(u); })
       .catch(() => { const s = $('about-upd-sub'); if (s) s.textContent = '—'; });
     const showFailCmd = (cmd) => {
       const wrap = $('about-upd-fail');
@@ -531,7 +574,7 @@ async function renderSection(sec) {
     $('about-recheck').onclick = async () => {
       const btn = $('about-recheck');
       btn.disabled = true; $('about-upd-sub').textContent = tr('checking…');
-      try { renderUpd(await api('GET', '/api/update-check?refresh=1')); }
+      try { const u = await api('GET', '/api/update-check?refresh=1'); renderUpd(u); await loadNews(u, true); }
       catch { $('about-upd-sub').textContent = '—'; }
       btn.disabled = false;
     };
