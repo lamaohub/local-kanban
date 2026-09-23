@@ -1,11 +1,13 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { db, ghOwner, ghRepo, uiLang } from '../db.js';
+import { ghBinEnv } from '../config.js';
 const GH_CANDIDATES = [
   '/opt/homebrew/bin/gh', '/usr/local/bin/gh', '/usr/bin/gh',
   '/home/linuxbrew/.linuxbrew/bin/gh', `${process.env.HOME}/.local/bin/gh`,
 ];
-const GH = GH_CANDIDATES.find((p) => existsSync(p)) || 'gh';
+const GH_FOUND = GH_CANDIDATES.find((p) => existsSync(p)) || 'gh';
+const ghBin = () => ghBinEnv() || GH_FOUND;
 
 const PERMANENT = [
   /validation failed/i,
@@ -19,7 +21,7 @@ export function isPermanent(stderr) {
 
 export function gh(args, { timeout = 60000 } = {}) {
   return new Promise((resolve, reject) => {
-    execFile(GH, args, { timeout, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile(ghBin(), args, { timeout, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) {
         const e = new Error((stderr || err.message || '').trim().slice(0, 500));
         e.permanent = isPermanent(String(stderr));

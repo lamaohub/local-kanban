@@ -63,7 +63,95 @@ function taskLine(t) {
   return `${t.key} ${t.status}${flags ? ' ' + flags : ''} ${t.title}${labels}`;
 }
 
+// The checklist is part of the task's spec: the board shows it right under the description, and
+// this CLI is the only channel Claude has — an item that is not printed here does not exist for
+// Claude. Markdown task-list lines, `- [ ]` open and `- [x]` done, in the board's order.
+function printChecklist(t) {
+  for (const c of (t.checklist || [])) console.log(`- [${c.done ? 'x' : ' '}] ${c.text}`);
+}
+
+// here, and the skill's rule "related tasks solved together are taken together" cannot be followed
+// without knowing they are related. `rel` is relative to this task: 'parent' — the other task is
+// this one's parent, 'child' — the other task is a sub-task of this one, 'related' — symmetric.
+const REL = { parent: ['↑', 'parent'], child: ['↓', 'subtask'], related: ['↔', 'related'] };
+function printLinks(t) {
+  for (const l of (t.links || [])) {
+    const [arrow, word] = REL[l.rel] || REL.related;
+    console.log(`${arrow} ${word} ${l.key} ${l.title} (${l.status})`);
+  }
+}
+const linksLine = (id, links) => `${id} ${links.map((l) => (REL[l.rel] || REL.related)[0] + l.key).join(' ') || '—'}`;
+
+// the skill had to explain two formats. The number goes into commit messages, the link is for eyes.
+function printIssue(t) {
+  if (t.gh_issue_number) console.log(`issue: #${t.gh_issue_number}${t.gh_issue_url ? ' ' + t.gh_issue_url : ''}`);
+  else if (t.gh_issue_url) console.log(`issue: ${t.gh_issue_url}`);
+}
+
+// sees cards in the column, and a bare "empty" made Claude report that there was nothing there.
+function emptyLine(todo) {
+  const blocked = todo.filter((t) => t.blocked).length;
+  return blocked ? `empty (${blocked} blocked)` : 'empty';
+}
+
+function printAttachments(t) {
+  for (const a of (t.attachments || [])) console.log(`📎 screenshot (open it with Read): ${a.path}`);
+}
+
+// Comments. Three authors: the human ('me'), Claude, and 'git' — the commit stat the board attaches
+// by itself on the move to review. Each gets its own mark: a commit printed as 👤 read as the human
+const WHO = { claude: '🤖', git: '⎇' };
+
+// The database keeps UTC ('YYYY-MM-DD HH:MM:SS'); print local time, to the minute — enough to tell
+function when(c) {
+  const d = new Date(String(c.created_at || '').replace(' ', 'T') + 'Z');
+  if (Number.isNaN(d.getTime())) return '';
+  const p = (n) => String(n).padStart(2, '0');
+  return `[${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}] `;
+}
+
+function printComment(c) {
+  const at = when(c);
+  if (c.body) console.log(`> ${WHO[c.author] || '👤'} ${at}${c.author === 'git' ? 'commit ' : ''}${c.body}`);
+  if (c.image_path) console.log(`📎 image from a comment ${at}(open it with Read): ${c.image_path}`);
+}
+
+// Claude's last report — not just the latest one (a send-back plus a follow-up note lost the first)
+// and not whatever happens to fit a window of the last few (Claude's own notes and commit stats
+// pushed the human out of it). Those are always printed; `window` adds the last N comments of any
+// author on top, and the latest images stay too — they are usually the correction itself. When the
+// human has said nothing since the last report, the last thing they did say is printed, dated, so
+// it can be told apart from a fresh one. Whatever is left out is counted, never dropped silently.
+function printComments(cs, window) {
+  const keep = new Set();
+  let lastReport = -1;
+  cs.forEach((c, i) => { if (c.author === 'claude') lastReport = i; });
+  const human = (c) => c.author !== 'claude' && c.author !== 'git';
+  cs.forEach((c, i) => { if (i > lastReport && human(c)) keep.add(i); });
+  if (!keep.size) {
+    const i = cs.findLastIndex((c) => human(c) && c.body);
+    if (i >= 0) keep.add(i);
+  }
+  for (let i = Math.max(0, cs.length - window); i < cs.length; i++) keep.add(i);
+  cs.map((c, i) => (c.image_path ? i : -1)).filter((i) => i >= 0).slice(-3).forEach((i) => keep.add(i));
+  const hidden = cs.length - keep.size;
+  if (hidden > 0) console.log(`… ${hidden} more comment${hidden === 1 ? '' : 's'} not printed — the board has them all`);
+  cs.forEach((c, i) => { if (keep.has(i)) printComment(c); });
+}
+
 const [cmd, ...args] = process.argv.slice(2);
+
+async function tick(done) {
+  const [id, n] = args;
+  const no = Number(n);
+  if (!id || !Number.isInteger(no) || no < 1) die(`kb ${done ? 'check' : 'uncheck'} <key> <n>  (n = the item number, from 1, in the order kb show prints them)`);
+  const t = await api('GET', `/api/tasks/${id}`);
+  const items = t.checklist || [];
+  if (no > items.length) die(`kb: ${t.key} has ${items.length ? `only ${items.length} checklist item${items.length === 1 ? '' : 's'}` : 'no checklist'}`);
+  const item = await api('PATCH', `/api/tasks/${id}/checklist/${items[no - 1].id}`, { done });
+  const open = items.filter((c, i) => (i === no - 1 ? !item.done : !c.done)).length;
+  console.log(`${t.key} - [${item.done ? 'x' : ' '}] ${item.text} (${open} open)`);
+}
 
 const commands = {
   async p() {
@@ -91,28 +179,27 @@ const commands = {
     if (!proj) die('kb next <project>');
     const ts = await api('GET', `/api/tasks?${new URLSearchParams({ project: proj, status: 'todo' })}`);
     const free = ts.filter((t) => !t.blocked);
-    console.log(free.length ? taskLine(free[0]) : 'empty');
+    console.log(free.length ? taskLine(free[0]) : emptyLine(ts));
   },
 
-  // take the next task and put it straight into prep (study before code); prints the last
-  // comment from the human (notes from a send-back). Writing code → kb mv <key> doing.
+  // take the next task and put it straight into prep (study before code); prints what the human
+  // wrote since Claude's last report (notes from a send-back). Writing code → kb mv <key> doing.
   async take() {
     const [proj] = args;
     if (!proj) die('kb take <project>');
     const ts = await api('GET', `/api/tasks?${new URLSearchParams({ project: proj, status: 'todo' })}`);
     const free = ts.filter((t) => !t.blocked);
-    if (!free.length) return console.log('empty');
+    if (!free.length) return console.log(emptyLine(ts));
     const t = await api('PATCH', `/api/tasks/${free[0].id}`, { status: 'prep' });
     console.log(taskLine({ ...t, labels: t.labels }));
     if (t.description) console.log(t.description);
-    if (t.gh_issue_number) console.log(`issue: ${t.gh_issue_number}`);
-    const atts = await api('GET', `/api/tasks/${t.id}/attachments`);
-    for (const a of atts) console.log(`📎 screenshot (open it with Read): ${a.path}`);
-    const cs = await api('GET', `/api/tasks/${t.id}/comments`);
-    const lastHuman = cs.filter((c) => c.author === 'me' && c.body).pop();
-    if (lastHuman) console.log(`> 👤 ${lastHuman.body}`);
-    // comments often carry corrections — print the paths of the latest images so they get opened
-    for (const c of cs.filter((c) => c.image_path).slice(-3)) console.log(`📎 image from a comment (open it with Read): ${c.image_path}`);
+    // PATCH answers with the bare row; the checklist and the attachments live on the full card
+    const full = await api('GET', `/api/tasks/${t.id}`);
+    printChecklist(full);
+    printLinks(full);
+    printIssue(full);
+    printAttachments(full);
+    printComments(await api('GET', `/api/tasks/${t.id}/comments`), 0);
   },
 
   // leave a note and move to review in one command
@@ -131,13 +218,11 @@ const commands = {
     console.log(`${t.key} ${t.project} ${t.status}${t.blocked ? ` blocked: ${t.blocked_reason || ''}` : ''}${PRI[t.priority] ? ' ' + PRI[t.priority] : ''}${t.labels.length ? ' [' + t.labels.join(',') + ']' : ''}`);
     console.log(t.title);
     if (t.description) console.log(t.description);
-    if (t.gh_issue_url) console.log(`issue: ${t.gh_issue_url}`);
-    for (const a of (t.attachments || [])) console.log(`📎 screenshot (open it with Read): ${a.path}`);
-    const cs = await api('GET', `/api/tasks/${id}/comments`);
-    for (const c of cs.slice(-5)) {
-      if (c.body) console.log(`> ${c.author === 'claude' ? '🤖' : '👤'} ${c.body}`);
-      if (c.image_path) console.log(`📎 image from a comment (open it with Read): ${c.image_path}`);
-    }
+    printChecklist(t);
+    printLinks(t);
+    printIssue(t);
+    printAttachments(t);
+    printComments(await api('GET', `/api/tasks/${id}/comments`), 5);
   },
 
   async add() {
@@ -222,19 +307,27 @@ const commands = {
     console.log(`${t.key} 📝`);
   },
 
+  // kb link A B [child|parent|related] — `child`: B becomes a sub-task of A, `parent`: B becomes
+  // A's parent. Without a third word the link is plain `related`, as it always was. A pair holds
+  // one link, so linking again with another word re-types it.
   async link() {
-    const [id, other] = args;
-    if (!id || !other) die('kb link <key> <key>  (link two tasks)');
-    const links = await api('POST', `/api/tasks/${id}/links`, { key: other });
-    console.log(`${id} ↔ ${links.map((l) => l.key).join(', ') || '—'}`);
+    const [id, other, rel = 'related'] = args;
+    if (!id || !other || !REL[rel]) die('kb link <key> <key> [child|parent|related]  (child: the second task becomes a sub-task of the first)');
+    const links = await api('POST', `/api/tasks/${id}/links`, { key: other, rel });
+    console.log(linksLine(id, links));
   },
 
   async unlink() {
     const [id, other] = args;
     if (!id || !other) die('kb unlink <key> <key>');
     const links = await api('DELETE', `/api/tasks/${id}/links/${other}`);
-    console.log(`${id} ↔ ${links.map((l) => l.key).join(', ') || '—'}`);
+    console.log(linksLine(id, links));
   },
+
+  // empty and could not tell what of the list was done. The item is addressed by its number — the
+  // position in which show/take print it (the board's order), counting from 1.
+  async check() { await tick(true); },
+  async uncheck() { await tick(false); },
 
   async block() {
     const [id, reason] = args;
@@ -268,6 +361,17 @@ const commands = {
     const services = parsePm2Services(p.pm2_services);
     if (services.length) out.push(`pm2: ${services.join(', ')}`);
     if (p.domain) out.push(`domain: ${p.domain}`);
+    // CLAUDE.md", "deployed by skill X", DNS facts) — info printed everything but it
+    if (p.description) out.push(`description: ${p.description}`);
+    // page; without this line Claude went looking by itself and sometimes missed. A missing
+    // CLAUDE.md is said out loud — it is a signal (the task starts without architecture notes).
+    if (p.path) {
+      const d = await api('GET', `/api/projects/${encodeURIComponent(p.slug)}/docs`);
+      const found = (d.docs || []).filter((x) => x.exists).map((x) => x.name);
+      if (!d.path_exists) out.push('docs: — the project folder does not exist on this machine');
+      else if (!found.includes('CLAUDE.md')) out.push(`docs: no CLAUDE.md${found.length ? ` — read ${found.join(', ')} instead` : ', and no README.md / ARCHITECTURE.md either'}`);
+      else out.push(`docs: ${found.join(', ')}`);
+    }
     console.log(out.join('\n'));
   },
 
@@ -297,7 +401,7 @@ const commands = {
 };
 
 if (!cmd || !commands[cmd]) {
-  die('kb p|ls|next|take|show|add|mv|review|done|cancel|pri|lbl|desc|note|link|unlink|block|unblock|rm|info|svc|sync|retry');
+  die('kb p|ls|next|take|show|add|mv|review|done|cancel|pri|lbl|desc|note|link|unlink|check|uncheck|block|unblock|rm|info|svc|sync|retry');
 }
 commands[cmd]().catch((e) => {
   // die() inside a command already exited the process — only real exceptions reach here.

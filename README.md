@@ -142,6 +142,7 @@ Releases live in `main` (stable, tagged); day-to-day development happens in `dev
 | `KB_PANEL_INFO` | — | optional path to an external panel's info.json for category sync |
 | `KB_SSE_MAX` | `20` | cap on concurrent SSE connections |
 | `KB_SKILLS_EXTRA` | — | extra skill root directories, `:`-separated |
+| `KB_GH_BIN` | — | path to the `gh` binary when it is not in a usual place (Homebrew, `/usr/bin`, `~/.local/bin`) |
 
 The legacy names `PANEL_URL` and `PANEL_INFO` (without the prefix) still work as a fallback.
 

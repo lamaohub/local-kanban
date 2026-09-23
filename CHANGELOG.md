@@ -8,6 +8,47 @@ version it goes out as and opens an empty one again. Released sections are histo
 
 ## [Unreleased]
 
+## [1.14.0]
+
+### Added
+
+- **`kb` shows how tasks are linked, and can make a sub-task.** The board keeps parents, sub-tasks and
+  related tasks, but `kb show` and `kb take` printed none of them, so Claude could not know that two
+  tasks were meant to go together. Both commands now print one line per link: `↑ parent`,
+  `↓ subtask`, `↔ related`, with the key, title and status. `kb link A B child` makes B a sub-task
+  of A, `kb link A B parent` makes it A's parent; without a third word the link is related, as before.
+- **`kb info` prints the project's description and its documents.** The description is where owners
+  keep the context for work, and it never reached Claude. A `docs:` line now lists the documents to
+  read before a task (`CLAUDE.md`, `README.md`, `ARCHITECTURE.md` …) and says so plainly when there is
+  no `CLAUDE.md` or the project folder is not on this machine.
+- **`kb check <key> <n>` / `kb uncheck` tick checklist items from the CLI.** Claude could read the
+  checklist but not tick it, so at acceptance every box was empty and the human could not tell what
+  of the list was done. The item is addressed by its number in the order `kb show` prints it.
+- **`KB_GH_BIN` points the board at `gh` when it lives somewhere unusual.** The board looks for `gh`
+  in the usual install locations (Homebrew, `/usr/bin`, `~/.local/bin`) and then on `PATH`; a copy
+  anywhere else can now be named explicitly.
+
+### Fixed
+
+- **`kb` no longer loses what the human wrote in a card.** `kb take` printed only the latest note
+  from the human, so a send-back followed by a second note lost the first; `kb show` printed the last
+  five comments of any author, and Claude's own notes plus the commit stats pushed the human's note
+  out without a word. Both now print every note the human left since Claude's last report, each
+  comment carries its date and time, and anything left out is counted ("… 3 more comments not
+  printed") instead of dropped silently.
+- **A commit stat is no longer printed as the human speaking.** `kb show` marked everything that was
+  not Claude's with 👤, including the commit stat the board attaches on its own. It is marked ⎇ now.
+- **`kb take` tells a blocked To do from an empty one.** When every card in To do was blocked it
+  answered a bare `empty`, and Claude reported an empty column while the human could see cards in
+  it. It now says `empty (2 blocked)`; `kb next` does the same.
+- **`kb take` and `kb show` print the issue the same way** — `issue: #42 <link>`. One printed the
+  number and the other the link.
+- **The checklist now reaches Claude.** A card's checklist is shown on the board right under the
+  description, but `kb show` and `kb take` printed everything about the task except it — the CLI is
+  the only channel Claude has, so the items simply did not exist for it: a card with three checklist
+  items and an empty description arrived as a bare title. Both commands now print the items as
+  `- [ ]` / `- [x]` lines, in the board's order, right after the description.
+
 ## [1.13.0]
 
 ### Added

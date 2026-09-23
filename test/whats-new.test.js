@@ -8,8 +8,13 @@ import Fastify from 'fastify';
 let app, tmp, changelogSection, repoSlug, pkg;
 const realFetch = globalThis.fetch;
 const realPath = process.env.PATH;
+const realGhBin = process.env.KB_GH_BIN;
 const get = async (url) => (await app.inject({ method: 'GET', url })).json();
-const noGh = () => { globalThis.fetch = async () => { throw new Error('offline'); }; process.env.PATH = '/nonexistent'; };
+const noGh = () => {
+  globalThis.fetch = async () => { throw new Error('offline'); };
+  process.env.PATH = '/nonexistent';
+  process.env.KB_GH_BIN = '/nonexistent/gh';
+};
 
 before(async () => {
   tmp = mkdtempSync(join(tmpdir(), 'kb-test-'));
@@ -25,7 +30,11 @@ before(async () => {
   await app.ready();
 });
 
-after(async () => { globalThis.fetch = realFetch; process.env.PATH = realPath; await app?.close(); rmSync(tmp, { recursive: true, force: true }); });
+after(async () => {
+  globalThis.fetch = realFetch; process.env.PATH = realPath;
+  if (realGhBin === undefined) delete process.env.KB_GH_BIN; else process.env.KB_GH_BIN = realGhBin;
+  await app?.close(); rmSync(tmp, { recursive: true, force: true });
+});
 
 const LOG = `# Changelog
 

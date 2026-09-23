@@ -141,6 +141,7 @@ npm run update   # git pull + npm install + pm2 restart (если примени
 | `KB_PANEL_INFO` | — | опциональный info.json внешней панели для синка категорий |
 | `KB_SSE_MAX` | `20` | потолок одновременных SSE-соединений |
 | `KB_SKILLS_EXTRA` | — | дополнительные корни скиллов через `:` |
+| `KB_GH_BIN` | — | путь к `gh`, если он лежит не в обычном месте (Homebrew, `/usr/bin`, `~/.local/bin`) |
 
 Старые имена `PANEL_URL` и `PANEL_INFO` (без префикса) продолжают работать как запасные.
 

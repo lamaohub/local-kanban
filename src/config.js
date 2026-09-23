@@ -38,3 +38,4 @@ export const allowedHosts = () => env('KB_ALLOWED_HOSTS').split(',').map((s) => 
 export const langOverride = () => env('KB_LANG');
 export const ghOwnerEnv = () => env('KB_GH_OWNER');
 export const ghRepoEnv = () => env('KB_GH_REPO');
+export const ghBinEnv = () => expandPath(env('KB_GH_BIN'));

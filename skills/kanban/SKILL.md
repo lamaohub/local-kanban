@@ -15,10 +15,14 @@ Statuses: `backlog` → `todo` → `prep` → `doing` → `deploy` → `review` 
 
 ```
 kb take <proj>                # take the next task from todo → prep; prints the description,
-                              # the issue number (for commit messages), the last note from the
-                              # human (if the task was sent back, act on it!) and the paths of
-                              # attached screenshots as "📎 <path>" — OPEN those with Read,
-                              # they are context for the task.
+                              # the checklist as "- [ ] item" / "- [x] item" lines (that IS the
+                              # spec — do every open item, and verify them one by one before
+                              # review), the issue as "issue: #N <link>" (#N goes into commit
+                              # messages; kb show prints the same line), EVERY note the
+                              # human left since your last report, dated — "> 👤 [2026-09-02 11:30]
+                              # …" (if the task was sent back, act on them!) and the paths of
+                              # attached screenshots as "📎 <path>" — OPEN those with Read, they
+                              # are context for the task.
                               # started writing code → kb mv <key> doing.
 kb review <key> "note"        # leave a note and move to review. NOT atomic: the note is stored
                               # EVEN IF the move is rejected (backlog and todo cannot go straight
@@ -27,7 +31,11 @@ kb review <key> "note"        # leave a note and move to review. NOT atomic: the
                               # never went through doing.
 kb p                          # projects: slug (PREFIX) b0 t2 pp0 d1 dp0 r1 ✓5 !1  (pp = prep)
 kb ls <proj> [-s st] [-a]     # tasks (without -a, backlog/done/cancelled are hidden)
-kb show <key>                 # details + issue + latest comments
+kb show <key>                 # details + checklist + issue + comments: the last five plus every
+                              # human note since your last report. Marks: 🤖 yours, 👤 the
+                              # human's, ⎇ a commit stat the board attached by itself (not the
+                              # human speaking). "… N more comments not printed" = the rest are
+                              # on the board — nothing is dropped silently.
 kb add <proj> "title" [-d "desc"] [-p high|med|low] [-s todo]   # goes to backlog by default!
 kb mv <key> todo|prep|doing|deploy|review|done|cancelled
 kb done <key> · kb cancel <key> · kb pri <key> high|med|low|none
@@ -40,9 +48,16 @@ kb lbl <key> +bug -ui         # labels: bug docs duplicate enhancement ui featur
                               #    label goes into the LABELS palette first, and into this file.
 kb desc <key> "description"   # set or overwrite a task description (used when grooming the backlog)
 kb note <key> "text"          # a standalone comment (rarely needed — kb review covers it)
-kb link <key> <key>           # link two tasks (the board draws a line) · kb unlink to unlink
+kb check <key> <n>            # tick checklist item n (from 1, in the order show/take print them)
+                              # · kb uncheck <key> <n> clears it. Answers "- [x] item (2 open)"
+kb link <key> <key> [child|parent]   # link two tasks (the board draws a line); `child` makes the
+                              # second task a sub-task of the first, `parent` its parent, no word
+                              # = plain related · kb unlink to unlink
 kb block <key> "why" · kb unblock <key>
-kb info <proj>                # path, deploy_skill, server, pm2, domain
+kb info <proj>                # path, deploy_skill, server, pm2, domain, the project's description
+                              # (the owner's context for work — read it) and "docs: CLAUDE.md,
+                              # README.md" — the documents to read before the task; "docs: no
+                              # CLAUDE.md — read README.md instead" is a signal, not an empty line
 kb svc <proj>                 # live status of the project's services (local pm2 or your own PANEL_URL)
 kb sync                       # state of the sync queue (or "sync is off" in local-only mode)
 ```
@@ -92,15 +107,18 @@ Claude takes a task as far as *review* and stops. Only the user moves anything t
 **When the prompt lists specific keys** (the 📋 button on the "To do" column produces them) those
 are SPECIFIC tasks, not a queue. Take each one with `kb show <key>` (NOT `kb take`, which pulls
 ONE next task from the project's `todo`) and **move it to prep right away: `kb mv <key> prep`** —
-`kb show` does not change the status. If `kb show` printed `> 👤 Send back: …`, the task was
-returned: open the `📎` screenshots with Read and act on that note FIRST. Then follow steps 2–6
+`kb show` does not change the status. If `kb show` printed `> 👤 [date] Send back: …`, the task was
+returned — the date tells a fresh send-back from an old one you already answered: open the `📎` screenshots with Read and act on that note FIRST. Then follow steps 2–6
 for each. Use `kb take X` only when asked to "work through project X" without specific keys.
 
 1. `kb take X` — take a task (lands in prep; description and issue are already in the output).
-   "empty" → report it and stop. `> 👤 …` is a note from a send-back, act on it first.
+   "empty" → report it and stop. "empty (N blocked)" is NOT an empty column: every card in To do
+   is blocked — list them (`kb ls X -s todo`) and report that, not "nothing to do". `> 👤 …` lines are what the human wrote since your last report
+   (a send-back and its follow-ups) — act on all of them first.
    `📎 <path>` — open the screenshot with Read.
 2. **HARD RULE — starting a task (never skip, even for a one-line change).** `kb info X` → go to
-   `path`. Before any code you MUST read: (a) the project's `CLAUDE.md` if it has one — **and if
+   `path`; its `description:` and `docs:` lines say what the owner wants you to know and which
+   documents the project has. Before any code you MUST read: (a) the project's `CLAUDE.md` if it has one — **and if
    it does not, find where the project keeps its architecture or research document (`README.md`,
    `EXPERIMENTS.md`, `docs/`) and read that; apply the "doc in the same commit" rule to it**;
    (b) the deploy skill at `deploy_skill_path` from `kb info`, if one is set. The matching commit
@@ -126,7 +144,9 @@ for each. Use `kb take X` only when asked to "work through project X" without sp
    The generic `deploy` skill ships with the board (`skills/deploy/`) and works purely off
    `kb info` data. Production commands (ssh/rsync) will ask for confirmation — that is expected.
 5. `kb review <key> "<two plain sentences: 1) what the problem was 2) how you solved it>"` → take
-   the next one.
+   the next one. **If the task has a checklist, tick each item as you finish it (`kb check <key>
+   <n>`).** Before review every item is either ticked or named in the note as not done — the human
+   accepts the task by those boxes, and an unticked done item reads as undone.
 6. Stuck, or the decision is the human's → `kb block <key> "reason"` and move on.
 7. At the end, a one-line summary: how many in review, how many blocked.
 
@@ -161,7 +181,9 @@ One line of summary at the end.
 - **You found an unrelated problem along the way** → do not fix it silently. Create a task
   (`kb add <proj> "..." -d "..."`) and ask in chat: do it now, defer it, or is it for the human.
 - **Related tasks solved together** → take both at once (both in doing), fix them in one pass and
-  link them with `kb link`.
+  link them with `kb link`. `kb show`/`kb take` print a task's links as `↑ parent KEY title
+  (status)`, `↓ subtask …`, `↔ related …` — look at them before you start: a linked task in To do
+  is usually meant to go together with this one, and a parent explains why the task exists.
 - **A discussion or question task** (no code): study it in `prep`, put the full answer in
   `kb note <key> "..."`, then `kb mv <key> review`. You write no code and do not move it to done.
 - A "check whether the service is alive" task → `kb svc <proj>` (one line per service, no ssh).
