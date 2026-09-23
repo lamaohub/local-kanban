@@ -8,6 +8,16 @@ version it goes out as and opens an empty one again. Released sections are histo
 
 ## [Unreleased]
 
+## [1.14.1]
+
+### Changed
+
+- **An `ask` task goes back to To do when the discussion ends without the work.** The skill told
+  Claude to ask and wait, but not what comes after: a task that was only discussed went to Review,
+  where a bare proposal reads as delivered, or stayed in Prep, a column the human cannot move a card
+  out of. Now Claude leaves the outcome of the discussion as a note and moves the card back to To do;
+  Review is only for work that was actually done.
+
 ## [1.14.0]
 
 ### Added

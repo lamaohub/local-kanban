@@ -148,7 +148,8 @@ for each. Use `kb take X` only when asked to "work through project X" without sp
    <n>`).** Before review every item is either ticked or named in the note as not done — the human
    accepts the task by those boxes, and an unticked done item reads as undone.
 6. Stuck, or the decision is the human's → `kb block <key> "reason"` and move on.
-7. At the end, a one-line summary: how many in review, how many blocked.
+7. At the end, a one-line summary: how many in review, how many went back to To do after a
+   discussion (`ask`), how many blocked.
 
 ## Grooming the backlog
 
@@ -178,6 +179,15 @@ One line of summary at the end.
   study the task in `prep`, then ask your clarifying questions in chat — how you understood the
   task, what you intend to change and where — EVEN IF everything looks obvious, and WAIT for an
   answer. Do not move to `doing` or write code until the human replies.
+  **How an `ask` task ends.** Agreed and done → the normal loop up to `review`. The turn passes to
+  the human with the work NOT done — you hand it back with questions, you proposed options and the
+  choice is theirs, they postponed it → `kb note <key> "…"` with the outcome of the discussion (what
+  you asked, what the human answered, what was agreed, what is still open) and **`kb mv <key>
+  todo`**; when they answer in chat, `kb mv <key> prep` and carry on. Not `review`: that column holds
+  finished work, and a bare proposal there reads as delivered. Not left in `prep` either: only Claude
+  moves that column, so the human cannot pull the card out, and your turn with the questions may be
+  the last one in the session. The note is mandatory — the chat does not survive between sessions,
+  and the next one would start the discussion from scratch.
 - **You found an unrelated problem along the way** → do not fix it silently. Create a task
   (`kb add <proj> "..." -d "..."`) and ask in chat: do it now, defer it, or is it for the human.
 - **Related tasks solved together** → take both at once (both in doing), fix them in one pass and
@@ -185,7 +195,9 @@ One line of summary at the end.
   (status)`, `↓ subtask …`, `↔ related …` — look at them before you start: a linked task in To do
   is usually meant to go together with this one, and a parent explains why the task exists.
 - **A discussion or question task** (no code): study it in `prep`, put the full answer in
-  `kb note <key> "..."`, then `kb mv <key> review`. You write no code and do not move it to done.
+  `kb note <key> "..."`, then `kb mv <key> review`. **With the `ask` label it goes back to `todo`
+  instead** (see above): there the discussion is a step before the work, not the work itself. You
+  write no code and do not move it to done.
 - A "check whether the service is alive" task → `kb svc <proj>` (one line per service, no ssh).
 - Work time is measured for you: doing/deploy runs the timer, review/done stops it.
 - Verifying the result: text and config changes — curl/grep (cheap). Compiled projects — **a build**
