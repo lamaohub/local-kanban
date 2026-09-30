@@ -1,8 +1,9 @@
 
 import { $, ALL, ALL_STATUSES, api, DONE_LIMIT, esc, ic, LABEL_COLORS, LABEL_SELECTABLE, noteUnsaved, popoverPlacement, PRI_ICON, PRI_LEVELS, seg, state, tr } from './core.js';
 import { markKbCursor, openCardMenu, openDrawer, openDrawerNew, setKbCursor, statusOptionList } from './drawer.js';
+import { columnComparator, DEFAULT_SORT, orderColumn, slotBefore, sortMode } from './order.js';
 import { getSetting, plural } from './settings.js';
-import { styledAlert, styledConfirm } from './sidebar.js';
+import { popLayer, pushLayer, styledAlert, styledConfirm } from './sidebar.js';
 import { copyBacklogPrompt, copyTodoPrompt, refresh } from './sse.js';
 
 function matchesSearch(t) {
@@ -38,19 +39,22 @@ export function renderBoard() {
   const columns = ALL_STATUSES.map(([k]) => k)
     .filter((k) => k !== 'cancelled' || state.tasks.some((t) => t.status === 'cancelled'));
   for (const key of columns) {
-    let tasks = state.tasks
-      .filter((t) => t.status === key && matchesSearch(t))
-      .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || b.priority - a.priority || a.position - b.position || a.id - b.id);
-    if (key === 'done' || key === 'cancelled') {
-      tasks = tasks.sort((a, b) => b.id - a.id).slice(0, DONE_LIMIT)
-        .sort((a, b) => b.priority - a.priority || b.id - a.id);
-    }
+    const mode = colSort(key);
+    const tasks = orderColumn(state.tasks.filter((t) => t.status === key && matchesSearch(t)), mode, colOrderOpts(key));
 
     const col = document.createElement('div');
     col.className = 'col';
     const head = document.createElement('div');
     head.className = 'col-head';
     head.innerHTML = `<span class="dot s-${key}"></span>${labels[key]} <span class="n">${tasks.length}</span>`;
+    if (tasks.length > 1 || mode !== DEFAULT_SORT) {
+      const sort = document.createElement('button');
+      sort.className = `btn-icon col-sort${mode !== DEFAULT_SORT ? ' on' : ''}`;
+      sort.innerHTML = ic('sort', 13);
+      sort.title = mode === DEFAULT_SORT ? tr('Sort the column') : tr(SORT_LABELS[mode]);
+      sort.onclick = (e) => { e.stopPropagation(); openColSortMenu(sort, key); };
+      head.appendChild(sort);
+    }
     if (CREATABLE.has(key)) {
       const add = document.createElement('button');
       add.className = 'btn-icon col-add';
@@ -88,7 +92,7 @@ export function renderBoard() {
       e.preventDefault();
       body.classList.add('dragover');
       if (dragId == null) return;
-      const after = dragAfterCard(body, e.clientY, dragId);
+      const after = colSort(key) === DEFAULT_SORT ? dragAfterCard(body, e.clientY, dragId) : sortedSlotCard(body, key, dt);
       if (dropPh.parentNode !== body || dropPh.nextSibling !== after) body.insertBefore(dropPh, after);
     };
     body.ondragleave = (e) => { if (!body.contains(e.relatedTarget)) body.classList.remove('dragover'); };
@@ -470,6 +474,66 @@ export async function multiAction(act, btn) {
   }
 }
 
+const SORT_KEY = 'kb.ui.colSort';
+const SORT_LABELS = {
+  manual: 'By priority, then by hand',
+  'num-desc': 'By number, newest first',
+  'num-asc': 'By number, oldest first',
+};
+function readColSorts() {
+  try {
+    const v = JSON.parse(localStorage.getItem(SORT_KEY));
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+  } catch { return {}; }
+}
+export function colSort(status) { return sortMode(readColSorts()[`${state.slug}:${status}`]); }
+function setColSort(status, mode) {
+  const all = readColSorts();
+  const k = `${state.slug}:${status}`;
+  if (sortMode(mode) === DEFAULT_SORT) delete all[k]; else all[k] = mode;
+  try { localStorage.setItem(SORT_KEY, JSON.stringify(all)); } catch {  }
+  renderBoard();
+}
+function colOrderOpts(status) {
+  return { mixed: state.slug === ALL, closed: status === 'done' || status === 'cancelled', limit: DONE_LIMIT };
+}
+function sortedSlotCard(body, status, t) {
+  const id = slotBefore(state.tasks.filter((x) => x.status === status && matchesSearch(x)), t, colSort(status), colOrderOpts(status));
+  return id == null ? null : body.querySelector(`.card[data-id="${id}"]`);
+}
+
+function closeColSortMenu() {
+  popLayer('col-sort-menu');
+  $('col-sort-menu')?.remove();
+  document.removeEventListener('click', colSortOutside);
+}
+function colSortOutside(e) { if (!e.target.closest('#col-sort-menu')) closeColSortMenu(); }
+function openColSortMenu(anchor, status) {
+  const was = $('col-sort-menu')?.dataset.status;
+  closeColSortMenu();
+  if (was === status) return;
+  pushLayer('col-sort-menu', closeColSortMenu);
+  const menu = document.createElement('div');
+  menu.className = 'drawer-menu-pop col-sort-menu';
+  menu.id = 'col-sort-menu';
+  menu.dataset.status = status;
+  const cur = colSort(status);
+  menu.innerHTML = Object.entries(SORT_LABELS).map(([v, label]) =>
+    `<div class="dm-item${v === cur ? ' on' : ''}" data-v="${v}">${esc(tr(label))}${v === cur ? '<span class="dm-chev">✓</span>' : ''}</div>`).join('')
+    + `<div class="dm-sep"></div><div class="dm-hint">${esc(tr('Sorted by number, cards cannot be reordered by hand'))}</div>`;
+  document.body.appendChild(menu);
+  const r = anchor.getBoundingClientRect();
+  let left = r.left;
+  if (left + menu.offsetWidth > window.innerWidth - 8) left = window.innerWidth - menu.offsetWidth - 8;
+  menu.style.left = `${Math.max(8, left)}px`;
+  menu.style.top = `${r.bottom + 4}px`;
+  menu.querySelectorAll('.dm-item').forEach((el) => {
+    el.onclick = () => { closeColSortMenu(); if (el.dataset.v !== cur) setColSort(status, el.dataset.v); };
+  });
+  requestAnimationFrame(() => menu.classList.add('open'));
+  document.addEventListener('click', colSortOutside);
+}
+
 function dragAfterCard(body, y, draggedId) {
   const cards = [...body.querySelectorAll('.card')].filter((c) => Number(c.dataset.id) !== draggedId);
   return cards.find((c) => y < c.getBoundingClientRect().top + c.offsetHeight / 2) || null;
@@ -587,16 +651,19 @@ async function onDrop(e, status, body) {
   if (dragGroupIds && dragGroupIds.length > 1) return onDropGroup(e, status, body);
   if (moveBlocked(t.status, status, { manual: taskIsNoclaude(t) })) return;
 
-  const cards = [...body.querySelectorAll('.card')].filter((c) => Number(c.dataset.id) !== id);
-  const y = e.clientY;
-  let idx = cards.findIndex((c) => y < c.getBoundingClientRect().top + c.offsetHeight / 2);
-  if (idx === -1) idx = cards.length;
-  const colTasks = state.tasks
-    .filter((x) => x.status === status && x.id !== id)
-    .sort((a, b) => b.priority - a.priority || a.position - b.position || a.id - b.id);
-  const prev = colTasks[idx - 1]?.position ?? 0;
-  const next = colTasks[idx]?.position ?? prev + 2;
-  const position = (prev + next) / 2;
+  const fixedOrder = colSort(status) !== DEFAULT_SORT;
+  if (fixedOrder && t.status === status) { dropPh.remove(); return; }
+  let patch = { status };
+  if (!fixedOrder) {
+    const cards = [...body.querySelectorAll('.card')].filter((c) => Number(c.dataset.id) !== id);
+    const y = e.clientY;
+    let idx = cards.findIndex((c) => y < c.getBoundingClientRect().top + c.offsetHeight / 2);
+    if (idx === -1) idx = cards.length;
+    const colTasks = state.tasks.filter((x) => x.status === status && x.id !== id).sort(columnComparator(DEFAULT_SORT));
+    const prev = colTasks[idx - 1]?.position ?? 0;
+    const next = colTasks[idx]?.position ?? prev + 2;
+    patch = { status, position: (prev + next) / 2 };
+  }
 
   const card = $('board').querySelector(`.card[data-id="${id}"]`);
   if (card) {
@@ -607,10 +674,10 @@ async function onDrop(e, status, body) {
   }
   dropPh.remove();
   try {
-    await api('PATCH', `/api/tasks/${seg(id)}`, { status, position });
+    await api('PATCH', `/api/tasks/${seg(id)}`, patch);
   } catch (e) {
     renderBoard();
-    if (e?.offline) noteUnsaved(() => api('PATCH', `/api/tasks/${seg(id)}`, { status, position }).then(refresh));
+    if (e?.offline) noteUnsaved(() => api('PATCH', `/api/tasks/${seg(id)}`, patch).then(refresh));
     return;
   }
   await refresh();
@@ -637,16 +704,16 @@ async function onDropGroup(e, status, body) {
   const y = e.clientY;
   let idx = cards.findIndex((c) => y < c.getBoundingClientRect().top + c.offsetHeight / 2);
   if (idx === -1) idx = cards.length;
-  const colTasks = state.tasks
-    .filter((x) => x.status === status && !draggedSet.has(x.id))
-    .sort((a, b) => b.priority - a.priority || a.position - b.position || a.id - b.id);
+  const colTasks = state.tasks.filter((x) => x.status === status && !draggedSet.has(x.id)).sort(columnComparator(DEFAULT_SORT));
   const prev = colTasks[idx - 1]?.position ?? 0;
   const next = colTasks[idx]?.position ?? prev + movable.length + 1;
   const step = (next - prev) / (movable.length + 1);
+  const fixedOrder = colSort(status) !== DEFAULT_SORT;
 
   dropPh.remove();
   for (let i = 0; i < movable.length; i++) {
-    await api('PATCH', `/api/tasks/${seg(movable[i].id)}`, { status, position: prev + step * (i + 1) });
+    if (fixedOrder && movable[i].status === status) continue;
+    await api('PATCH', `/api/tasks/${seg(movable[i].id)}`, fixedOrder ? { status } : { status, position: prev + step * (i + 1) });
   }
   clearSelection();
   await refresh();

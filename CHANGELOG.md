@@ -8,6 +8,24 @@ version it goes out as and opens an empty one again. Released sections are histo
 
 ## [Unreleased]
 
+## [1.15.0]
+
+### Added
+
+- **A column can be sorted by task number.** Every column with more than one card has a sort button
+  in its header: by priority and your own order (as before), by number with the newest first, or by
+  number with the oldest first. Pinned cards stay on top either way. The choice is remembered per
+  board and column in this browser and changes only what you see: the order `kb take` follows stays
+  the same. While a column is sorted by number its cards cannot be reordered by hand, and a card
+  dragged in from another column lands where its number puts it.
+
+### Fixed
+
+- **`kb link` refuses a link type it does not know, whatever the word.** `kb link A B constructor` (or
+  `toString`) was taken for a valid type, because every object answers for those names, and the
+  board quietly made the link `related`. Now it is refused with exit code 2 before anything is
+  written, like any other unknown word.
+
 ## [1.14.1]
 
 ### Changed

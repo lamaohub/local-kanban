@@ -50,6 +50,16 @@ before(async () => {
   say(t3, 'me', 'Use the dark palette', '2026-09-04 09:00:00');
   say(t3, 'claude', 'Report: switched to the dark palette', '2026-09-04 10:00:00');
 
+  // TW-1 (todo, its own project): sent back twice, and the second report answered both notes
+  db.prepare("INSERT INTO projects (slug, prefix, name, next_task_no) VALUES ('twice','TW','twice',2)").run();
+  const tw = db.prepare('INSERT INTO tasks (project_id, task_no, title, status) VALUES (?,?,?,?)')
+    .run(db.prepare("SELECT id FROM projects WHERE slug='twice'").get().id, 1, 'Returned twice', 'todo').lastInsertRowid;
+  say(tw, 'me', 'First remark', '2026-09-05 09:00:00');
+  say(tw, 'claude', 'Report 1', '2026-09-05 10:00:00');
+  say(tw, 'me', 'Send back A', '2026-09-05 11:00:00');
+  say(tw, 'me', 'Send back B', '2026-09-05 11:05:00');
+  say(tw, 'claude', 'Report 2: fixed A and B', '2026-09-05 12:00:00');
+
   const taskRoutes = (await import('../src/routes/tasks.js')).default;
   app = Fastify();
   await app.register(taskRoutes);
@@ -60,8 +70,8 @@ before(async () => {
 after(async () => { await app?.close(); if (tmp) rmSync(tmp, { recursive: true, force: true }); });
 
 // TZ is pinned so the printed local time is the stored UTC time
-const run = (args) => new Promise((resolve) => {
-  execFile(process.execPath, [KB, ...args], { env: { ...process.env, KB_URL: base, TZ: 'UTC' } },
+const run = (args, TZ = 'UTC') => new Promise((resolve) => {
+  execFile(process.execPath, [KB, ...args], { env: { ...process.env, KB_URL: base, TZ } },
     (err, stdout, stderr) => resolve({ code: err?.code ?? 0, stdout, stderr }));
 });
 
@@ -89,10 +99,29 @@ test('a commit stat is marked as a commit, never as the human', async () => {
   assert.doesNotMatch(r.stdout, /^> 👤 .*abc1234/m, 'the commit stat is printed as the human speaking');
 });
 
+// With TZ pinned to UTC every other test here would pass even if kb printed the stored UTC time as
+// it is — local and UTC are the same clock there. A zone without daylight saving (UTC+5 all year)
+// makes the conversion visible: 11:30 in the database is 16:30 on the human's clock.
+test('the date is printed in local time, not in the UTC the database keeps', async () => {
+  const r = await run(['show', 'DM-1'], 'Asia/Yekaterinburg');
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /^> 👤 \[2026-09-02 16:30\] Send back: the button is still white$/m, `the time is not local:\n${r.stdout}`);
+});
+
 test('with nothing new since the report, take still prints the last human note, with its date', async () => {
   const r = await run(['take', 'demo']);
   assert.equal(r.code, 0, r.stderr);
   assert.match(r.stdout, /^DM-3 prep /m);
   assert.match(r.stdout, /^> 👤 \[2026-09-04 09:00\] Use the dark palette$/m, `the dated note is missing:\n${r.stdout}`);
   assert.match(r.stdout, /^… 1 more comment not printed/m);
+});
+
+// "Since the last report" means the LAST one. Counted from the first, a task that came back twice
+// prints notes the second report already answered, and they read as a fresh send-back.
+test('a task sent back twice: notes answered by the latest report are not news', async () => {
+  const r = await run(['take', 'twice']);
+  assert.equal(r.code, 0, r.stderr);
+  assert.doesNotMatch(r.stdout, /Send back A/, `a note the second report answered is printed as news:\n${r.stdout}`);
+  assert.match(r.stdout, /^> 👤 \[2026-09-05 11:05\] Send back B$/m, 'the last thing the human said is still printed, dated');
+  assert.match(r.stdout, /^… 4 more comments not printed/m);
 });

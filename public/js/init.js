@@ -58,7 +58,7 @@ $('search').addEventListener('input', (e) => {
 window.addEventListener('resize', scheduleDrawLinks);
 $('board').addEventListener('scroll', scheduleDrawLinks, true);
 
-const POPUP_SELECTOR = '.modal-overlay, #card-menu, #drawer-menu-pop, #return-pop, .lbl-picker, #status-picker, .lightbox, .kbsel.open';
+const POPUP_SELECTOR = '.modal-overlay, #card-menu, #col-sort-menu, #drawer-menu-pop, #return-pop, .lbl-picker, #status-picker, .lightbox, .kbsel.open';
 
 function escClosePopup() {
   if (document.querySelector('.kbsel.open')) { closeOpenSelect(); return true; }

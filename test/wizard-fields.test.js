@@ -167,4 +167,8 @@ test('the folder check tells "not there" apart from "no permission" and "could n
   assert.match(fn, /403:/, 'a folder the board may not read is called missing again');
   assert.match(fn, /400:/, 'a file given instead of a folder is called missing again');
   assert.match(fn, /could not check the folder/, 'an unknown failure (a dead server) still claims the folder is not there');
+  // each code keeps its own words: with the texts swapped every check above still passes
+  assert.match(fn, /404: tr\('no such folder on this computer'\)/, '404 no longer says "no such folder"');
+  assert.match(fn, /400: tr\('this path is not a folder'\)/, '400 no longer says "not a folder"');
+  assert.match(fn, /403: tr\('the folder is there, but the board cannot read it/, '403 no longer says "no permission"');
 });

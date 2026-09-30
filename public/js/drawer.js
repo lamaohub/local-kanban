@@ -1,6 +1,7 @@
 
-import { WORKING, buildSelect, canMoveTo, clearSelection, labelChip, moveBlocked, scheduleDrawLinks, selVal, selectedIds, setScrollToNewCardId, taskIsNoclaude } from './board.js';
+import { WORKING, buildSelect, canMoveTo, clearSelection, colSort, labelChip, moveBlocked, scheduleDrawLinks, selVal, selectedIds, setScrollToNewCardId, taskIsNoclaude } from './board.js';
 import { $, ALL, ALL_STATUSES, DASH, LABEL_COLORS, LABEL_SELECTABLE, PRI_LEVELS, SETTINGS, TITLE_LABEL_WORDS, api, apiBlob, esc, ghSyncOn, ic, noteUnsaved, seg, state, tr } from './core.js';
+import { columnComparator, DEFAULT_SORT } from './order.js';
 import { getSetting } from './settings.js';
 import { currentProject, overlayLayer, popLayer, pushLayer, selectProject, styledAlert, styledConfirm } from './sidebar.js';
 import { autoGrow, copyText, refresh, relTime, renderTimeline } from './sse.js';
@@ -393,12 +394,12 @@ function syncDrawerToCursor() {
     if (t && t.key !== state.drawerKey) openDrawer(t.key);
   }, 150);
 }
-const kbBoardSort = (a, b) => b.priority - a.priority || a.position - b.position || a.id - b.id;
 export async function kbMoveCard(dr, dc) {
   const t = state.tasks.find((x) => x.id === state.kbCursor);
   if (!t) return;
   if (dr) {
-    const sorted = state.tasks.filter((x) => x.status === t.status).sort(kbBoardSort);
+    if (colSort(t.status) !== DEFAULT_SORT) return;
+    const sorted = state.tasks.filter((x) => x.status === t.status).sort(columnComparator(DEFAULT_SORT));
     const ri = sorted.findIndex((x) => x.id === t.id);
     const ti = Math.max(0, Math.min(sorted.length - 1, ri + dr));
     if (ti === ri) return;

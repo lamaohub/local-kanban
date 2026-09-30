@@ -50,7 +50,7 @@ These are deliberate and predate most of the features. Changes that break them n
 | `src/sync/worker.js` | drains the sync queue in the background |
 | `src/backup.js`, `src/restore.js` | scheduled snapshots; opening a backup as a second board |
 | `src/task-shape.js` | one canonical shape for a task event, shared by routes and worker |
-| `public/app.js`, `public/js/*.js` | frontend entry point plus eleven modules split by feature |
+| `public/app.js`, `public/js/*.js` | frontend entry point plus twelve modules split by feature |
 | `bin/local-kanban` | install wizard and `start` subcommand |
 | `bin/kb` | the CLI; speaks HTTP to the board, no shared code with the server |
 | `test/` | `node --test`, no test framework |

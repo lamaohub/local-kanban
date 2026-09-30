@@ -57,6 +57,11 @@ test('kb link <a> <b> child makes b a sub-task of a; without a word the link sta
 test('an unknown link type is refused before anything is written', async () => {
   const r = await run(['link', 'DM-2', 'DM-3', 'sibling']);
   assert.equal(r.code, 2, 'a usage error exits with 2');
+  // words an object answers for without having them: they come from its prototype
+  for (const word of ['constructor', 'toString', '__proto__']) {
+    const w = await run(['link', 'DM-2', 'DM-3', word]);
+    assert.equal(w.code, 2, `"${word}" was taken for a link type and sent to the board`);
+  }
   const links = (await app.inject({ method: 'GET', url: '/api/tasks/DM-2' })).json().links;
   assert.deepEqual(links.map((l) => l.key), ['DM-1'], 'the refused link was created anyway');
 });

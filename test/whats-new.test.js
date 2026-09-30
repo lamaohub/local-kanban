@@ -103,10 +103,14 @@ test('no release page, no network, no body — the block still says something tr
   const offline = await get('/api/whats-new?remote=1&refresh=1');
   assert.equal(offline.source, 'changelog', 'a dead network must not leave the block empty');
   assert.equal(offline.version, pkg.version);
+  // the label alone proves nothing: an answer that says "changelog" and carries no notes renders
+  // exactly the blank block this fallback exists to prevent
+  assert.ok(offline.notes && offline.notes.length > 10, 'the fallback is labelled right but came back empty');
 
   globalThis.fetch = async () => ({ ok: true, json: async () => ({ tag_name: 'v99.0.0', body: '   ' }) });
   const blank = await get('/api/whats-new?remote=1&refresh=1');
   assert.equal(blank.source, 'changelog', 'a release created without notes is not notes');
+  assert.ok(blank.notes && blank.notes.length > 10, 'a release without notes fell back to an empty block');
 });
 
 test('the notes are escaped before they are formatted, not after', () => {

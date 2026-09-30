@@ -309,10 +309,12 @@ const commands = {
 
   // kb link A B [child|parent|related] — `child`: B becomes a sub-task of A, `parent`: B becomes
   // A's parent. Without a third word the link is plain `related`, as it always was. A pair holds
-  // one link, so linking again with another word re-types it.
+  // one link, so linking again with another word re-types it. The word is looked up as an OWN key:
+  // `REL[rel]` also answers for `constructor`, `toString` or `__proto__` (they come from the
+  // prototype), and such a word went to the board, which quietly made the link `related`.
   async link() {
     const [id, other, rel = 'related'] = args;
-    if (!id || !other || !REL[rel]) die('kb link <key> <key> [child|parent|related]  (child: the second task becomes a sub-task of the first)');
+    if (!id || !other || !Object.hasOwn(REL, rel)) die('kb link <key> <key> [child|parent|related]  (child: the second task becomes a sub-task of the first)');
     const links = await api('POST', `/api/tasks/${id}/links`, { key: other, rel });
     console.log(linksLine(id, links));
   },
