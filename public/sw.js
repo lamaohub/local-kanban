@@ -1,4 +1,4 @@
-const OFFLINE_CACHE = 'kb-offline-v1';
+const OFFLINE_CACHE = 'kb-offline-v2';
 const OFFLINE_URL = '/offline.html';
 
 self.addEventListener('install', (e) => {
@@ -19,7 +19,10 @@ self.addEventListener('fetch', (e) => {
   if (req.mode !== 'navigate') return;
   e.respondWith((async () => {
     try {
-      return await fetch(req);
+      // A restored window and back/forward navigation arrive here in force-cache mode, and a plain
+      // fetch(req) answered them with whatever page the browser had kept. The page always comes from
+      // the board, so it is never older than the code it loads.
+      return await fetch(req, { cache: 'no-store' });
     } catch {
       return (await caches.match(OFFLINE_URL))
         || new Response('<h1>No connection to the board</h1>', {

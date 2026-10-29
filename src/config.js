@@ -1,6 +1,6 @@
 import { join, dirname, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -34,8 +34,23 @@ export const panelUrl = () => env('KB_PANEL_URL', 'PANEL_URL');
 export const panelInfo = () => env('KB_PANEL_INFO', 'PANEL_INFO');
 export const skillsExtra = () => env('KB_SKILLS_EXTRA').split(':').filter(Boolean);
 export const sseMax = () => Number(env('KB_SSE_MAX')) || 20;
+export const sharePort = () => Number(env('KB_SHARE_PORT')) || PORT + 10;
+// a check board opened from a backup (src/restore.js) — it opens nothing to the network
+export const isPreviewBoard = () => Boolean(env('KB_PREVIEW_TTL_MS'));
 export const allowedHosts = () => env('KB_ALLOWED_HOSTS').split(',').map((s) => s.trim()).filter(Boolean);
 export const langOverride = () => env('KB_LANG');
 export const ghOwnerEnv = () => env('KB_GH_OWNER');
 export const ghRepoEnv = () => env('KB_GH_REPO');
 export const ghBinEnv = () => expandPath(env('KB_GH_BIN'));
+export const claudeDir = () => expandPath(env('KB_CLAUDE_DIR', 'CLAUDE_CONFIG_DIR')) || join(homedir(), '.claude');
+export const claudeDirFrom = () => (env('KB_CLAUDE_DIR') ? 'KB_CLAUDE_DIR' : env('CLAUDE_CONFIG_DIR') ? 'CLAUDE_CONFIG_DIR' : 'default');
+// nothing of the board makes it: neither connecting (src/claude-setup.js) nor a skill written into it (src/skills.js)
+export const missingClaudeDir = () => {
+  if (claudeDirFrom() !== 'KB_CLAUDE_DIR') return false;
+  try { return !statSync(claudeDir()).isDirectory(); } catch { return true; }
+};
+export const missingClaudeDirError = () => `${claudeDir()} does not exist — check KB_CLAUDE_DIR; the board does not make it, nothing was written`;
+export const launchDryRun = () => Boolean(env('KB_LAUNCH_DRYRUN'));
+export const tmuxSocket = () => env('KB_TMUX_SOCKET') || 'local-kanban';
+export const claudeBin = () => expandPath(env('KB_CLAUDE_BIN'));
+export const claudeConfigFile = () => (env('KB_CLAUDE_DIR', 'CLAUDE_CONFIG_DIR') ? join(claudeDir(), '.claude.json') : join(homedir(), '.claude.json'));

@@ -4,6 +4,7 @@
 //    pushed the human's note out of the window without a word.
 //  - comments had no dates, so a fresh send-back looked exactly like an old one already dealt with.
 //  - the commit stat the board attaches by itself (author 'git') was marked 👤, as if the human said it.
+//    and Claude already has that answer; it is not a new remark to act on.
 // The real binary `bin/kb` against the real task routes on a real socket, like kb-checklist.test.js.
 // Run: node --test. The database is isolated through KB_DATA_DIR (see src/db.js).
 import { test, before, after } from 'node:test';
@@ -60,6 +61,16 @@ before(async () => {
   say(tw, 'me', 'Send back B', '2026-09-05 11:05:00');
   say(tw, 'claude', 'Report 2: fixed A and B', '2026-09-05 12:00:00');
 
+  // DM-4 (review): after the report, the record of an answer given from the card, then five commits
+  const t4 = task(4, 'review');
+  say(t4, 'claude', 'Report', '2026-09-06 10:00:00');
+  say(t4, 'board', 'Allowed from the board: Bash · npm test', '2026-09-06 10:30:00');
+  for (let i = 0; i < 5; i++) say(t4, 'git', `fed00${i}0 Commit ${i}\n 1 file changed`, `2026-09-06 11:0${i}:00`);
+  // DM-5 (review): the same record within the window
+  const t5 = task(5, 'review');
+  say(t5, 'claude', 'Report', '2026-09-07 10:00:00');
+  say(t5, 'board', 'Denied from the board: Bash · rm -rf build — reason: use the clean script', '2026-09-07 10:30:00');
+
   const taskRoutes = (await import('../src/routes/tasks.js')).default;
   app = Fastify();
   await app.register(taskRoutes);
@@ -97,6 +108,18 @@ test('a commit stat is marked as a commit, never as the human', async () => {
   assert.equal(r.code, 0, r.stderr);
   assert.match(r.stdout, /^> ⎇ \[2026-09-02 11:40\] commit abc1234 Button colour$/m, `the commit is not marked:\n${r.stdout}`);
   assert.doesNotMatch(r.stdout, /^> 👤 .*abc1234/m, 'the commit stat is printed as the human speaking');
+});
+
+test('an answer given to Claude from the card is a record, not a human remark', async () => {
+  const r = await run(['show', 'DM-5']);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /^> ☑ \[2026-09-07 10:30\] Denied from the board: Bash · rm -rf build — reason: use the clean script$/m, `the record is not marked:\n${r.stdout}`);
+  assert.doesNotMatch(r.stdout, /^> 👤 .*from the board/m, 'the record is printed as the human speaking');
+  // nor is it kept as news past the window: the five commits after it fill the window
+  const out = await run(['show', 'DM-4']);
+  assert.equal(out.code, 0, out.stderr);
+  assert.doesNotMatch(out.stdout, /from the board/, `the record was kept as a human note since the report:\n${out.stdout}`);
+  assert.match(out.stdout, /^… 2 more comments not printed/m);
 });
 
 // With TZ pinned to UTC every other test here would pass even if kb printed the stored UTC time as

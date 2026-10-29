@@ -4,6 +4,8 @@ import { $, api, esc, ic, LABEL_COLORS, LABEL_SELECTABLE, popoverPlacement, PRI_
 import { openDrawer, openLightbox, uploadAttachment } from './drawer.js';
 import { loadProjects } from './sidebar.js';
 import { autoGrow, refresh, titleOr } from './sse.js';
+import { errorLine, imageTooLarge, refusalLine } from './unsaved.js';
+import { localStore } from './store.js';
 
 const CHAOS_IC = {
   attach: '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M11 5.2 6.3 9.9a1.7 1.7 0 0 0 2.4 2.4l4.7-4.7a3.2 3.2 0 0 0-4.6-4.5L4 7.9a4.8 4.8 0 0 0 6.8 6.8l3-3" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
@@ -47,12 +49,12 @@ let chaosLabel = '';
 let chaosNoclaude = false;
 export let chaosPending = [];
 let chaosHintTimer = null;
-let chaosLock = localStorage.getItem('kb.chaos.lock') === '1';
+let chaosLock = localStore.getItem('kb.chaos.lock') === '1';
 
 function buildChaosProjectSelect() {
   const host = $('chaos-project');
   if (!host) return;
-  const keep = host.dataset.value || localStorage.getItem('kb.chaos.project') || localStorage.getItem('kb.ui.lastProject');
+  const keep = host.dataset.value || localStore.getItem('kb.chaos.project') || localStore.getItem('kb.ui.lastProject');
   const projOpts = [...state.projects]
     .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0))
     .map((p) => ({ value: p.slug, label: p.name || p.slug, rightHTML: p.pinned ? `<span class="kbsel-pin" title="${tr('pinned')}">${CHAOS_IC.pin}</span>` : '' }));
@@ -64,7 +66,7 @@ export async function renderChaos(opening) {
   if (!state.projects.length) { try { await loadProjects(); } catch {  } }
   if (chaosBuilt && $('chaos-input')) {
     if (opening) setChaosHeading();
-    buildChaosProjectSelect(); renderChaosNoclaudeList(opening); return;
+    buildChaosProjectSelect(); renderChaosRecent(opening); return;
   }
   $('chaos').innerHTML = `
     <div class="chaos-wrap">
@@ -93,6 +95,7 @@ export async function renderChaos(opening) {
       </div>
       <div id="chaos-hint" class="chaos-hint"></div>
       <div class="chaos-list">
+        <div class="chaos-list-h">${tr('Recently added')}</div>
         <div id="chaos-nc-list" class="chaos-nc-list"></div>
       </div>
     </div>`;
@@ -111,7 +114,7 @@ export async function renderChaos(opening) {
       ({ v: n, html: `<span class="lbl-dot" style="background:${LABEL_COLORS[n]}"></span>${esc(n)}`, active: chaosLabel === n }))),
     (v) => { chaosLabel = v; refreshChaosLabelIc(); });
   $('chaos-noclaude-ic').onclick = () => { chaosNoclaude = !chaosNoclaude; refreshChaosNoclaudeIc(); };
-  $('chaos-lock-ic').onclick = () => { chaosLock = !chaosLock; localStorage.setItem('kb.chaos.lock', chaosLock ? '1' : '0'); refreshChaosLockIc(); };
+  $('chaos-lock-ic').onclick = () => { chaosLock = !chaosLock; localStore.setItem('kb.chaos.lock', chaosLock ? '1' : '0'); refreshChaosLockIc(); };
 
   $('chaos-attach-ic').onclick = () => $('chaos-file').click();
   $('chaos-file').onchange = (e) => { chaosAddImages([...e.target.files]); e.target.value = ''; };
@@ -120,10 +123,10 @@ export async function renderChaos(opening) {
 
   const input = $('chaos-input');
   input.oninput = () => autoGrow(input);
-  input.onkeydown = (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); chaosCreate(); } };
+  input.onkeydown = (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); e.stopPropagation(); chaosCreate(); } };
   chaosBuilt = true;
   renderChaosPending();
-  renderChaosNoclaudeList(true);
+  renderChaosRecent(true);
   input.focus();
 }
 function refreshChaosStatusIc() {
@@ -172,7 +175,11 @@ function chaosPopover(anchor, items, onPick) {
 }
 
 function chaosAddImages(files) {
-  for (const f of files) { if (f && f.type.startsWith('image/')) chaosPending.push({ blob: f, url: URL.createObjectURL(f) }); }
+  for (const f of files) {
+    if (!f || !f.type.startsWith('image/')) continue;
+    if (imageTooLarge(f)) { $('chaos-hint').textContent = refusalLine('Could not attach', imageTooLarge(f), tr); $('chaos-hint').className = 'chaos-hint err'; continue; }
+    chaosPending.push({ blob: f, url: URL.createObjectURL(f) });
+  }
   renderChaosPending();
 }
 function onChaosPaste(e) {
@@ -192,27 +199,34 @@ function renderChaosPending() {
   box.querySelectorAll('.attach-x').forEach((x) => { x.onclick = () => { URL.revokeObjectURL(chaosPending[Number(x.dataset.i)].url); chaosPending.splice(Number(x.dataset.i), 1); renderChaosPending(); }; });
 }
 
+const RECENT_N = 15;
 let ncListAt = 0;
-async function renderChaosNoclaudeList(force = false) {
+let ncLater = null;
+async function renderChaosRecent(force = false) {
   const box = $('chaos-nc-list');
   if (!box) return;
-  if (!force && Date.now() - ncListAt < 2000) return;
+  const wait = 2000 - (Date.now() - ncListAt);
+  if (!force && wait > 0) {
+    ncLater ??= setTimeout(() => { ncLater = null; renderChaosRecent(); }, wait);
+    return;
+  }
+  clearTimeout(ncLater); ncLater = null;
   ncListAt = Date.now();
   let tasks = [];
   try { tasks = await api('GET', '/api/tasks?all=1'); } catch { box.innerHTML = '<div class="muted">—</div>'; return; }
-  const rows = tasks
-    .filter((t) => (t.labels || []).includes('noclaude') && ['backlog', 'todo'].includes(t.status))
-    .sort((a, b) => b.priority - a.priority || a.status.localeCompare(b.status));
+  const rows = [...tasks].sort((a, b) => b.id - a.id).slice(0, RECENT_N);
   const projName = (slug) => state.projects.find((p) => p.slug === slug)?.name || slug;
   box.innerHTML = rows.length
     ? rows.map((t) => `<div class="chaos-nc-row" data-key="${t.key}"><span class="dot s-${t.status}"></span>`
         + `<span class="cnc-key">${t.key}</span><span class="cnc-title">${titleOr(t)}</span>`
         + `<span class="cnc-proj">${esc(projName(t.project))}</span></div>`).join('')
-    : `<div class="muted">${tr('no manual tasks in backlog/to do yet')}</div>`;
+    : `<div class="muted">${tr('no tasks yet')}</div>`;
   box.querySelectorAll('.chaos-nc-row').forEach((el) => { el.onclick = () => openDrawer(el.dataset.key); });
 }
 
 async function chaosCreate() {
+  // the keys called this straight
+  if ($('chaos-create').disabled) return;
   const input = $('chaos-input');
   const text = input.value.trim();
   const project = selVal($('chaos-project'));
@@ -226,7 +240,7 @@ async function chaosCreate() {
     const t = await api('POST', '/api/tasks', body);
     for (const p of chaosPending) { try { await uploadAttachment(p.blob, t.key); } catch {  } URL.revokeObjectURL(p.url); }
     chaosPending = []; renderChaosPending();
-    localStorage.setItem('kb.chaos.project', project);
+    localStore.setItem('kb.chaos.project', project);
     input.value = ''; autoGrow(input);
     if (!chaosLock) {
       chaosStatus = 'backlog'; chaosPriority = 0; chaosLabel = ''; chaosNoclaude = false;
@@ -236,9 +250,9 @@ async function chaosCreate() {
     clearTimeout(chaosHintTimer);
     chaosHintTimer = setTimeout(() => { hint.textContent = ''; hint.className = 'chaos-hint'; }, 3000);
     loadProjects();
-    renderChaosNoclaudeList(true);
+    renderChaosRecent(true);
     input.focus();
   } catch (e) {
-    hint.textContent = e && e.message ? String(e.message) : tr('could not create it'); hint.className = 'chaos-hint err';
+    hint.textContent = errorLine('could not create it', e, tr); hint.className = 'chaos-hint err';
   } finally { $('chaos-create').disabled = false; }
 }

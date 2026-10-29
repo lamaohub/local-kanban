@@ -120,3 +120,12 @@ test('the choice is kept under the namespaced key, per board and column', () => 
   assert.match(board, /const SORT_KEY = 'kb\.ui\.colSort';/);
   assert.match(board, /`\$\{state\.slug\}:\$\{status\}`/, 'the choice is no longer kept per board and column');
 });
+
+// but the Claude session that holds the task, and a manual (noclaude) card is reordered in Prep by hand
+test('a drop sends the status only when the card changes column', async () => {
+  const { dropPatch } = await import('../public/js/order.js');
+  assert.deepEqual(dropPatch('prep', 'prep', 1.5), { position: 1.5 }, 'a reorder inside Prep is sent as a second take');
+  assert.deepEqual(dropPatch('todo', 'backlog', 2.5), { status: 'backlog', position: 2.5 });
+  assert.deepEqual(dropPatch('todo', 'backlog', undefined), { status: 'backlog' }, 'a column sorted by number got a position');
+  assert.match(board, /const patch = dropPatch\(t\.status, status, position\);/, 'the drop no longer asks order.js what to send');
+});

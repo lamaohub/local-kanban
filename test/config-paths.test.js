@@ -40,3 +40,17 @@ test('an explicit KB_LOCAL_ROOT still wins, and it is expanded too', async () =>
   const r = await probe({ KB_DATA_DIR: '/tmp/kb-isolated', KB_LOCAL_ROOT: '~/elsewhere' });
   assert.equal(r.root, join(homedir(), 'elsewhere'));
 });
+
+// own folder (CLAUDE_CONFIG_DIR) keeps its transcripts, its live sessions and .claude.json there; looking in
+// ~/.claude, the card would show no sessions' work and no badge, and the folder trust would be wrong.
+test('the Claude folder follows CLAUDE_CONFIG_DIR, and KB_CLAUDE_DIR wins over it', async () => {
+  const base = { ...process.env };
+  delete base.KB_CLAUDE_DIR; delete base.CLAUDE_CONFIG_DIR;
+  const claude = (env) => new Promise((resolve, reject) => {
+    const code = `import('${CONFIG}').then((m) => console.log(JSON.stringify({ dir: m.claudeDir(), json: m.claudeConfigFile() })))`;
+    execFile(process.execPath, ['-e', code], { env: { ...base, ...env } }, (err, stdout) => (err ? reject(err) : resolve(JSON.parse(stdout))));
+  });
+  assert.deepEqual(await claude({}), { dir: join(homedir(), '.claude'), json: join(homedir(), '.claude.json') });
+  assert.deepEqual(await claude({ CLAUDE_CONFIG_DIR: '/x/claude-config' }), { dir: '/x/claude-config', json: '/x/claude-config/.claude.json' });
+  assert.equal((await claude({ CLAUDE_CONFIG_DIR: '/x/claude-config', KB_CLAUDE_DIR: '/y/kb-claude' })).dir, '/y/kb-claude');
+});

@@ -108,3 +108,18 @@ test('the install check asks for the page, not only for the API', () => {
     assert.match(yml, /<div id="board"/, `${wf} would stay green on a package built without public/`);
   }
 });
+
+test('the release script leaves npm to CI and says how to check it', (t) => {
+  const path = new URL('../scripts/release.js', import.meta.url);
+  if (!existsSync(path)) return t.skip('scripts/release.js is a private tool and is not part of the published slice');
+  const src = readFileSync(path, 'utf8');
+  const todo = src.slice(src.lastIndexOf('Left to do by hand'));
+  assert.doesNotMatch(todo, /npm publish/, 'the release still tells you to publish to npm by hand');
+  assert.match(todo, /CI publishes it from the tag/);
+  assert.match(todo, /npm view \$\{pkg\.name\} version/, 'there is no way named to check that the package went out');
+  assert.match(todo, /git pull && npm install && pm2 restart kanban/, 'the personal board is updated without npm install');
+  // and the promise is true: the publish workflow runs on a version tag and publishes
+  const yml = readFileSync(new URL('../.github/workflows/publish.yml', import.meta.url), 'utf8');
+  assert.match(yml, /tags: \['v\*'\]/);
+  assert.match(yml, /npm publish/);
+});

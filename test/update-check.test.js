@@ -1,11 +1,12 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
 
-let app, tmp, isNewer, registryCheck, updatePlan, restartMode, globalPrefixOf, failureReason, pkg;
+let app, tmp, isNewer, gitFreshness, registryCheck, updatePlan, runUpdate, restartMode, globalPrefixOf, failureReason, frontVersion, pkg;
 const realFetch = globalThis.fetch;
 
 before(async () => {
@@ -15,14 +16,19 @@ before(async () => {
   const { ghState } = await import('../src/sync/worker.js');
   ghState.available = false; ghState.lastCheck = Date.now() + 1e9;
   const system = await import('../src/routes/system.js');
-  ({ isNewer, registryCheck, updatePlan, restartMode, globalPrefixOf, failureReason } = system);
+  ({ isNewer, gitFreshness, registryCheck, updatePlan, runUpdate, restartMode, globalPrefixOf, failureReason, frontVersion } = system);
   pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   app = Fastify();
   await app.register(system.default);
   await app.ready();
 });
 
-after(async () => { globalThis.fetch = realFetch; await app?.close(); rmSync(tmp, { recursive: true, force: true }); });
+const realGhBin = process.env.KB_GH_BIN;
+after(async () => {
+  globalThis.fetch = realFetch;
+  if (realGhBin === undefined) delete process.env.KB_GH_BIN; else process.env.KB_GH_BIN = realGhBin;
+  await app?.close(); rmSync(tmp, { recursive: true, force: true });
+});
 
 test('the board reports its own version, so an npm install can see which one it runs', async () => {
   const about = (await app.inject({ method: 'GET', url: '/api/about' })).json();
@@ -76,10 +82,48 @@ test('the git check still comes first, and the registry is only the fallback', a
 });
 
 test('a clone updates itself with git, a package with npm', () => {
-  assert.deepEqual(updatePlan({ packaged: false }), { how: 'git', cmd: 'git', args: ['pull', '--ff-only'] });
+  assert.deepEqual(updatePlan({ packaged: false }), {
+    how: 'git', cmd: 'git', args: ['pull', '--ff-only'],
+    then: { cmd: 'npm', args: ['install', '--no-fund', '--no-audit'] },
+  });
   const plan = updatePlan({ packaged: true, name: 'local-kanban', root: '/opt/npm/lib/node_modules/local-kanban' });
   assert.equal(plan.how, 'npm');
   assert.deepEqual(plan.args, ['install', '-g', 'local-kanban@latest', '--prefix', '/opt/npm']);
+});
+
+test('a clone installs its dependencies after the pull, and a failure names the step that failed', async () => {
+  const scripted = (answers) => {
+    const calls = [];
+    const exec = async (cmd, args) => { calls.push([cmd, ...args].join(' ')); return answers.shift() || { err: null, text: '' }; };
+    return { calls, exec };
+  };
+  const clone = updatePlan({ packaged: false });
+
+  let s = scripted([{ err: null, text: 'Fast-forward' }, { err: null, text: 'changed 32 packages' }]);
+  let r = await runUpdate(clone, s.exec);
+  assert.deepEqual(s.calls, ['git pull --ff-only', 'npm install --no-fund --no-audit'],
+    'the clone restarted on new code with the old packages');
+  assert.equal(r.err, null);
+  assert.match(r.text, /Fast-forward[\s\S]*changed 32 packages/, 'both outputs reach the person');
+
+  const npmErr = new Error('EACCES');
+  s = scripted([{ err: null, text: 'Fast-forward' }, { err: npmErr, text: 'npm error code EACCES' }]);
+  r = await runUpdate(clone, s.exec);
+  assert.equal(r.err, npmErr);
+  assert.equal([r.step.cmd, ...r.step.args].join(' '), 'npm install --no-fund --no-audit',
+    'the person would be told to rerun git pull, which already went through');
+
+  const gitErr = new Error('not possible to fast-forward');
+  s = scripted([{ err: gitErr, text: 'fatal: Not possible to fast-forward, aborting.' }]);
+  r = await runUpdate(clone, s.exec);
+  assert.equal(r.err, gitErr);
+  assert.deepEqual(s.calls, ['git pull --ff-only'], 'packages were installed for code that never arrived');
+  assert.equal(r.step.cmd, 'git');
+
+  const pkgPlan = updatePlan({ packaged: true, name: 'local-kanban', root: '/opt/npm/lib/node_modules/local-kanban' });
+  s = scripted([{ err: null, text: 'changed 1 package' }]);
+  r = await runUpdate(pkgPlan, s.exec);
+  assert.deepEqual(s.calls, ['npm install -g local-kanban@latest --prefix /opt/npm'], 'a package install is one command');
 });
 
 test('the update lands where the running copy lives, not in whatever prefix the machine prefers', () => {
@@ -144,7 +188,7 @@ test('a real npm permission failure names the cause, not the debug log', () => {
 
 test('a failed update hands back the command to run by hand', () => {
   const src = readFileSync(new URL('../src/routes/system.js', import.meta.url), 'utf8');
-  assert.match(src, /cmd: \[plan\.cmd, \.\.\.plan\.args\]\.join\(' '\)/,
+  assert.match(src, /cmd: \[step\.cmd, \.\.\.step\.args\]\.join\(' '\)/,
     'the failure answer stopped carrying the command, so the person has nothing to run');
   const front = readFileSync(new URL('../public/js/settings.js', import.meta.url), 'utf8');
   assert.match(front, /showFailCmd\(err\.body\?\.cmd\)/, 'the tab stopped showing that command');
@@ -157,12 +201,13 @@ test('a failed update hands back the command to run by hand', () => {
 test('the update dialog says what happens to tasks and to the skills', () => {
   const front = readFileSync(new URL('../public/js/settings.js', import.meta.url), 'utf8');
   assert.match(front, /Your tasks are not touched/, 'the dialog stopped promising that tasks survive');
-  assert.match(front, /Afterwards refresh the skills Claude reads:[\s\S]{0,80}local-kanban skills/,
-    'the packaged install is no longer told to refresh its copied skills');
-  assert.match(front, /and refresh the skills:[\s\S]{0,80}local-kanban skills/,
-    'the same reminder is gone from the line shown after a manual-restart update');
+  // what happens to them, and after a manual-restart update which changed one stayed as it was
+  assert.match(front, /if \(about\?\.packaged\) ask\.push\(tr\('The skills Claude reads come along with it, unless a copy already differs from the board\\'s version — that one stays as it is\.'\)\)/,
+    'the packaged install is no longer told what happens to its copied skills');
+  assert.match(front, /r\.skills\?\.kept\?\.length \? ` · \$\{tr\('left as it was — not the board\\'s version:'\)\}/,
+    'the line shown after a manual-restart update no longer names a skill that stayed as it was');
   const core = readFileSync(new URL('../public/js/core.js', import.meta.url), 'utf8');
-  for (const key of ['Your tasks are not touched', 'Afterwards refresh the skills Claude reads:', 'Run it yourself']) {
+  for (const key of ['Your tasks are not touched', 'The skills Claude reads come along with it, unless', "left as it was — not the board\\'s version:", 'Run it yourself']) {
     assert.ok(core.includes(key), `no Russian translation for: ${key}`);
   }
 });
@@ -172,4 +217,82 @@ test('the update endpoints are documented where integrators look', () => {
   assert.match(api, /`POST \/api\/update`/, 'the endpoint that updates the board is undocumented');
   assert.match(api, /restart: "pm2"/, 'the doc no longer explains what the caller must do after an update');
   assert.match(api, /update_available: null/, 'the doc stopped warning that "cannot check" is not "up to date"');
+});
+
+test('the front version moves with markup and styles, not only with scripts', () => {
+  const pub = join(tmp, 'front', 'public');
+  mkdirSync(join(pub, 'js'), { recursive: true });
+  const files = ['index.html', 'style.css', 'app.js', 'offline.html', 'js/board.js', 'CLAUDE.md', 'icon-192.png', 'manifest.webmanifest'];
+  const at = (rel, sec) => { const t = new Date(sec * 1000); utimesSync(join(pub, rel), t, t); };
+  for (const rel of files) { writeFileSync(join(pub, rel), 'x'); at(rel, 1000); }
+  const base = frontVersion(pub);
+  assert.equal(base, 1000 * 1000);
+
+  at('style.css', 2000);
+  assert.equal(frontVersion(pub), 2000 * 1000, 'a styles-only change does not reach open tabs');
+  at('index.html', 3000);
+  assert.equal(frontVersion(pub), 3000 * 1000, 'a markup-only change does not reach open tabs');
+  at('js/board.js', 4000);
+  assert.equal(frontVersion(pub), 4000 * 1000, 'a module change stopped counting');
+
+  for (const rel of ['CLAUDE.md', 'icon-192.png', 'manifest.webmanifest']) at(rel, 9000);
+  assert.equal(frontVersion(pub), 4000 * 1000, 'a file the page does not run made every tab reload');
+});
+
+test('the board serves its front version from the same rule', async () => {
+  const r = (await app.inject({ method: 'GET', url: '/api/ui-version' })).json();
+  assert.equal(r.mtime, frontVersion(fileURLToPath(new URL('../public', import.meta.url))));
+  const src = readFileSync(new URL('../src/routes/system.js', import.meta.url), 'utf8');
+  assert.match(src, /const uiVersion = \(\) => frontVersion\(join\(ROOT_DIR, 'public'\)\);/,
+    'the route counts the front version over part of public/ only: a markup or styles change would not reach open tabs');
+});
+
+test('twenty checks at once on a cold cache go out once', async () => {
+  const system = await import('../src/routes/system.js');
+  let asked = 0;
+  globalThis.fetch = async () => { asked += 1; await new Promise((r) => setTimeout(r, 30)); return { ok: false, status: 404, json: async () => ({}) }; };
+  const runs = join(tmp, 'gh-check.runs');
+  const bin = join(tmp, 'gh-check.sh');
+  writeFileSync(bin, `#!/bin/sh\necho run >> "${runs}"\nsleep 0.1\nexit 1\n`);
+  chmodSync(bin, 0o755);
+  process.env.KB_GH_BIN = bin;
+  const ghRuns = () => (existsSync(runs) ? readFileSync(runs, 'utf8').trim().split('\n').length : 0);
+  const board = async () => { const a = Fastify(); await a.register(system.default); await a.ready(); return a; };
+
+  const one = await board();
+  await one.inject({ method: 'GET', url: '/api/update-check' });
+  const single = { fetch: asked, gh: ghRuns() };
+  await one.close();
+  assert.ok(single.fetch + single.gh > 0, 'the probe sees no trip at all: the check goes out some other way');
+
+  asked = 0;
+  rmSync(runs, { force: true });
+  const many = await board();
+  const answers = await Promise.all(Array.from({ length: 20 }, () => many.inject({ method: 'GET', url: '/api/update-check' })));
+  assert.deepEqual({ fetch: asked, gh: ghRuns() }, single, `20 checks at once went out more than once (one check: ${JSON.stringify(single)})`);
+  assert.equal(new Set(answers.map((r) => r.body)).size, 1, 'the checks that waited got another answer');
+  await many.inject({ method: 'GET', url: '/api/update-check' });
+  assert.equal(asked, single.fetch, 'once the check is back, the next request does not come from the cache');
+  // and the check does end: two hours later the cache is stale, and the next request goes out again
+  const realNow = Date.now;
+  Date.now = () => realNow() + 2 * 3_600_000;
+  try { await many.inject({ method: 'GET', url: '/api/update-check' }); } finally { Date.now = realNow; }
+  assert.equal(asked, 2 * single.fetch, 'the first check is handed out forever: the board never checks again');
+  await many.close();
+});
+
+test('a copy ahead of GitHub is not offered its own ancestor as an update', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const repo = mkdtempSync(join(tmpdir(), 'kb-fresh-'));
+  const run = (...a) => execFileSync('git', a, { cwd: repo, encoding: 'utf8' }).trim();
+  const git = (args) => { try { return run(...args); } catch { return null; } };
+  run('init', '-q'); run('config', 'user.email', 'a@b.c'); run('config', 'user.name', 'a');
+  run('commit', '-q', '--allow-empty', '-m', 'one'); const older = run('rev-parse', 'HEAD');
+  run('commit', '-q', '--allow-empty', '-m', 'two'); const newer = run('rev-parse', 'HEAD');
+  try {
+    assert.deepEqual(await gitFreshness(newer, older, git), { update_available: false, ahead: true }, 'ahead of GitHub reads as an update');
+    assert.deepEqual(await gitFreshness(older, newer, git), { update_available: true, ahead: false }, 'a newer commit on GitHub is not an update');
+    assert.deepEqual(await gitFreshness(newer, newer, git), { update_available: false, ahead: false });
+    assert.equal((await gitFreshness(newer, 'f'.repeat(40), git)).update_available, true, 'a commit this copy has never seen is not an update');
+  } finally { rmSync(repo, { recursive: true, force: true }); }
 });

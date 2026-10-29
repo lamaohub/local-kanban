@@ -15,6 +15,8 @@ before(async () => {
   mkdirSync(skillsDir, { recursive: true });
   process.env.HOME = home;
   process.env.KB_DATA_DIR = join(tmp, 'data');
+  delete process.env.KB_CLAUDE_DIR;
+  delete process.env.CLAUDE_CONFIG_DIR;
 
   mkdirSync(join(skillsDir, 'kanban'), { recursive: true });
   writeFileSync(join(skillsDir, 'kanban', 'SKILL.md'), '# kanban skill\n');
@@ -61,6 +63,55 @@ test('GET /api/skills lists the skills and who uses them', async () => {
   assert.equal(kanban.exists, true);
   assert.deepEqual(kanban.used_by, [{ slug: 'demo', name: 'demo' }]);
 });
+
+// the answer carries the folder the section's skills live in and where it comes from, and the section shows those
+test('GET /api/skills names the folder of the skills and the variable that gave it; the section shows them', async () => {
+  const folder = async () => (await app.inject({ method: 'GET', url: '/api/skills' })).json().folder;
+  assert.deepEqual(await folder(), { path: skillsDir, from: 'default' });
+  const cfg = join(tmp, 'config-dir');
+  const kbDir = join(tmp, 'kb-dir');
+  let shown;
+  try {
+    process.env.CLAUDE_CONFIG_DIR = cfg;
+    assert.deepEqual(await folder(), { path: join(cfg, 'skills'), from: 'CLAUDE_CONFIG_DIR' });
+    process.env.KB_CLAUDE_DIR = kbDir;
+    assert.deepEqual(await folder(), { path: join(kbDir, 'skills'), from: 'KB_CLAUDE_DIR' });
+    shown = await sectionText((await app.inject({ method: 'GET', url: '/api/skills' })).json());
+  } finally { delete process.env.CLAUDE_CONFIG_DIR; delete process.env.KB_CLAUDE_DIR; }
+  assert.ok(shown.includes(join(kbDir, 'skills')), `the section does not name the folder the board uses:\n${shown}`);
+  assert.match(shown, /Set by KB_CLAUDE_DIR/, 'the section does not say where the folder comes from');
+  assert.doesNotMatch(shown, /~\/\.claude\/skills/, 'the section still names ~/.claude/skills');
+  // the folders KB_SKILLS_EXTRA adds are read too, and the section names them after the Claude folder's own
+  const listed = (await app.inject({ method: 'GET', url: '/api/skills' })).json();
+  const withExtra = await sectionText({ ...listed, roots: [...listed.roots, '/home/user/team-skills'] });
+  assert.match(withExtra, /Also read from KB_SKILLS_EXTRA: +\/home\/user\/team-skills/, 'the folders of KB_SKILLS_EXTRA are not named');
+  // and each of those words has its Russian line: a Russian board does not show them in English
+  const core = readFileSync(new URL('../public/js/core.js', import.meta.url), 'utf8');
+  const dict = core.slice(core.indexOf('const I18N_RU = {'), core.indexOf('export function tr('));
+  const has = (t) => dict.includes(`'${t}':`) || dict.includes(`"${t}":`) || dict.includes(`\n  ${t}:`);
+  for (const t of [...sectionWords].filter((w) => /^(Skills are|Also read|Set by|Claude Code's own)/.test(w))) assert.ok(has(t), `stays English on the Russian board: ${t}`);
+});
+
+const sectionWords = new Set(); // every text the section passes through tr()
+/** The text Settings → Skills draws for an answer of GET /api/skills: the real renderSkillsSection on stubs. */
+async function sectionText(info) {
+  const { default: vm } = await import('node:vm');
+  const src = readFileSync(new URL('../public/js/settings.js', import.meta.url), 'utf8');
+  const at = src.indexOf('async function renderSkillsSection(');
+  assert.ok(at > 0, 'renderSkillsSection was not found in public/js/settings.js');
+  const rules = await import('../public/js/claude-setup-rules.js');
+  const els = {};
+  const el = () => ({ innerHTML: '', textContent: '', title: '', disabled: false, onclick: null, isConnected: true,
+    classList: { add() {}, remove() {}, toggle() {} }, querySelectorAll: () => [] });
+  const body = el();
+  const box = {
+    tr: (t) => (sectionWords.add(t), t), esc: (t) => String(t), api: async () => info, $: (id) => (els[id] ||= el()), folderFrom: rules.folderFrom,
+    plural: (n, a, b) => (n === 1 ? a : b), fmtLocalStamp: (t) => t, selectSkillRow: async () => {},
+  };
+  vm.runInNewContext(`let skillsInfo = null, pendingSkill = null, skillSel = null;\n${src.slice(at, src.indexOf('\n}\n', at) + 2)}\nthis.render = renderSkillsSection;`, box);
+  await box.render(body);
+  return [body.innerHTML, ...Object.values(els).map((e) => `${e.innerHTML} ${e.textContent}`)].join('\n').replace(/<[^>]+>/g, ' ');
+}
 
 test('GET /api/skills/:name returns the text; a bad name is a 400', async () => {
   const r = await app.inject({ method: 'GET', url: '/api/skills/kanban' });
@@ -173,4 +224,37 @@ test('a skill written from the board is remembered as its own, and forgotten whe
   assert.ok((await listed()).includes('own-one'));
   await app.inject({ method: 'DELETE', url: '/api/skills/own-one', payload: { confirm_path: path } });
   assert.equal((await listed()).includes('own-one'), false);
+});
+
+test('deleting a skill keeps whatever else lives in its folder', async () => {
+  const dir = join(skillsDir, 'with-extras');
+  mkdirSync(join(dir, 'references'), { recursive: true });
+  mkdirSync(join(dir, 'scripts'), { recursive: true });
+  writeFileSync(join(dir, 'SKILL.md'), '# with extras\n');
+  writeFileSync(join(dir, 'references', 'runbook.md'), 'servers\n');
+  writeFileSync(join(dir, 'scripts', 'go.sh'), 'echo go\n');
+  const r = await app.inject({ method: 'DELETE', url: '/api/skills/with-extras', payload: { confirm_path: join(dir, 'SKILL.md') } });
+  assert.equal(r.statusCode, 200);
+  assert.equal(existsSync(join(dir, 'SKILL.md')), false);
+  assert.equal(readFileSync(join(dir, 'references', 'runbook.md'), 'utf8'), 'servers\n', 'references/ went with the skill, and nothing kept a copy');
+  assert.equal(readFileSync(join(dir, 'scripts', 'go.sh'), 'utf8'), 'echo go\n');
+  assert.equal(readFileSync(r.json().backup, 'utf8'), '# with extras\n');
+});
+
+test('the skills folder is the one in the Claude folder: CLAUDE_CONFIG_DIR moves it, KB_CLAUDE_DIR wins', () => {
+  const cfg = join(tmp, 'claude-config');
+  mkdirSync(join(cfg, 'skills', 'cfg-only'), { recursive: true });
+  writeFileSync(join(cfg, 'skills', 'cfg-only', 'SKILL.md'), '# lives in CLAUDE_CONFIG_DIR\n');
+  try {
+    process.env.CLAUDE_CONFIG_DIR = cfg;
+    assert.equal(skills.skillRoots()[0], join(cfg, 'skills'));
+    assert.deepEqual(skills.listSkills().map((x) => x.name), ['cfg-only'], 'the board still reads ~/.claude/skills');
+    assert.equal(skills.skillInfo('cfg-only').path, join(cfg, 'skills', 'cfg-only', 'SKILL.md'));
+    process.env.KB_CLAUDE_DIR = join(tmp, 'kb-claude');
+    assert.equal(skills.skillRoots()[0], join(tmp, 'kb-claude', 'skills'));
+  } finally {
+    delete process.env.CLAUDE_CONFIG_DIR;
+    delete process.env.KB_CLAUDE_DIR;
+  }
+  assert.equal(skills.skillRoots()[0], skillsDir, 'without either variable it is ~/.claude/skills, as before');
 });

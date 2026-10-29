@@ -30,6 +30,11 @@ export function orderColumn(tasks, mode, { mixed = false, closed = false, limit 
   return list.sort(columnComparator(mode, { mixed, closed }));
 }
 
+export function dropPatch(from, to, position) {
+  const patch = from === to ? {} : { status: to };
+  return position === undefined ? patch : { ...patch, position };
+}
+
 export function slotBefore(tasks, task, mode, opts = {}) {
   const cmp = columnComparator(mode, opts);
   const next = orderColumn(tasks.filter((x) => x.id !== task.id), mode, opts).find((x) => cmp(task, x) < 0);

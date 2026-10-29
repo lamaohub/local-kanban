@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const sidebar = readFileSync(new URL('../public/js/sidebar.js', import.meta.url), 'utf8');
 const project = readFileSync(new URL('../public/js/project.js', import.meta.url), 'utf8');
@@ -43,7 +45,7 @@ test('a dropdown opens where there is room, and the wizard form is not cut off',
   const chaos = readFileSync(new URL('../public/js/chaos.js', import.meta.url), 'utf8');
   const css = readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
   assert.match(core, /export function popoverPlacement\(/, 'the placement rule is gone');
-  assert.match(core, /closest\?\.\('\.modal'\)/,
+  assert.match(core, /closest\?\.\('\.modal(, \.settings-modal)?'\)/,
     'placement stopped measuring against the dialog — a list fits the window and still leaves the modal');
   assert.match(board, /popoverPlacement\(host\.querySelector\('\.kbsel-btn'\)\)/,
     'buildSelect no longer checks for room and can reopen under the modal buttons');
@@ -89,12 +91,15 @@ test('the server fields say whether they mean the server or this computer', () =
   }
 });
 
-test('the prefix the wizard promises is the prefix the server will give', async () => {
+test('the prefix the wizard promises is the prefix the server will give', async (t) => {
+  const data = mkdtempSync(join(tmpdir(), 'kb-test-'));
+  process.env.KB_DATA_DIR = data;
+  t.after(() => rmSync(data, { recursive: true, force: true }));
   const { genPrefix } = await import('../src/db.js');
   const src = sidebar.match(/function wizPrefix\([\s\S]*?\) \{\n([\s\S]*?)\n\}/);
   assert.ok(src, 'wizPrefix is gone from the wizard, or its shape changed beyond the guard');
   const mirror = new Function('slug', 'used', src[1]);
-  const cases = ['kanban', 'a', 'my-project', 'demo', 'totally-new-thing', 'a-b-c-d', 'x1', 'z', 'server-panel', '2gis'];
+  const cases = ['kanban', 'a', 'my-project', 'demo', 'totally-new-thing', 'a-b-c-d', 'x1', 'z', 'server-panel', '2gis', 'ab-', 'x--', 'my.site', 'my_app'];
   for (const slug of cases) {
     assert.equal(mirror(slug, new Set()), genPrefix(slug, new Set()), `wizard and server disagree on "${slug}"`);
   }
@@ -148,6 +153,11 @@ test('the sync section warns that tasks leave the machine, and that the repo sho
   assert.match(settings, /One repository for the whole board, not one per project/,
     'the section stopped explaining that the setting is board-wide, which was the first question asked about it');
   assert.match(settings, /gh auth refresh -s project/, 'the scope people forget is no longer mentioned');
+  const shown = settings.slice(settings.indexOf('<div class="sync-about">'), settings.indexOf('moreHTML(', settings.indexOf('<div class="sync-about">')));
+  assert.ok(shown.length > 30, 'the sync section lost the words above its fold');
+  assert.match(shown, /private GitHub repository you create yourself first/, 'what leaves the machine, or that the repo is made by hand, is hidden under More');
+  assert.match(shown, /in full/);
+  assert.match(shown, /gh auth refresh -s project/, 'the scope people forget is hidden under More');
   const anchor = settings.match(/local-kanban#([\w-]+)"[^>]*>[^<]*README/)?.[1];
   assert.ok(anchor, 'the sync section no longer links to the README');
 
@@ -171,4 +181,22 @@ test('the folder check tells "not there" apart from "no permission" and "could n
   assert.match(fn, /404: tr\('no such folder on this computer'\)/, '404 no longer says "no such folder"');
   assert.match(fn, /400: tr\('this path is not a folder'\)/, '400 no longer says "not a folder"');
   assert.match(fn, /403: tr\('the folder is there, but the board cannot read it/, '403 no longer says "no permission"');
+});
+
+// «a key from ~/.ssh/config» from the first letter; a filled wizard went away on Esc without a word.
+test('an empty answer brings the hint under the field back, and a filled wizard asks before it closes', async () => {
+  const vm = await import('node:vm');
+  const head = sidebar.indexOf('function setState(');
+  const fn = sidebar.slice(head, sidebar.indexOf('\n}\n', head) + 2);
+  const cls = new Set();
+  const el = { innerHTML: 'a key is <b>required</b>', set textContent(t) { this.innerHTML = t; }, classList: { remove: (...a) => a.forEach((c) => cls.delete(c)), add: (c) => cls.add(c) } };
+  const box = { $: () => el };
+  vm.runInNewContext(`${fn}\nthis.setState = setState;`, box);
+  box.setState('wiz-ssh-state', 'connecting…');
+  assert.equal(el.innerHTML, 'connecting…');
+  box.setState('wiz-ssh-state', '');
+  assert.equal(el.innerHTML, 'a key is <b>required</b>', 'typing in the server field wipes the standing ssh hint');
+  const wiz = sidebar.slice(sidebar.indexOf('function openProjectWizard('), sidebar.indexOf('\n}\n', sidebar.indexOf('function openProjectWizard(')));
+  assert.match(wiz, /overlayLayer\(overlay, \{ confirmClose: \(\) => created \|\| !filled\(\) \|\| confirmDiscard\(\) \}\)/, 'a filled wizard closes on Esc without asking');
+  assert.match(wiz, /created = true;\s*\n\s*close\(\);/, 'a created project would ask «discard?» over the wizard it closes');
 });

@@ -3,18 +3,42 @@ import { buildSelect, renderBoard, selVal } from './board.js';
 
 const GENERIC_DEPLOY = 'deploy';
 import { renderChaos } from './chaos.js';
-import { $, ALL, CALENDAR, CHAOS, DASH, HIDDEN_SECTIONS, HORIZON, LANG, SETTINGS, SIDEBAR_SECTIONS, addProjectPrompt, api, esc, ic, seg, setupPrompt, state, tr } from './core.js';
+import { $, ALL, AUTO, HEALTH, CALENDAR, CHAOS, DASH, DONE, HIDDEN_SECTIONS, HORIZON, NOW, REVIEW, SETTINGS, SIDEBAR_SECTIONS, addProjectPrompt, api, esc, ic, seg, setupPrompt, state, tr } from './core.js';
 import { renderDashboard } from './dash.js';
 import { renderCalendar, renderHorizon } from './horizon.js';
+import { renderNow } from './now.js';
+import { renderReview } from './review.js';
+import { renderDone } from './done.js';
+import { armedRules, automations, renderAutomations } from './automations.js';
+import { renderHealth } from './health.js';
 import { openProjectSettings, renderProjectSettings, skillOptions, deploySkills } from './project.js';
-import { openSettingsModal, plural, setSetting, syncLangToServer } from './settings.js';
+import { getSetting, openSettingsModal, plural } from './settings.js';
+import { shareButtonHTML } from './share.js';
 import { copyText, refresh, showView } from './sse.js';
+import { errorLine, refusalLine } from './unsaved.js';
+import { latestRequest, LIST_NOTICE, listErrorDelay, listFailure, listNotice, listRetry, sameScreen, SWITCH_SKELETON_MS } from './live-rules.js';
+import { openSearch } from './search.js';
+import { typeset } from './typeset.js';
+import { localStore, sessionStore } from './store.js';
+
+function sayProjectsFailed(e) {
+  const box = $('projects');
+  if (!box || box.querySelector('.proj')) return;
+  box.innerHTML = '';
+  const el = document.createElement('div');
+  el.className = 'board-note side-note';
+  el.innerHTML = `<span>${esc(tr(e?.status
+    ? 'The list of projects did not load: the server answered with an error. The board tries again by itself in a few seconds.'
+    : 'The list of projects did not load: the server did not answer. The board tries again by itself in a few seconds.'))}</span><button type="button" class="btn-ghost board-note-retry">${esc(tr('Try now'))}</button>`;
+  el.querySelector('button').onclick = () => { refresh().catch(() => {}); };
+  box.appendChild(el);
+}
 
 export async function loadProjects() {
-  state.projects = await api('GET', '/api/projects');
+  try { state.projects = await api('GET', '/api/projects'); } catch (e) { if (!e?.aborted) sayProjectsFailed(e); throw e; }
   try { state.folders = await api('GET', '/api/projects/folders'); } catch {  }
   try { state.categories = await api('GET', '/api/categories'); } catch {  }
-  const openable = [ALL, DASH, SETTINGS, HORIZON, CALENDAR, CHAOS].filter((s) => !HIDDEN_SECTIONS.includes(s));
+  const openable = [ALL, DASH, NOW, REVIEW, DONE, AUTO, HEALTH, SETTINGS, HORIZON, CALENDAR, CHAOS].filter((s) => !HIDDEN_SECTIONS.includes(s));
   if (!state.slug || (!openable.includes(state.slug) && !state.projects.find((p) => p.slug === state.slug))) {
     state.slug = state.projects[0]?.slug || DASH;
   }
@@ -22,9 +46,25 @@ export async function loadProjects() {
   renderTopbar();
 }
 
+const tasksRequest = latestRequest();
+let shownScreen = null;
+let pendingLoad = null; // { from: the screen the person stayed on, to: the screen that did not load }
+const currentScreen = () => ({ slug: state.slug, settings: Boolean(state.projSettings && state.projSettings === state.slug) });
+const SECTION_VIEW = { [DASH]: 'dashboard', [NOW]: 'now', [REVIEW]: 'review', [DONE]: 'done', [AUTO]: 'automations', [HEALTH]: 'health', [HORIZON]: 'horizon', [CALENDAR]: 'calendar', [CHAOS]: 'chaos' };
+const viewOf = (screen) => (screen.settings ? 'projset' : SECTION_VIEW[screen.slug] || 'board');
+
 export async function loadTasks() {
   if (state.slug === SETTINGS) state.slug = DASH;
+  showSwitching(false);
+  const special = [DASH, NOW, REVIEW, DONE, AUTO, HEALTH, HORIZON, CALENDAR, CHAOS].includes(state.slug) || (state.projSettings && state.projSettings === state.slug);
+  if (special) { state.tasks = []; tasksRequest.start(); }
+  if (special) screenShown(currentScreen());
   if (state.slug === DASH) { showView('dashboard'); await renderDashboard(); return; }
+  if (state.slug === NOW) { showView('now'); await renderNow(); return; }
+  if (state.slug === REVIEW) { showView('review'); await renderReview(); return; }
+  if (state.slug === DONE) { showView('done'); await renderDone(); return; }
+  if (state.slug === AUTO) { showView('automations'); await renderAutomations(); return; }
+  if (state.slug === HEALTH) { showView('health'); await renderHealth(); return; }
   if (state.slug === HORIZON) { showView('horizon'); await renderHorizon(); return; }
   if (state.slug === CALENDAR) { showView('calendar'); await renderCalendar(); return; }
   if (state.slug === CHAOS) { const opening = showView('chaos'); await renderChaos(opening); return; }
@@ -35,38 +75,193 @@ export async function loadTasks() {
   }
   showView('board');
   if (!state.slug) { state.tasks = []; renderBoard(); return; }
+  const q = state.search;
+  const wanted = currentScreen();
+  const req = tasksRequest.start();
+  showSwitching(!sameScreen(shownScreen, wanted));
+  let list;
   try {
-    const q = state.search ? `&q=${encodeURIComponent(state.search)}` : '';
-    state.tasks = state.slug === ALL
-      ? await api('GET', `/api/tasks?all=1${q}`)
-      : await api('GET', `/api/tasks?project=${encodeURIComponent(state.slug)}&all=1${q}`);
-    state.searchApplied = state.search;
-  } catch {
+    const qs = q ? `&q=${encodeURIComponent(q)}` : '';
+    list = state.slug === ALL
+      ? await api('GET', `/api/tasks?all=1${qs}`, undefined, { signal: req.signal })
+      : await api('GET', `/api/tasks?project=${encodeURIComponent(state.slug)}&all=1${qs}`, undefined, { signal: req.signal });
+  } catch (e) {
+    if (tasksRequest.isLatest(req)) showSwitching(false);
+    listFailed(e, tasksRequest.isLatest(req), wanted, q);
+    return;
+  }
+  if (!tasksRequest.isLatest(req)) return;
+  state.tasks = list;
+  showSwitching(false);
+  state.searchApplied = q;
+  state.searchHits = q ? new Set(list.map((t) => t.id)) : null;
+  screenShown(wanted);
+  renderBoard();
+}
+
+// A screen is on the board now: what failed before it is settled, unless it is the switch still owed from here.
+function screenShown(screen) {
+  shownScreen = screen;
+  state.listNote = null;
+  if (screen.slug && screen.slug !== ALL && !screen.slug.startsWith('#')) localStore.setItem('kb.ui.lastProject', screen.slug);
+  if (pendingLoad && (sameScreen(pendingLoad.to, screen) || !sameScreen(pendingLoad.from, screen))) { pendingLoad = null; showLoadNotice(null); retryNoMore(); }
+}
+
+let switchTimer = null;
+function showSwitching(on) {
+  clearTimeout(switchTimer);
+  switchTimer = null;
+  document.documentElement.classList.remove('switching');
+  if (on) switchTimer = setTimeout(() => { switchTimer = null; document.documentElement.classList.add('switching'); }, SWITCH_SKELETON_MS);
+}
+
+let errorRetry = { timer: null, n: 0 };
+function retryLater() {
+  clearTimeout(errorRetry.timer);
+  errorRetry.timer = setTimeout(() => { errorRetry.timer = null; retryLoad(); }, listErrorDelay(errorRetry.n));
+  errorRetry.n += 1;
+}
+function retryNoMore() {
+  clearTimeout(errorRetry.timer);
+  errorRetry = { timer: null, n: 0 };
+}
+
+function listFailed(error, latest, wanted, search) {
+  const plan = listFailure({ error, latest, wanted, shown: shownScreen, search });
+  if (!plan) return;
+  if (plan.clear) {
     state.slug = null;
     state.tasks = [];
     renderBoard();
     return;
   }
-  renderBoard();
+  if (plan.back) putScreenBack(plan.back);
+  if (!plan.notice) { loadProjects().catch(() => {}); return; } // the project is gone: the sidebar drops it
+  const again = Boolean(pendingLoad) && sameScreen(pendingLoad.to, plan.retry);
+  pendingLoad = { from: plan.back || wanted, to: plan.retry };
+  const notice = listNotice(plan.notice, plan.answered);
+  showLoadNotice(notice);
+  if (plan.answered) retryLater(); else retryNoMore();
+  if (plan.notice === 'first') {
+    state.tasks = [];
+    state.listNote = { text: notice.title, retry: () => retryLoad() };
+    renderBoard();
+  }
+  // a click that went nowhere is said in words, once: the badge alone is easy to miss right after the click
+  if (plan.notice === 'project' && !again) styledAlert(tr(plan.answered ? LIST_NOTICE.project.alertError : LIST_NOTICE.project.alert));
+}
+
+// The screen the failed switch was leaving comes back as it was — its board or section is still drawn, no request.
+function putScreenBack(screen) {
+  state.slug = screen.slug;
+  state.projSettings = screen.settings ? screen.slug : null;
+  rememberScreen(screen.slug);
+  renderSidebar();
+  renderTopbar();
+  showView(viewOf(screen));
+}
+
+function showLoadNotice(n) {
+  const el = $('load-badge');
+  if (!el) return;
+  el.classList.toggle('hidden', !n);
+  if (!n) return;
+  el.textContent = tr(n.label);
+  el.title = tr(n.title);
+  if (!el.onclick) el.onclick = () => retryLoad();
+}
+
+export function retryLoad() {
+  const what = listRetry(pendingLoad, currentScreen());
+  if (!what) { pendingLoad = null; showLoadNotice(null); retryNoMore(); return undefined; }
+  if (what === 'switch') { selectProject(pendingLoad.to.slug, { settings: pendingLoad.to.settings }); return undefined; }
+  return loadTasks();
+}
+
+export function resumeSwitch() {
+  if (listRetry(pendingLoad, currentScreen()) !== 'switch') return;
+  const to = pendingLoad.to;
+  state.slug = to.slug;
+  state.projSettings = to.settings ? to.slug : null;
+  rememberScreen(to.slug);
+  renderSidebar();
+  renderTopbar();
 }
 
 const PIN_ICON = ic('pin', 12);
+const NAV_IC = { [HORIZON]: 'trend', [CALENDAR]: 'timer' };
+const navIc = (name) => (name ? `<span class="nav-ic">${ic(name, 15)}</span>` : '');
 
 export function renderSidebar() {
   const box = $('projects');
   box.innerHTML = '';
 
+  const newEl = document.createElement('div');
+  newEl.className = 'proj-new' + (state.slug === CHAOS ? ' active' : '');
+  newEl.innerHTML = `<span class="nav-ic nav-new">${ic('plus', 13)}</span><span class="proj-name">${tr('New task')}</span>`;
+  newEl.onclick = () => selectProject(CHAOS).then(() => $('chaos-input')?.focus());
+  box.appendChild(newEl);
+
   const dashEl = document.createElement('div');
   dashEl.className = 'proj proj-dash' + (state.slug === DASH ? ' active' : '');
-  dashEl.innerHTML = `<span class="proj-name">${tr('Dashboard')}</span>`;
+  dashEl.innerHTML = `${navIc('chart')}<span class="proj-name">${tr('Dashboard')}</span>`;
   dashEl.dataset.slug = DASH;
   dashEl.onclick = () => selectProject(DASH);
   box.appendChild(dashEl);
 
+  const inWork = state.projects.reduce((s, p) => s + (p.c_prep || 0) + (p.c_doing || 0) + (p.c_deploy || 0), 0);
+  const nowEl = document.createElement('div');
+  nowEl.className = 'proj proj-now' + (state.slug === NOW ? ' active' : '');
+  nowEl.innerHTML = `${navIc('bot')}<span class="proj-name">${tr('Claude now')}</span>
+    <span class="card-live live-busy proj-live hidden" title="${esc(tr('Claude is working right now'))}"><span class="live-dot"></span></span>
+    <span class="proj-counts">${inWork || ''}</span>`;
+  nowEl.dataset.slug = NOW;
+  nowEl.onclick = () => selectProject(NOW);
+  box.appendChild(nowEl);
+  markNowEntry();
+
+  // them either — it said 7 over a section of 4 tasks
+  const inReview = state.projects.reduce((s, p) => s + (p.c_review || 0) - (p.c_review_check || 0), 0);
+  const reviewEl = document.createElement('div');
+  reviewEl.className = 'proj proj-check' + (state.slug === REVIEW ? ' active' : '');
+  reviewEl.innerHTML = `${navIc('eye')}<span class="proj-name">${tr('Claude review')}</span>
+    ${inReview ? `<span class="proj-review" title="${inReview} ${esc(tr('tasks waiting for your check'))}"></span>` : ''}
+    <span class="proj-counts">${inReview || ''}</span>`;
+  reviewEl.dataset.slug = REVIEW;
+  reviewEl.onclick = () => selectProject(REVIEW);
+  box.appendChild(reviewEl);
+
+  const doneEl = document.createElement('div');
+  doneEl.className = 'proj proj-done' + (state.slug === DONE ? ' active' : '');
+  doneEl.innerHTML = `${navIc('check')}<span class="proj-name">${tr('Claude done')}</span>`;
+  doneEl.dataset.slug = DONE;
+  doneEl.onclick = () => selectProject(DONE);
+  box.appendChild(doneEl);
+
+  const autoOn = automations().on;
+  if (autoOn || state.slug === AUTO) {
+    const armed = armedRules().length;
+    const autoEl = document.createElement('div');
+    autoEl.className = 'proj proj-auto' + (state.slug === AUTO ? ' active' : '');
+    autoEl.innerHTML = `${navIc('bolt')}<span class="proj-name">${tr('Automations')}</span><span class="proj-counts">${armed || ''}</span>`;
+    autoEl.dataset.slug = AUTO;
+    autoEl.onclick = () => selectProject(AUTO);
+    box.appendChild(autoEl);
+  }
+
+  if (getSetting('showHealth') || state.slug === HEALTH) {
+    const healthEl = document.createElement('div');
+    healthEl.className = 'proj proj-health' + (state.slug === HEALTH ? ' active' : '');
+    healthEl.innerHTML = `${navIc('pulse')}<span class="proj-name">${tr('Health')}</span><span class="proj-counts"></span>`;
+    healthEl.dataset.slug = HEALTH;
+    healthEl.onclick = () => selectProject(HEALTH);
+    box.appendChild(healthEl);
+  }
+
   for (const [slug, name] of SIDEBAR_SECTIONS) {
     const el = document.createElement('div');
     el.className = 'proj proj-section' + (state.slug === slug ? ' active' : '');
-    el.innerHTML = `<span class="proj-name">${name}</span>`;
+    el.innerHTML = `${navIc(NAV_IC[slug])}<span class="proj-name">${name}</span>`;
     el.dataset.slug = slug;
     el.onclick = () => selectProject(slug);
     box.appendChild(el);
@@ -75,7 +270,7 @@ export function renderSidebar() {
   const totalActive = state.projects.reduce((s, p) => s + (p.c_todo || 0) + (p.c_prep || 0) + (p.c_doing || 0) + (p.c_deploy || 0) + (p.c_review || 0), 0);
   const allEl = document.createElement('div');
   allEl.className = 'proj proj-all' + (state.slug === ALL ? ' active' : '');
-  allEl.innerHTML = `<span class="proj-name">${tr('All projects')}</span>
+  allEl.innerHTML = `${navIc('grid')}<span class="proj-name">${tr('All projects')}</span>
     <span class="proj-counts">${totalActive || ''}</span>`;
   allEl.dataset.slug = ALL;
   allEl.onclick = () => selectProject(ALL);
@@ -83,8 +278,12 @@ export function renderSidebar() {
 
   const setEl = document.createElement('div');
   setEl.className = 'proj proj-settings';
-  setEl.innerHTML = `<span class="proj-name">${ic('gear', 13)} ${tr('Settings')}</span>`;
-  setEl.onclick = openSettingsModal;
+  setEl.innerHTML = `${navIc('gear')}<span class="proj-name"><span class="set-ic">${ic('gear', 13)} </span>${tr('Settings')}</span>`
+    + `<button type="button" class="btn-icon proj-search" title="${esc(tr('Search projects and tasks'))}" aria-label="${esc(tr('Search projects and tasks'))}">${ic('search', 14)}</button>`
+    + shareButtonHTML();
+  setEl.onclick = () => { openSide(false); openSettingsModal(); };
+  setEl.querySelector('.proj-search').onclick = (e) => { e.stopPropagation(); openSide(false); openSearch(); };
+  setEl.querySelector('.proj-share').onclick = (e) => { e.stopPropagation(); openSide(false); openSettingsModal('share'); };
   box.appendChild(setEl);
 
   const missingSlugs = new Set((state.folders.missing || []).map((m) => m.slug));
@@ -93,7 +292,7 @@ export function renderSidebar() {
   if (pinnedList.length) {
     const h = document.createElement('div');
     h.className = 'cat-head';
-    h.innerHTML = `<span>${tr('Pinned')}</span>`;
+    h.innerHTML = catNameHTML(tr('Pinned'));
     box.appendChild(h);
     for (const p of pinnedList) {
       const el = makeProjEl(p, missingSlugs.has(p.slug));
@@ -113,7 +312,7 @@ export function renderSidebar() {
     list.sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
     const h = document.createElement('div');
     h.className = 'cat-head';
-    h.innerHTML = `<span>${esc(tr(cat))}</span>`;
+    h.innerHTML = catNameHTML(tr(cat));
     if (cat === 'Local') {
       const add = document.createElement('button');
       add.className = 'btn-icon cat-add';
@@ -124,8 +323,19 @@ export function renderSidebar() {
     }
     box.appendChild(h);
     for (const p of list) box.appendChild(makeProjEl(p, missingSlugs.has(p.slug)));
-    if (cat === 'Local') {
-      for (const folder of (state.folders.unregistered || [])) {
+    // sidebar; unfolded, they stay so on this computer
+    const ghosts = cat === 'Local' ? (state.folders.unregistered || []) : [];
+    if (ghosts.length) {
+      const open = ghostsOpen();
+      const t = document.createElement('div');
+      t.className = 'proj proj-ghost-toggle' + (open ? ' open' : '');
+      t.title = tr(open ? 'Hide the folders that are not on the board' : 'Show the folders that are not on the board');
+      t.innerHTML = `<span class="proj-name">${tr('Folders not on the board')}</span><span class="proj-counts">${ghosts.length}</span>`;
+      t.onclick = () => { setGhostsOpen(!open); renderSidebar(); };
+      box.appendChild(t);
+    }
+    if (ghosts.length && ghostsOpen()) {
+      for (const folder of ghosts) {
         const el = document.createElement('div');
         el.className = 'proj proj-ghost';
         el.innerHTML = `<span class="proj-name" title="${tr('new folder')} ${esc(folder)} — ${tr('not on the board yet')}">${esc(folder)}</span>
@@ -143,17 +353,46 @@ export function renderSidebar() {
   box.appendChild(addProj);
 }
 
+function ghostsOpen() { try { return localStore.getItem('kb.ui.ghostFolders') === '1'; } catch { return false; } }
+function setGhostsOpen(open) { try { localStore.setItem('kb.ui.ghostFolders', open ? '1' : '0'); } catch { /* until reload */ } }
+
+// board works past its tasks in work (state.liveProjects, from the server): "Claude now" showed them at work, the
+// sidebar did not
+function workingProjects() {
+  const busy = Object.values(state.live || {}).filter((l) => ['busy', 'starting', 'background'].includes(l.claude) && l.project).map((l) => l.project);
+  return new Set([...busy, ...(state.liveProjects || [])]);
+}
+export function markNowEntry() {
+  const working = workingProjects();
+  const busy = Object.values(state.live || {}).some((l) => l.claude === 'busy' || l.claude === 'background') || (state.liveProjects || []).length > 0;
+  document.querySelector('#projects .proj-now .proj-live')?.classList.toggle('hidden', !busy);
+  document.querySelectorAll('#projects .proj[data-slug]').forEach((el) => el.classList.toggle('ai-working', working.has(el.dataset.slug)));
+}
+
+// its name, as the owner asked; the project rows under it carry no icon. The letter is the first letter or digit of the
+// name (an emoji or a sign in front is skipped), in capitals; a name without one gives its first sign.
+export function nameInitial(name) {
+  const s = String(name || '').trim();
+  const m = s.match(/[\p{L}\p{N}]/u);
+  return (m ? m[0] : [...s][0] || '?').toLocaleUpperCase();
+}
+function catNameHTML(name) {
+  return `<span class="cat-label"><span class="cat-ic" aria-hidden="true">${esc(nameInitial(name))}</span>${esc(name)}</span>`;
+}
+
 function makeProjEl(p, missing) {
   const el = document.createElement('div');
   el.className = 'proj' + (p.slug === state.slug ? ' active' : '');
-  const active = (p.c_todo || 0) + (p.c_prep || 0) + (p.c_doing || 0) + (p.c_deploy || 0) + (p.c_review || 0);
-  const nrev = p.c_review || 0;
+  const ntodo = p.c_todo || 0;
+  const todoTip = esc(`${tr('To do')}: ${ntodo}`);
   el.innerHTML = `<span class="proj-name" title="${esc(p.slug)}">${esc(p.name || p.slug)}</span>
     ${missing ? `<span class="proj-missing" title="${esc(tr('folder is gone — click to archive'))}">${ic('warn', 12)}</span>` : ''}
-    ${nrev ? `<span class="proj-review" title="${nrev} ${esc(tr('in review — waiting for you'))}"></span>` : ''}
-    <span class="proj-counts">${active || ''}</span>
+    ${ntodo ? `<span class="proj-todo" title="${todoTip}"></span>` : ''}
+    <span class="proj-work" title="${esc(tr('Claude is working in this project'))}"></span>
+    <span class="proj-counts"${ntodo ? ` title="${todoTip}"` : ''}>${ntodo || ''}</span>
     <span class="proj-pin${p.pinned ? ' on' : ''}" title="${p.pinned ? tr('Unpin') : tr('Pin to the top')}">${PIN_ICON}</span>`;
   el.dataset.slug = p.slug;
+  el.classList.toggle('ai-working', workingProjects().has(p.slug));
   el.dataset.category = p.category || 'Other';
   el.onclick = () => selectProject(p.slug);
   el.oncontextmenu = (e) => { e.preventDefault(); openProjectSettings(p); };
@@ -203,13 +442,41 @@ function attachProjDnd(el) {
   });
 }
 
-export function selectProject(slug, { settings = false } = {}) {
+export const NARROW = '(max-width: 760px)';
+export function openSide(on) {
+  const root = document.documentElement;
+  if (on === root.classList.contains('side-open')) return;
+  root.classList.toggle('side-open', on);
+  if (on) pushLayer('side', () => openSide(false)); else popLayer('side');
+}
+function wireSide() {
+  const btn = $('side-open');
+  if (!btn || btn.dataset.wired) return;
+  btn.dataset.wired = '1';
+  btn.innerHTML = ic('menu', 18);
+  btn.title = tr('Projects and sections');
+  btn.setAttribute('aria-label', tr('Projects and sections'));
+  btn.onclick = () => openSide(true);
+  $('side-scrim').onclick = () => openSide(false);
+  globalThis.matchMedia?.(NARROW).addEventListener?.('change', (e) => { if (!e.matches) openSide(false); });
+}
+wireSide();
+
+export function selectProject(slug, { settings = false, asked = false } = {}) {
+  openSide(false);
+  if (!asked && state.leaveGuard && state.projSettings && !(settings && slug === state.projSettings)) {
+    const go = state.leaveGuard();
+    if (go !== true) return Promise.resolve(go).then((ok) => (ok ? selectProject(slug, { settings, asked: true }) : undefined));
+  }
   state.slug = slug;
   state.projSettings = settings ? slug : null;
-  localStorage.setItem('kb.ui.project', slug);
-  sessionStorage.setItem('kb.session.slug', slug);
-  if (slug && slug !== ALL && !slug.startsWith('#')) localStorage.setItem('kb.ui.lastProject', slug);
-  renderSidebar(); renderTopbar(); loadTasks();
+  rememberScreen(slug);
+  renderSidebar(); renderTopbar();
+  return loadTasks();
+}
+function rememberScreen(slug) {
+  localStore.setItem('kb.ui.project', slug);
+  sessionStore.setItem('kb.session.slug', slug);
 }
 
 export function switchProject(dir) {
@@ -226,32 +493,55 @@ async function togglePin(p) {
 }
 
 const openLayers = [];
+let layerWatch = null;
+export function watchLayers(fn) { layerWatch = fn; }
+export const layersOpen = () => openLayers.length > 0;
 export function pushLayer(key, close) {
-  popLayer(key);
+  const i = openLayers.findIndex((l) => l.key === key);
+  if (i >= 0) openLayers.splice(i, 1);
   openLayers.push({ key, close });
+  layerWatch?.(openLayers.length);
 }
 export function popLayer(key) {
   const i = openLayers.findIndex((l) => l.key === key);
-  if (i >= 0) openLayers.splice(i, 1);
+  if (i < 0) return;
+  openLayers.splice(i, 1);
+  layerWatch?.(openLayers.length);
 }
 export function closeTopLayer() {
   const top = openLayers.pop();
   if (!top) return false;
+  layerWatch?.(openLayers.length);
   top.close();
   return true;
 }
-export function overlayLayer(overlay, { onClose, backdrop = true } = {}) {
+export function overlayLayer(overlay, { onClose, backdrop = true, confirmClose } = {}) {
   const close = () => {
     document.removeEventListener('keydown', onKey, true);
     popLayer(overlay);
     overlay.remove();
     onClose?.();
   };
-  const onKey = (e) => { if (e.key === 'Escape') { e.stopImmediatePropagation(); close(); } };
+  let asking = false;
+  const requestClose = async () => {
+    if (asking || !overlay.isConnected) return;
+    if (confirmClose) {
+      asking = true;
+      let ok = false;
+      try { ok = await confirmClose(); } finally { asking = false; }
+      if (!ok) { if (overlay.isConnected) pushLayer(overlay, requestClose); return; }
+    }
+    close();
+  };
+  const onKey = (e) => {
+    if (e.key !== 'Escape' || openLayers[openLayers.length - 1]?.key !== overlay) return;
+    e.stopImmediatePropagation();
+    requestClose();
+  };
   document.addEventListener('keydown', onKey, true);
-  if (backdrop) overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-  pushLayer(overlay, close);
-  return close;
+  if (backdrop) overlay.addEventListener('click', (e) => { if (e.target === overlay) requestClose(); });
+  pushLayer(overlay, requestClose);
+  return confirmClose ? requestClose : close;
 }
 
 export function styledPrompt(title, { placeholder = '', okLabel = 'OK', onSubmit } = {}) {
@@ -259,7 +549,7 @@ export function styledPrompt(title, { placeholder = '', okLabel = 'OK', onSubmit
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
     <div class="modal">
-      <div class="modal-title">${esc(title)}</div>
+      <div class="modal-title">${esc(typeset(title))}</div>
       <input class="modal-input" type="text" placeholder="${esc(placeholder)}">
       <div class="modal-err hidden"></div>
       <div class="modal-actions">
@@ -277,7 +567,7 @@ export function styledPrompt(title, { placeholder = '', okLabel = 'OK', onSubmit
     if (!v) return;
     okBtn.disabled = true;
     try { await onSubmit(v); close(); }
-    catch (e) { errEl.textContent = e.message; errEl.classList.remove('hidden'); okBtn.disabled = false; }
+    catch (e) { errEl.textContent = errorLine('Did not work out', e, tr); errEl.classList.remove('hidden'); okBtn.disabled = false; }
   };
   okBtn.onclick = submit;
   overlay.querySelector('.modal-cancel').onclick = close;
@@ -285,33 +575,46 @@ export function styledPrompt(title, { placeholder = '', okLabel = 'OK', onSubmit
   input.focus();
 }
 
-export function styledConfirm(message, { okLabel = 'OK', danger = false, noCancel = false } = {}) {
+const DANGER_ENTER_MS = 600;
+// `detail` — text shown as it is under the question, in a box of its own: exactly what an action is going to write,
+// one entry per line
+export function styledConfirm(message, { okLabel = 'OK', danger = false, noCancel = false, detail = '', alt = '' } = {}) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
     overlay.innerHTML = `
-      <div class="modal">
-        <div class="modal-title">${esc(message)}</div>
+      <div class="modal${detail ? ' modal-wide' : ''}">
+        <div class="modal-title">${esc(typeset(message))}</div>
+        ${detail ? `<pre class="modal-detail">${esc(detail)}</pre>` : ''}
         <div class="modal-actions">
           <button class="btn-primary modal-ok${danger ? ' danger' : ''}">${esc(okLabel)}</button>
+          ${alt ? `<button class="btn-ghost modal-alt">${esc(alt)}</button>` : ''}
           ${noCancel ? '' : `<button class="btn-ghost modal-cancel">${tr('Cancel')}</button>`}
         </div>
       </div>`;
     document.body.appendChild(overlay);
+    const opened = Date.now();
     const done = (v) => { popLayer(overlay); overlay.remove(); document.removeEventListener('keydown', onKey, true); resolve(v); };
     pushLayer(overlay, () => done(false));
     const onKey = (e) => {
       if (e.key === 'Escape') { e.stopImmediatePropagation(); done(false); }
-      else if (e.key === 'Enter') { e.stopImmediatePropagation(); done(true); }
+      else if (e.key === 'Enter') {
+        e.stopImmediatePropagation();
+        if (danger && (e.repeat || Date.now() - opened < DANGER_ENTER_MS)) return;
+        done(true);
+      }
     };
     overlay.querySelector('.modal-ok').onclick = () => done(true);
     overlay.querySelector('.modal-cancel')?.addEventListener('click', () => done(false));
-    overlay.onclick = (e) => { if (e.target === overlay) done(false); };
+    overlay.querySelector('.modal-alt')?.addEventListener('click', () => done('alt'));
+    // used to cancel at once (the window flashed and was gone); a click on the backdrop that soon is not the person's
+    overlay.onclick = (e) => { if (e.target === overlay && e.detail < 2 && Date.now() - opened > 500) done(false); };
     document.addEventListener('keydown', onKey, true);
   });
 }
 
 export const styledAlert = (message) => styledConfirm(message, { okLabel: tr('Got it'), noCancel: true });
+export const confirmDiscard = () => styledConfirm(tr('Discard the changes that are not saved?'), { okLabel: tr('Discard'), danger: true });
 
 function createFolder() {
   styledPrompt(tr('New project folder'), {
@@ -322,7 +625,7 @@ function createFolder() {
 }
 async function adoptFolder(name) {
   try { await api('POST', '/api/projects/folders', { name }); }
-  catch (e) { styledAlert(e.message); return; }
+  catch (e) { styledAlert(refusalLine('Could not add the folder', e, tr)); return; }
   await refresh();
 }
 async function archiveMissing(slug, name) {
@@ -349,7 +652,8 @@ function wizSlugify(name) {
 function setState(id, text, kind) {
   const el = $(id);
   if (!el) return;
-  el.textContent = text || '';
+  if (el._idle === undefined) el._idle = el.innerHTML;
+  if (text) el.textContent = text; else el.innerHTML = el._idle;
   el.classList.remove('ok', 'bad');
   if (text && kind) el.classList.add(kind);
 }
@@ -358,7 +662,7 @@ function wizPrefix(slug, used = new Set(state.projects.map((p) => p.prefix).filt
   const words = slug.replace(/[^a-z0-9-]/gi, '').split('-').filter(Boolean);
   let base = words.length >= 2
     ? words.map((w) => w[0]).join('').slice(0, 3).toUpperCase()
-    : slug.slice(0, 3).toUpperCase();
+    : (words[0] || '').slice(0, 3).toUpperCase();
   if (base.length < 2) base = (base + 'XX').slice(0, 2);
   let prefix = base;
   let n = 2;
@@ -371,13 +675,13 @@ export async function checkPath(path) {
   setState('wiz-path-state', tr('checking…'));
   try {
     const r = await api('GET', `/api/fs?path=${encodeURIComponent(path)}`, null, { quiet: true });
-    setState('wiz-path-state', `${tr('the folder is there')} · ${r.dirs.length} ${tr('subfolders')}`, 'ok');
+    setState('wiz-path-state', `${tr('the folder is there')} · ${r.dirs.length} ${plural(r.dirs.length, 'subfolder', 'subfolders')}`, 'ok');
     return true;
   } catch (e) {
     const said = { 404: tr('no such folder on this computer'),
       400: tr('this path is not a folder'),
       403: tr('the folder is there, but the board cannot read it — check its permissions') }[e.status];
-    setState('wiz-path-state', said || `${tr('could not check the folder')}: ${e.message || path}`, 'bad');
+    setState('wiz-path-state', said || refusalLine('could not check the folder', e, tr), 'bad');
     return false;
   }
 }
@@ -453,7 +757,9 @@ function openProjectWizard() {
   const body = overlay.querySelector('.wiz-body');
   const actions = overlay.querySelector('.wiz-actions');
   const errEl = overlay.querySelector('.modal-err');
-  const close = overlayLayer(overlay);
+  let created = false;
+  const filled = () => [...body.querySelectorAll('input[type="text"]')].some((i) => i.value.trim() && i.value !== i.defaultValue);
+  const close = overlayLayer(overlay, { confirmClose: () => created || !filled() || confirmDiscard() });
   const err = (msg) => { errEl.textContent = msg || ''; errEl.classList.toggle('hidden', !msg); };
 
   const stepType = () => {
@@ -575,7 +881,7 @@ function openProjectWizard() {
         })
         .catch(() => {  });
     }
-    actions.querySelector('.wiz-create').onclick = () => wizCreate(type).catch((e) => err(e.message));
+    actions.querySelector('.wiz-create').onclick = () => wizCreate(type).catch((e) => err(errorLine('The project is not created', e, tr)));
     nameEl.focus();
   };
 
@@ -633,6 +939,7 @@ function openProjectWizard() {
       }
       btn.textContent = tr('creating…');
       await api('POST', '/api/projects', body);
+      created = true;
       close();
       await refresh();
       selectProject(slug);
@@ -642,137 +949,98 @@ function openProjectWizard() {
   stepType();
 }
 
-export async function maybeOnboarding() {
-  try {
-    const st = await api('GET', '/api/onboarding');
-    if (st.done) return;
-    if (state.projects.length) { api('POST', '/api/onboarding', { done: true }); return; }
-    openOnboarding();
-  } catch {  }
-}
-
-function openOnboarding() {
-  document.getElementById('onboarding')?.remove();
-  const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay';
-  overlay.id = 'onboarding';
-  overlay.innerHTML = `<div class="modal wiz onb">
-    <div class="onb-steps"></div>
-    <div class="modal-title"></div>
-    <div class="wiz-body"></div>
-    <div class="modal-err hidden"></div>
-    <div class="modal-actions wiz-actions"></div>
-  </div>`;
-  document.body.appendChild(overlay);
-  const title = overlay.querySelector('.modal-title');
-  const body = overlay.querySelector('.wiz-body');
-  const actions = overlay.querySelector('.wiz-actions');
-  const stepsEl = overlay.querySelector('.onb-steps');
-  const errEl = overlay.querySelector('.modal-err');
-  const err = (msg) => { errEl.textContent = msg || ''; errEl.classList.toggle('hidden', !msg); };
-  const finish = (goDemo) => {
-    api('POST', '/api/onboarding', { done: true }).catch(() => {});
-    overlay.remove();
-    refresh().then(() => { if (goDemo) selectProject('demo'); });
-  };
-  const STEPS = ['lang', 'sync', 'demo', 'done'];
-  let demoCreated = false;
-  const dots = (cur) => { stepsEl.innerHTML = STEPS.map((x) => `<span class="onb-dot${x === cur ? ' on' : ''}"></span>`).join(''); };
-
-  const stepLang = () => {
-    dots('lang'); err('');
-    title.textContent = tr('Welcome!');
-    body.innerHTML = `<div class="muted">${tr('This is a local kanban board built to work in tandem with Claude Code. A couple of steps and you are ready.')}</div>
-      <div class="onb-langs">
-        <button type="button" class="wiz-type${LANG === 'ru' ? ' active' : ''}" data-lang="ru"><b>Русский</b></button>
-        <button type="button" class="wiz-type${LANG === 'en' ? ' active' : ''}" data-lang="en"><b>English</b></button>
-      </div>`;
-    actions.innerHTML = '';
-    body.querySelectorAll('[data-lang]').forEach((b) => {
-      b.onclick = async () => {
-        setSetting('lang', b.dataset.lang);
-        await syncLangToServer(b.dataset.lang);
-        if (b.dataset.lang !== LANG) { location.reload(); return; }
-        stepSync();
-      };
-    });
-  };
-
-  const stepSync = async () => {
-    dots('sync'); err('');
-    title.textContent = tr('GitHub sync (optional)');
-    body.innerHTML = `<div class="muted">${tr('Every task can be mirrored to an issue and every project to a GitHub Project. Requires the gh CLI authenticated with the project scope (gh auth login && gh auth refresh -s project). You can also enable this later in Settings.')}</div>
-      <div class="sync-cfg-row"><input type="text" id="onb-owner" placeholder="${tr('owner (GitHub user)')}"><input type="text" id="onb-repo" placeholder="${tr('owner/repo for issues')}"></div>
-      <div class="muted" id="onb-gh-state"></div>`;
-    actions.innerHTML = `<button class="btn-primary" id="onb-sync-on">${tr('Enable sync')}</button>
-      <button class="btn-ghost" id="onb-sync-skip">${tr('Skip — work locally')}</button>`;
-    api('GET', '/api/sync').then((st) => {
-      const el = $('onb-gh-state');
-      if (el) el.textContent = st.gh === false ? tr('gh CLI missing or not authenticated — you can enable sync later') : tr('gh CLI found and authenticated ✓');
-    }).catch(() => {});
-    $('onb-sync-skip').onclick = () => stepDemo();
-    $('onb-sync-on').onclick = async () => {
-      try {
-        await api('POST', '/api/sync/config', { owner: $('onb-owner').value, repo: $('onb-repo').value });
-        stepDemo();
-      } catch (e) { err(e.message); }
-    };
-  };
-
-  const stepDemo = () => {
-    dots('demo'); err('');
-    title.textContent = tr('Demo project');
-    body.innerHTML = `<div class="muted">${tr('Create an example project with tasks in every column? It shows links, checklists and labels, and can be deleted with one click in the project settings.')}</div>`;
-    actions.innerHTML = `<button class="btn-primary" id="onb-demo-yes">${tr('Create demo')}</button>
-      <button class="btn-ghost" id="onb-demo-no">${tr('Skip')}</button>`;
-    $('onb-demo-no').onclick = () => stepDone();
-    $('onb-demo-yes').onclick = async () => {
-      try { await api('POST', '/api/projects/demo', { lang: LANG }, { quiet: true }); demoCreated = true; } catch {  demoCreated = true; }
-      stepDone();
-    };
-  };
-
-  const stepDone = async () => {
-    dots('done'); err('');
-    title.textContent = tr('All set!');
-    let packaged = false;
-    try { packaged = !!(await api('GET', '/api/about', null, { quiet: true })).packaged; } catch {  }
-    body.innerHTML = `<div class="muted">${tr('Claude can finish the setup for you — copy this and paste it into its chat:')}</div>`
-      + setupPromptBlockHTML()
-      + manualSetupHTML(packaged);
-    wireSetupPrompt(body);
-    actions.innerHTML = `<button class="btn-primary" id="onb-finish">${tr('Start working')}</button>`;
-    $('onb-finish').onclick = () => finish(demoCreated);
-  };
-
-  if (localStorage.getItem('kb.set.lang') !== null) stepSync(); else stepLang();
-}
-
+// project, "quick task capture") is gone: the owner asked for no description there.
+// not a 15px glyph sitting low on the baseline of an 18px heading
+const TITLE_IC = 20;
 export function renderTopbar() {
-  $('project-menu').classList.toggle('hidden', [DASH, SETTINGS, HORIZON, CALENDAR, CHAOS].includes(state.slug));
+  if ($('project-title').isContentEditable) return;
+  $('project-menu').classList.toggle('hidden', [DASH, NOW, REVIEW, DONE, AUTO, HEALTH, SETTINGS, HORIZON, CALENDAR, CHAOS, ALL].includes(state.slug));
   $('project-menu').classList.toggle('on', Boolean(state.projSettings));
   if (state.slug === DASH) {
-    $('project-title').innerHTML = `${ic('chart', 15)} ${esc(tr('Dashboard'))}`;
-    $('project-meta').textContent = '';
+    $('project-title').innerHTML = `${ic('chart', TITLE_IC)} ${esc(tr('Dashboard'))}`;
     return;
   }
-  if (state.slug === HORIZON) { $('project-title').textContent = tr('Horizon'); $('project-meta').textContent = tr('goals by time horizon'); return; }
-  if (state.slug === CALENDAR) { $('project-title').textContent = tr('Calendar'); $('project-meta').textContent = ''; return; }
-  if (state.slug === CHAOS) { $('project-title').textContent = tr('Chaos'); $('project-meta').textContent = tr('quick task capture'); return; }
+  if (state.slug === NOW) {
+    $('project-title').innerHTML = `${ic('bot', TITLE_IC)} ${esc(tr('Claude now'))}`;
+    return;
+  }
+  if (state.slug === REVIEW) {
+    $('project-title').innerHTML = `${ic('eye', TITLE_IC)} ${esc(tr('Claude review'))}`;
+    return;
+  }
+  if (state.slug === DONE) {
+    $('project-title').innerHTML = `${ic('check', TITLE_IC)} ${esc(tr('Claude done'))}`;
+    return;
+  }
+  if (state.slug === AUTO) {
+    $('project-title').innerHTML = `${ic('bolt', TITLE_IC)} ${esc(tr('Automations'))}`;
+    return;
+  }
+  if (state.slug === HEALTH) {
+    $('project-title').innerHTML = `${ic('pulse', TITLE_IC)} ${esc(tr('Health'))}`;
+    return;
+  }
+  if (state.slug === HORIZON) { $('project-title').textContent = tr('Horizon'); return; }
+  if (state.slug === CALENDAR) { $('project-title').textContent = tr('Calendar'); return; }
+  if (state.slug === CHAOS) { $('project-title').textContent = tr('New task'); return; }
   if (state.slug === SETTINGS) {
-    $('project-title').innerHTML = `${ic('gear', 15)} ${esc(tr('Settings'))}`;
-    $('project-meta').textContent = '';
+    $('project-title').innerHTML = `${ic('gear', TITLE_IC)} ${esc(tr('Settings'))}`;
     return;
   }
   if (state.slug === ALL) {
     $('project-title').textContent = tr('All projects');
-    $('project-meta').textContent = `${state.projects.length} ${plural(state.projects.length, 'project', 'projects')}`;
     return;
   }
   const p = currentProject();
   $('project-title').textContent = p ? (p.name || p.slug) : '—';
-  $('project-meta').textContent = p ? [p.prefix, p.name !== p.slug ? p.slug : '', p.domain].filter(Boolean).join(' · ') : '';
+  $('project-title').title = p ? tr('Double-click to rename') : '';
 }
+
+function renameInTitle() {
+  const h = $('project-title');
+  const p = currentProject();
+  if (!p || h.isContentEditable) return;
+  const was = p.name || p.slug;
+  try { h.contentEditable = 'plaintext-only'; } catch { /* an engine without it */ }
+  if (h.contentEditable !== 'plaintext-only') h.contentEditable = 'true';
+  h.classList.add('renaming');
+  h.textContent = was;
+  h.focus();
+  const sel = getSelection();
+  sel.removeAllRanges();
+  const range = document.createRange();
+  range.selectNodeContents(h);
+  sel.addRange(range);
+  let done = false;
+  const finish = async (save) => {
+    if (done) return;
+    done = true;
+    const name = h.textContent.replace(/\s+/g, ' ').trim();
+    h.contentEditable = 'false';
+    h.removeAttribute('contenteditable');
+    h.classList.remove('renaming');
+    h.onkeydown = null;
+    h.onblur = null;
+    if (!save || !name || name === was) { renderTopbar(); return; }
+    h.textContent = name;
+    try {
+      await api('PATCH', `/api/projects/${seg(p.slug)}`, { name });
+      p.name = name;
+      loadProjects(); // the sidebar and the other lists show the new name
+    } catch (e) {
+      h.textContent = was;
+      styledAlert(refusalLine('Could not rename the project', e, tr));
+    }
+    renderTopbar();
+  };
+  h.onkeydown = (e) => {
+    // the board's keys are not for the title: Esc would close a card, Enter would add a line
+    if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); finish(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); }
+  };
+  h.onblur = () => finish(true);
+}
+$('project-title').ondblclick = renameInTitle;
 
 export function setupPromptBlockHTML() {
   return `<div class="setup-prompt"><pre class="onb-code setup-prompt-text">${esc(setupPrompt())}</pre>`

@@ -1,10 +1,10 @@
 
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { db, kvGet, kvSet } from '../db.js';
-import { ROOT } from '../config.js';
+import { ROOT, claudeDirFrom } from '../config.js';
 import { gh as ghCli } from '../sync/github.js';
-import { BOARD_SKILL, GENERIC_DEPLOY_SKILL, SKILL_MAX_BYTES, SKILL_NAME_RE, deleteSkill, listSkills, readSkill, skillInfo, skillRoots, writeSkill } from '../skills.js';
+import { BOARD_SKILL, GENERIC_DEPLOY_SKILL, SKILL_MAX_BYTES, SKILL_NAME_RE, deleteSkill, listSkills, packagedSkillNames, packagedSkillState, readSkill, refreshPackagedSkill, skillInfo, skillRoots, writeSkill } from '../skills.js';
 
 function upstreamRepo() {
   try {
@@ -49,28 +49,23 @@ function ownSkills() {
 const rememberOwn = (name) => kvSet(OWN_KEY, JSON.stringify([...new Set([...ownSkills(), name])]));
 const forgetOwn = (name) => kvSet(OWN_KEY, JSON.stringify(ownSkills().filter((x) => x !== name)));
 
-function packagedSkills() {
-  try {
-    return readdirSync(join(ROOT, 'skills'))
-      .filter((name) => SKILL_NAME_RE.test(name) && existsSync(join(ROOT, 'skills', name, 'SKILL.md')))
-      .sort();
-  } catch { return []; }
-}
-
 export default async function skillRoutes(app) {
   const usedBy = (name) => db.prepare('SELECT slug, name FROM projects WHERE deploy_skill = ? AND archived = 0 ORDER BY name').all(name);
 
   app.get('/api/skills', () => ({
     roots: skillRoots(),
+    // folder row of Settings → Claude Code (the section used to name ~/.claude/skills whatever the folder was)
+    folder: { path: skillRoots()[0], from: claudeDirFrom() },
     board_skill: BOARD_SKILL,
     generic_deploy_skill: GENERIC_DEPLOY_SKILL,
     items: listSkills().map((s) => ({
       ...s,
       used_by: usedBy(s.name),
       packaged: existsSync(join(ROOT, 'skills', s.name, 'SKILL.md')),
+      package_state: packagedSkillState(s.name),
     })),
-    board: skillInfo(BOARD_SKILL),
-    packaged_skills: packagedSkills(),
+    board: { ...skillInfo(BOARD_SKILL), package_state: packagedSkillState(BOARD_SKILL) },
+    packaged_skills: packagedSkillNames(),
     own_skills: ownSkills(),
   }));
 
@@ -94,6 +89,16 @@ export default async function skillRoutes(app) {
     const r = writeSkill(req.params.name, req.body?.text, req.body?.confirm_path);
     if (r.error) return reply.code(r.code).send(r);
     rememberOwn(req.params.name);
+    return r;
+  });
+
+  app.post('/api/skills/:name/refresh', (req, reply) => {
+    if (process.env.KB_PREVIEW_TTL_MS) return reply.code(403).send({ error: 'this is a check board opened from a backup — it does not write skills' });
+    const { name } = req.params;
+    if (!SKILL_NAME_RE.test(name)) return reply.code(400).send({ error: 'skill name: latin letters, digits, hyphen, underscore only' });
+    if (typeof req.body?.confirm_path !== 'string') return reply.code(400).send({ error: 'confirm_path is required' });
+    const r = refreshPackagedSkill(name, req.body.confirm_path);
+    if (r.error) return reply.code(r.code).send(r);
     return r;
   });
 

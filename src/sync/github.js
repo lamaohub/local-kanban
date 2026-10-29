@@ -61,6 +61,7 @@ export const LABELS = {
   noclaude: '6E7681',
   security: 'EE0701',
   ask: '8250DF',
+  check: '1D76DB',
 };
 
 export const MANAGED_LABELS = new Set([...Object.values(PRIORITY_LABELS), 'blocked']);
@@ -179,12 +180,12 @@ export function parseIssueNumber(url) {
   return number;
 }
 
+const RECENT_ISSUES = 100;
 export async function findIssueByKey(key) {
   if (!key) return null;
-  const out = await gh(['issue', 'list', '-R', ghRepo(), '--search', `"${key}" in:body`,
-    '--state', 'all', '--limit', '20', '--json', 'number,url,body']);
-  const list = JSON.parse(out || '[]');
-  const hit = list.find((i) => typeof i.body === 'string' && i.body.includes(`· ${key} ·`));
+  const ours = (out) => JSON.parse(out || '[]').find((i) => typeof i.body === 'string' && i.body.includes(`· ${key} ·`));
+  const hit = ours(await gh(['issue', 'list', '-R', ghRepo(), '--state', 'all', '--limit', String(RECENT_ISSUES), '--json', 'number,url,body']))
+    || ours(await gh(['issue', 'list', '-R', ghRepo(), '--search', `"${key}" in:body`, '--state', 'all', '--limit', '20', '--json', 'number,url,body']));
   return hit ? { number: hit.number, url: hit.url } : null;
 }
 
@@ -192,6 +193,14 @@ export async function addToProject(project, url) {
   const item = JSON.parse(await gh(['project', 'item-add', String(project.gh_project_number),
     '--owner', ghOwner(), '--url', url, '--format', 'json']));
   return item.id;
+}
+
+export async function removeFromProject(payload) {
+  try {
+    await gh(['project', 'item-delete', String(payload.project_number), '--owner', ghOwner(), '--id', String(payload.item_id)]);
+  } catch (err) {
+    if (!/could not resolve|not found/i.test(err.message)) throw err;
+  }
 }
 
 export async function updateIssue(payload, project) {

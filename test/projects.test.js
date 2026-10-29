@@ -1,6 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
@@ -222,4 +222,19 @@ test('a project document is written back only with the path the page confirmed',
   assert.ok(readdirSync(join(tmp, 'backups', 'docs')).some((f) => f.startsWith('edit-proj-CLAUDE.md-')));
 
   assert.equal((await app.inject({ method: 'PUT', url: '/api/projects/edit-proj/docs/.env', payload: { text: 'x', confirm_path: real } })).statusCode, 400);
+});
+
+// in Review, and the sidebar counted them anyway — it said 7 over a section of 4 tasks. The count of such reports comes
+// with the project, and the sidebar takes it off.
+test('the list of projects counts the reports of checks in Review apart', async () => {
+  const { db } = await import('../src/db.js');
+  const p = (await create({ slug: 'reports', name: 'Reports' })).json();
+  const add = (no, status, labels) => db.prepare('INSERT INTO tasks (project_id, task_no, title, status, labels) VALUES (?, ?, ?, ?, ?)')
+    .run(p.id, no, `t${no}`, status, JSON.stringify(labels));
+  add(1, 'review', []); add(2, 'review', ['check']); add(3, 'review', ['check', 'ui']); add(4, 'doing', ['check']); add(5, 'review', ['checklist']);
+  const row = (await app.inject({ method: 'GET', url: '/api/projects' })).json().find((x) => x.slug === 'reports');
+  assert.deepEqual([row.c_review, row.c_review_check], [4, 2], 'a report in Review is not told apart, or another label is taken for one');
+  const sidebar = readFileSync(new URL('../public/js/sidebar.js', import.meta.url), 'utf8');
+  assert.match(sidebar, /const inReview = state\.projects\.reduce\(\(s, p\) => s \+ \(p\.c_review \|\| 0\) - \(p\.c_review_check \|\| 0\), 0\);/,
+    'the sidebar counts the reports of checks in its «Claude review»');
 });

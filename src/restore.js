@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
-import { closeSync, cpSync, mkdtempSync, openSync, readSync, readdirSync, statSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { closeSync, constants as fsConstants, cpSync, mkdtempSync, openSync, readSync, readdirSync, statSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { cp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -89,7 +90,43 @@ export function sweepStalePreviews() {
   return left;
 }
 
+export const UPLOAD_PREFIX = 'kb-upload-';
+const UPLOAD_RE = /^kb-upload-(\d+)-\d+\.db$/;
+const alive = (pid) => {
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+};
+export function sweepStaleUploads() {
+  const base = tmpdir();
+  let swept = 0;
+  try {
+    for (const name of readdirSync(base)) {
+      const m = UPLOAD_RE.exec(name);
+      if (!m) continue;
+      const file = join(base, name);
+      try {
+        if (alive(Number(m[1])) && Date.now() - statSync(file).mtimeMs < 3600 * 1000) continue;
+        rmSync(file, { force: true });
+        swept++;
+      } catch {  }
+    }
+  } catch {  }
+  return swept;
+}
+
 export function previewProcessForTests() { return current; }
+
+/** The environment of a preview board. */
+export function previewEnv(port, dir) {
+  const env = {
+    ...process.env, PORT: String(port), KB_DATA_DIR: dir,
+    KB_GH_OWNER: '', KB_GH_REPO: '',
+    KB_PANEL_INFO: '', PANEL_INFO: '', KB_PANEL_URL: '', PANEL_URL: '', KB_SKILLS_EXTRA: '',
+    KB_PREVIEW_TTL_MS: String(LIFETIME_MS),
+    KB_TMUX_SOCKET: `kb-preview-${process.pid}`,
+  };
+  delete env.pm_id;
+  return env;
+}
 
 export function currentPreview() {
   if (!current) return null;
@@ -124,13 +161,13 @@ export function stopPreview() {
 
 export async function startPreview(dir, stats) {
   stopPreview();
-  try { if (existsSync(ATTACH_MIRROR)) cpSync(ATTACH_MIRROR, join(dir, 'attachments'), { recursive: true }); } catch (e) {
+  try { if (existsSync(ATTACH_MIRROR)) await cp(ATTACH_MIRROR, join(dir, 'attachments'), { recursive: true, mode: fsConstants.COPYFILE_FICLONE }); } catch (e) {
     logError('server', 'restore-preview', `could not copy the attachments into the copy: ${e.message}`);
   }
   const port = await freePort();
   const proc = spawn(process.execPath, [join(ROOT, 'src', 'server.js')], {
     cwd: ROOT,
-    env: { ...process.env, PORT: String(port), KB_DATA_DIR: dir, KB_GH_OWNER: '', KB_GH_REPO: '', KB_PREVIEW_TTL_MS: String(LIFETIME_MS) },
+    env: previewEnv(port, dir),
     stdio: ['pipe', 'ignore', 'ignore'],
     detached: false,
   });

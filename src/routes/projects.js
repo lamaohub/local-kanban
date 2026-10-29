@@ -2,13 +2,16 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, realpa
 import { execFile } from 'node:child_process';
 import { join, basename, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
-import { db, DATA_DIR, genPrefix, usedPrefixes, makePrefix, kvGet, kvSet, logError } from '../db.js';
+import { db, DATA_DIR, genPrefix, usedPrefixes, makePrefix, kvGet, kvSet, logError, enqueue } from '../db.js';
 import { localRoot, panelUrl, panelInfo } from '../config.js';
 import { emit } from '../bus.js';
 import { forgetRepoBase } from '../repo-base.js';
 import { parsePm2Services, serializePm2Services } from '../pm2-services.js';
 import { GENERIC_DEPLOY_SKILL, SKILL_NAME_RE, resolveSkillPath, skillInfo } from '../skills.js';
 import { snapshotFile } from '../file-snapshot.js';
+import { closeFinishedTerminals } from '../phantom.js';
+import { snapshot } from '../task-shape.js';
+import { kick } from '../sync/worker.js';
 
 const DEFAULT_CATEGORY = 'Other';
 const LOCKED_CATEGORIES = new Set([DEFAULT_CATEGORY, 'Local']);
@@ -61,10 +64,11 @@ function syncCategoryToPanel(project) {
 
 const PATCHABLE = ['name', 'prefix', 'path', 'server_path', 'deploy_skill', 'server', 'pm2_services', 'domain', 'category', 'description', 'pinned', 'archived'];
 
-const FIELD_KIND = { pinned: 'flag', archived: 'flag', pm2_services: 'any' };
+const FIELD_KIND = { pinned: 'flag', archived: 'flag', pm2_services: 'any', name: 'required' };
 function badField(k, v) {
   const kind = FIELD_KIND[k] || 'text';
   if (kind === 'any') return null;
+  if (kind === 'required') return (typeof v === 'string' || typeof v === 'number') && String(v).trim() ? null : `${k}: required, a non-empty string`;
   if (kind === 'flag') {
     if (v === null || v === undefined) return `${k}: expected 0 or 1`;
     if (typeof v === 'boolean' || v === 0 || v === 1 || v === '0' || v === '1') return null;
@@ -80,16 +84,28 @@ const normField = (k, v) => {
   return v === null ? null : String(v);
 };
 
+export const SLUG_RE = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$/;
+
 export function projectBySlug(slug) {
   return db.prepare('SELECT * FROM projects WHERE slug = ?').get(slug);
 }
 
 function checkPrefix(raw, selfId) {
-  const pref = String(raw).toUpperCase();
+  if (typeof raw !== 'string') return { error: 'prefix: 2-10 latin letters or digits, as a string' };
+  const pref = raw.toUpperCase();
   if (!/^[A-Z0-9]{2,10}$/.test(pref)) return { error: 'prefix: 2-10 latin letters or digits' };
   const clash = db.prepare('SELECT id FROM projects WHERE upper(prefix) = ? AND id != COALESCE(?, -1)').get(pref, selfId ?? null);
   if (clash) return { error: 'prefix is taken by another project' };
   return { pref };
+}
+
+export function freeFolderFor(slug) {
+  const base = String(slug).replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[.-]+/, '') || 'project';
+  for (let i = 1; i <= 50; i++) {
+    const dir = join(localRoot(), i === 1 ? base : `${base}-${i}`);
+    if (!existsSync(dir)) return dir;
+  }
+  return null;
 }
 
 export function resolveProject(key) {
@@ -148,6 +164,8 @@ export default async function projectRoutes(app) {
         SUM(CASE WHEN t.status='doing'     THEN 1 ELSE 0 END) AS c_doing,
         SUM(CASE WHEN t.status='deploy'    THEN 1 ELSE 0 END) AS c_deploy,
         SUM(CASE WHEN t.status='review'    THEN 1 ELSE 0 END) AS c_review,
+        -- reports of checks in Review (label check): the section Claude review does not list them, nor counts them
+        SUM(CASE WHEN t.status='review' AND t.labels LIKE '%"check"%' THEN 1 ELSE 0 END) AS c_review_check,
         SUM(CASE WHEN t.status='done'      THEN 1 ELSE 0 END) AS c_done,
         SUM(CASE WHEN t.status='cancelled' THEN 1 ELSE 0 END) AS c_cancelled,
         SUM(CASE WHEN t.blocked=1 AND t.status NOT IN ('done','cancelled') THEN 1 ELSE 0 END) AS c_blocked
@@ -265,6 +283,23 @@ export default async function projectRoutes(app) {
     return { path: res.out || null, cancelled: !res.out };
   });
 
+  app.post('/api/projects/:slug/folder', (req, reply) => {
+    const p = resolveProject(req.params.slug);
+    if (!p) return reply.code(404).send({ error: 'project not found' });
+    if (p.path && existsSync(p.path)) return reply.code(409).send({ error: 'the project already has a folder', path: p.path });
+    const dir = freeFolderFor(p.slug);
+    if (!dir) return reply.code(409).send({ error: 'no free folder name for this project' });
+    try { mkdirSync(dir, { recursive: true }); } catch (e) {
+      logError('server', 'POST /api/projects/:slug/folder', `mkdir failed: ${e.message}`, dir);
+      return reply.code(500).send({ error: `could not create the folder (${e.code || 'error'})` });
+    }
+    db.prepare("UPDATE projects SET path = ?, updated_at = datetime('now') WHERE id = ?").run(dir, p.id);
+    forgetRepoBase(p.path);
+    const fresh = resolveProject(p.slug);
+    emit('project.updated', fresh);
+    return reply.code(201).send(fresh);
+  });
+
   app.post('/api/projects/folders', (req, reply) => {
     const raw = req.body?.name;
     if (raw !== undefined && raw !== null && typeof raw !== 'string' && typeof raw !== 'number') {
@@ -272,21 +307,21 @@ export default async function projectRoutes(app) {
     }
     const name = String(raw ?? '').trim();
     if (!name) return reply.code(400).send({ error: 'name required' });
-    if (!/^[A-Za-z0-9._-]+$/.test(name) || name.startsWith('.')) {
-      return reply.code(400).send({ error: 'folder name: latin letters, digits, - and _, no slashes' });
+    if (!SLUG_RE.test(name)) {
+      return reply.code(400).send({ error: 'folder name: latin letters, digits, ".", "-" and "_", up to 100 characters, no slashes, not starting with "." or "-"' });
     }
     const dir = join(localRoot(), name);
-    const existed = existsSync(dir);
-    if (!existed) {
-      try { mkdirSync(dir, { recursive: true }); } catch (e) {
-        logError('server', 'POST /api/projects/folders', `mkdir failed: ${e.message}`, dir);
-        return reply.code(500).send({ error: `mkdir failed: ${e.message}` });
-      }
-    }
     if (db.prepare('SELECT slug FROM projects WHERE path = ?').get(dir)) {
       return reply.code(409).send({ error: 'folder is already on the board' });
     }
     if (projectBySlug(name)) return reply.code(409).send({ error: 'slug is taken' });
+    const existed = existsSync(dir);
+    if (!existed) {
+      try { mkdirSync(dir, { recursive: true }); } catch (e) {
+        logError('server', 'POST /api/projects/folders', `mkdir failed: ${e.message}`, dir);
+        return reply.code(500).send({ error: `could not create the folder (${e.code || 'error'})` });
+      }
+    }
     db.prepare("INSERT INTO projects (slug, name, prefix, path, category) VALUES (?,?,?,?,'Local')")
       .run(name, name, makePrefix(name), dir);
     const p = projectBySlug(name);
@@ -370,7 +405,7 @@ export default async function projectRoutes(app) {
     if (req.body?.confirm_path !== real) {
       return reply.code(409).send({ error: 'the file on disk is not the one the page was editing', real_path: real });
     }
-    const backup = snapshotFile('docs', `${p.slug}-${req.params.name}`, path);
+    const backup = snapshotFile('docs', `${encodeURIComponent(p.slug)}-${req.params.name}`, path);
     writeFileSync(path, text);
     const st = statSync(path);
     return { name: req.params.name, path, real_path: real, size: st.size, mtime: new Date(st.mtimeMs).toISOString(), backup, backup_name: backup ? backup.split(sep).pop() : null };
@@ -424,6 +459,7 @@ export default async function projectRoutes(app) {
     if (!server || !path) return reply.code(400).send({ error: 'server and path are required' });
     if (!/^[\w.@][\w.@-]*$/.test(server)) return reply.code(400).send({ error: 'server: an ssh alias or host, no options or spaces' });
     if (/["'`;|&$\\]/.test(path)) return reply.code(400).send({ error: 'path: invalid characters' });
+    if (/[\x00-\x1f]/.test(path)) return reply.code(400).send({ error: 'path: control characters are not allowed' });
     const sshRun = (cmd) => new Promise((resolve) => execFile('ssh',
       ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', '--', server, cmd],
       { timeout: 20000 }, (err, out, serr) => resolve({ err, out: String(out || '').trim(), serr: String(serr || '').trim() })));
@@ -446,6 +482,7 @@ export default async function projectRoutes(app) {
     if (!server) return reply.code(400).send({ error: 'server is required' });
     if (!/^[\w.@][\w.@-]*$/.test(server)) return reply.code(400).send({ error: 'server: an ssh alias or host, no options or spaces' });
     if (path && /["'`;|&$\\]/.test(path)) return reply.code(400).send({ error: 'path: invalid characters' });
+    if (/[\x00-\x1f]/.test(path)) return reply.code(400).send({ error: 'path: control characters are not allowed' });
     const cmd = path ? `test -d "${path}" && echo dir || echo nodir` : 'echo ok';
     const res = await new Promise((done) => execFile('ssh',
       ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', '--', server, cmd],
@@ -522,10 +559,18 @@ export default async function projectRoutes(app) {
   app.delete('/api/projects/demo', (req, reply) => {
     const p = projectBySlug('demo');
     if (!p) return reply.code(404).send({ error: 'there is no demo project' });
-    const ids = db.prepare('SELECT id FROM tasks WHERE project_id = ?').all(p.id).map((t) => t.id);
-    db.prepare('DELETE FROM tasks WHERE project_id = ?').run(p.id);
-    db.prepare('DELETE FROM projects WHERE id = ?').run(p.id);
-    for (const id of ids) rmSync(join(DATA_DIR, 'attachments', String(id)), { recursive: true, force: true });
+    const tasks = db.prepare(`SELECT t.*, p.slug AS project, (p.prefix || '-' || t.task_no) AS key
+      FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.project_id = ?`).all(p.id);
+    const withIssue = tasks.filter((t) => t.gh_issue_number);
+    db.transaction(() => {
+      for (const t of tasks) db.prepare('DELETE FROM sync_queue WHERE task_id = ?').run(t.id);
+      db.prepare('DELETE FROM tasks WHERE project_id = ?').run(p.id);
+      db.prepare('DELETE FROM projects WHERE id = ?').run(p.id);
+      for (const t of withIssue) enqueue('delete_issue', null, snapshot(t));
+    })();
+    if (withIssue.length) kick();
+    for (const t of tasks) rmSync(join(DATA_DIR, 'attachments', String(t.id)), { recursive: true, force: true });
+    closeFinishedTerminals().catch(() => {});
     emit('project.updated', { slug: 'demo', deleted: true });
     return { ok: true };
   });
@@ -535,6 +580,9 @@ export default async function projectRoutes(app) {
     if (!slug || !name) return reply.code(400).send({ error: 'slug and name required' });
     if (typeof slug !== 'string' || typeof name !== 'string') {
       return reply.code(400).send({ error: 'slug and name: expected strings' });
+    }
+    if (!SLUG_RE.test(slug)) {
+      return reply.code(400).send({ error: 'slug: latin letters, digits, ".", "-" and "_", up to 100 characters, one path segment, not starting with "." or "-"' });
     }
     if (projectBySlug(slug)) return reply.code(409).send({ error: 'slug exists' });
     const dsErr = badDeploySkill(req.body);

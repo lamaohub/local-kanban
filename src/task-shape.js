@@ -1,5 +1,14 @@
 import { db } from './db.js';
 
+/** SQL: a task is (or, `only` false, is not) one the person does by hand. `alias` — the table's prefix ('t.'). */
+export const noclaudeFilter = (alias = '', only = false) => `${alias}labels ${only ? '' : 'NOT '}LIKE '%"noclaude"%'`;
+/** A task the person does by hand, by its labels — an array, or the JSON text the database keeps. */
+export function isManual(labels) {
+  let list = labels;
+  if (typeof list === 'string') { try { list = JSON.parse(list || '[]'); } catch { list = []; } }
+  return Array.isArray(list) && list.includes('noclaude');
+}
+
 export function listShape(t) {
   return {
     id: t.id, key: t.key, project: t.project, title: t.title, status: t.status,
@@ -15,6 +24,14 @@ export function listShape(t) {
     work_started_at: t.work_started_at || null,
     work_truncated: t.work_truncated || 0,
     updated_at: t.updated_at,
+  };
+}
+
+export function snapshot(t) {
+  return {
+    task_id: t.id, project: t.project, key: t.key, title: t.title, description: t.description,
+    status: t.status, priority: t.priority, blocked: t.blocked, labels: JSON.parse(t.labels || '[]'),
+    gh_issue_number: t.gh_issue_number, gh_item_id: t.gh_item_id,
   };
 }
 

@@ -98,3 +98,35 @@ test('a directed link is removed from the subtask side too', async () => {
   assert.equal(del.statusCode, 200);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM task_links').get().n, 0);
 });
+
+test('the task list of more than 16 384 tasks still answers, and its links are still there', async () => {
+  db.prepare("INSERT INTO projects (slug, prefix, name, next_task_no) VALUES ('bulk','BK','bulk',1)").run();
+  const pid = db.prepare("SELECT id FROM projects WHERE slug='bulk'").get().id;
+  const N = 16_500;
+  const ins = db.prepare('INSERT INTO tasks (project_id, task_no, title, status) VALUES (?, ?, ?, ?)');
+  db.transaction(() => { for (let n = 1; n <= N; n++) ins.run(pid, n, `Bulk ${n}`, n % 2 ? 'done' : 'backlog'); })();
+  const idOf = (no) => db.prepare('SELECT id FROM tasks WHERE project_id = ? AND task_no = ?').get(pid, no).id;
+  const [first, last] = [idOf(1), idOf(N)];
+  db.prepare("INSERT INTO task_links (task_id, linked_task_id, kind) VALUES (?, ?, 'related')").run(first, last);
+  for (const url of ['/api/tasks?all=1', '/api/tasks?project=bulk&all=1']) {
+    const r = await app.inject({ method: 'GET', url });
+    assert.equal(r.statusCode, 200, `${url}: ${r.body.slice(0, 200)}`);
+    const byId = new Map(r.json().map((t) => [t.id, t]));
+    assert.ok(byId.size >= N, `${url}: ${byId.size} tasks instead of ${N}+`);
+    assert.deepEqual(byId.get(first).linked_ids, [last], `${url}: the first task lost its link`);
+    assert.deepEqual(byId.get(last).linked_ids, [first], `${url}: the last task lost its link`);
+  }
+});
+
+test('a project board keeps a link whose stored row starts at a task of another project', async () => {
+  db.prepare("INSERT INTO projects (slug, prefix, name, next_task_no) VALUES ('other','OT','other',2)").run();
+  const oid = db.prepare("SELECT id FROM projects WHERE slug='other'").get().id;
+  const parent = db.prepare("INSERT INTO tasks (project_id, task_no, title, status) VALUES (?, 1, 'Parent elsewhere', 'todo')").run(oid).lastInsertRowid;
+  const r = await app.inject({ method: 'POST', url: '/api/tasks/DM-1/links', payload: { key: 'OT-1', rel: 'parent' } });
+  assert.equal(r.statusCode, 200);
+  const dm1 = db.prepare("SELECT t.id FROM tasks t JOIN projects p ON p.id = t.project_id WHERE p.slug = 'demo' AND t.task_no = 1").get().id;
+  const row = db.prepare('SELECT task_id, linked_task_id FROM task_links WHERE linked_task_id = ? OR task_id = ?').get(dm1, dm1);
+  assert.deepEqual(row, { task_id: parent, linked_task_id: dm1 }, 'precondition: the row starts at the task of the other project');
+  const list = (await app.inject({ method: 'GET', url: '/api/tasks?project=demo&all=1' })).json();
+  assert.deepEqual(list.find((t) => t.id === dm1).linked_ids, [parent], 'the card lost its link to the task of another project');
+});

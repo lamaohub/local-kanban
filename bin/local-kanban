@@ -10,10 +10,9 @@
 //  - nothing happens quietly: every step prints what it wrote and where.
 import { createInterface } from 'node:readline/promises';
 import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, rmSync, writeFileSync, mkdirSync, symlinkSync, cpSync, readFileSync } from 'node:fs';
-import { join, dirname, resolve, sep } from 'node:path';
+import { existsSync, lstatSync, writeFileSync, mkdirSync, symlinkSync } from 'node:fs';
+import { join, dirname, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { homedir } from 'node:os';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -69,13 +68,47 @@ const usage = () => say(`
   local-kanban start      run the board
       --port <N>          port (defaults to 3100, or PORT)
       --data <dir>        data directory (defaults to whatever the board resolves on its own)
-  local-kanban skills     refresh the Claude Code skills in ~/.claude/skills
+  local-kanban skills [--port <N>] [--data <dir>]
+                          refresh the board's Claude Code skills (kanban, deploy) in the
+                          skills folder of the Claude folder (below)
+  local-kanban hooks install|uninstall [--yes] [--port <N>] [--data <dir>]
+                          connect the board to Claude Code (or take it off again): the rate
+                          limits from the status line and answering Claude from the card. Shows
+                          the change to settings.json in the Claude folder and asks before
+                          writing it.
   local-kanban help       this help
+
+  The Claude folder is $KB_CLAUDE_DIR when set, else $CLAUDE_CONFIG_DIR, else ~/.claude.
+  hooks and skills keep a copy of each file they replace among the board's backups: they ask the
+  running board (at $KB_URL, else --port, else 3100) where its data folder is. When it does not
+  answer, name the folder with --data <dir> — without it nothing is written.
 `);
 
-function installSkills({ force = false, quiet = false } = {}) {
-  const skillsDir = join(homedir(), '.claude', 'skills');
+async function boardDataDir(port = '') {
+  if (flag('data')) {
+    const { expandPath } = await import(pathToFileURL(join(ROOT, 'src', 'config.js')).href);
+    return { dir: expandPath(flag('data')) };
+  }
+  const url = (process.env.KB_URL || `http://127.0.0.1:${port || 3100}`).replace(/\/+$/, '');
+  try {
+    const r = await fetch(`${url}/api/about`, { signal: AbortSignal.timeout(3000) });
+    const j = r.ok ? await r.json() : null;
+    const dir = typeof j?.data_dir === 'string' && j.data_dir ? j.data_dir
+      : typeof j?.db_path === 'string' && j.db_path.endsWith('kanban.db') ? dirname(j.db_path) : '';
+    if (dir) return { dir };
+  } catch { /* not there, not the board, not JSON — all the same: the folder is unknown */ }
+  return { error: `the board at ${url} does not answer, so it is not known where it keeps its backups — start it (or point at it with --port / KB_URL), or name its data folder: --data <dir>` };
+}
+
+async function installSkills({ force = false, quiet = false, dataDir = '' } = {}) {
+  // imported here, not at the top: config.js resolves the data folder on import, and `start` sets it first
+  // with the board's own button in Settings → Skills and with its update
+  const { copyFromPackage, skillRoots } = await import(pathToFileURL(join(ROOT, 'src', 'skills.js')).href);
+  const skillsDir = skillRoots()[0];
+  const { missingClaudeDir, missingClaudeDirError } = await import(pathToFileURL(join(ROOT, 'src', 'config.js')).href);
+  if (missingClaudeDir()) { skip(missingClaudeDirError()); return { dir: skillsDir, failed: ['kanban', 'deploy'] }; }
   mkdirSync(skillsDir, { recursive: true });
+  const failed = [];
   for (const name of ['kanban', 'deploy']) {
     const target = join(skillsDir, name);
     const source = join(ROOT, 'skills', name);
@@ -87,23 +120,132 @@ function installSkills({ force = false, quiet = false } = {}) {
       // from a package this is a COPY. A symlink would point inside node_modules, and updating or
       // removing the package would silently take the skill away from Claude.
       if (packaged || force) {
-        rmSync(target, { recursive: true, force: true });
-        cpSync(source, target, { recursive: true });
-        if (!quiet) done(`${target} (copy)`);
+        const written = copyFromPackage(name, target, { dataDir }).map(({ rel, kept }) => (kept ? `${rel} (the previous one is kept as ${kept})` : rel));
+        if (!quiet) {
+          if (written.length) done(`${target}: ${written.join(', ')}`);
+          else skip(`${target} already matches the package`);
+        }
       } else { symlinkSync(source, target); if (!quiet) done(`${target} → skills/${name}`); }
-    } catch (e) { skip(`could not install the skill ${target}: ${e.message}`); }
+    } catch (e) { failed.push(name); skip(`could not install the skill ${target}: ${e.message}`); }
   }
+  return { dir: skillsDir, failed };
+}
+
+async function hooksCommand(action, { port = '', ask: askFn = null, dataDir = '' } = {}) {
+  const { otherBoard, planInstall, planUninstall } = await import(pathToFileURL(join(ROOT, 'src', 'claude-hooks.js')).href);
+  const { boardKb, readSettings, writeSettings } = await import(pathToFileURL(join(ROOT, 'src', 'claude-settings.js')).href);
+  // neither does this command
+  const { claudeDir, claudeDirFrom } = await import(pathToFileURL(join(ROOT, 'src', 'config.js')).href);
+  if (claudeDirFrom() === 'KB_CLAUDE_DIR' && !existsSync(claudeDir())) {
+    say(`  ${claudeDir()} does not exist — check KB_CLAUDE_DIR; nothing was written.`);
+    return 1;
+  }
+  const read = readSettings();
+  const { path } = read;
+  if (read.error === 'not-json') { say(`  ${path} is not valid JSON (${read.message}) — fix it first; nothing was written.`); return 1; }
+  if (read.error === 'not-object') { say(`  ${path} does not hold a JSON object — nothing was written.`); return 1; }
+  if (read.error) { say(`  ${path} cannot be read (${read.message}) — nothing was written.`); return 1; }
+  const url = process.env.KB_URL || (port ? `http://127.0.0.1:${port}` : '');
+  const kb = boardKb(url);
+  const { settings: next, changes } = action === 'install' ? planInstall(read.settings, kb) : planUninstall(read.settings);
+  say(`  ${action === 'install' ? 'Connecting the board to' : 'Taking the board off'} Claude Code — ${path}:`);
+  let target = 3100;
+  try { target = Number(new URL(url || 'http://127.0.0.1:3100').port || 3100); } catch { /* an address that does not read: no note */ }
+  const other = action === 'install' ? otherBoard(read.settings, target) : null;
+  if (other) say(`    · another board is connected now — ${other}; this takes it over`);
+  const SAY = {
+    add: (c) => `+ ${c.part}: ${c.to}`,
+    chain: (c) => `~ ${c.part}: ${c.from}\n      → ${c.to}`,
+    update: (c) => `~ ${c.part}: ${c.from}\n      → ${c.to}  (the board's entry, rewritten with today's paths)`,
+    restore: (c) => `~ ${c.part}: ${c.from}\n      → ${c.to}`,
+    remove: (c) => `- ${c.part}${c.from ? `: ${c.from}` : ' (the board\'s hook)'}`,
+    already: (c) => `· ${c.part}: already goes through the board`,
+    skip: (c) => (c.ours
+      ? `· ${c.part}: goes through the board, but in a shape this command cannot take apart — left as it is; fix it by hand`
+      : `· ${c.part}: set up in a way this command does not change — left as it is`),
+  };
+  for (const c of changes) say(`    ${SAY[c.action](c)}`);
+  if (!changes.some((c) => ['add', 'chain', 'update', 'restore', 'remove'].includes(c.action))) {
+    say(`    nothing to ${action === 'install' ? 'add' : 'take off'}.`);
+    return 0;
+  }
+  say('    Everything else in the file stays as it is.');
+  // the person, so that a yes is never followed by "could not". The wizard knows the folder (it just asked for it).
+  let copyTo = dataDir;
+  if (!copyTo && read.existed) {
+    const where = await boardDataDir(port);
+    if (where.error) { say(`  ${where.error}. Nothing was written.`); return 1; }
+    copyTo = where.dir;
+  }
+  let ok = process.argv.includes('--yes');
+  if (!ok) {
+    if (askFn) ok = await askFn('  Write these changes?');
+    else if (process.stdin.isTTY && process.stdout.isTTY) {
+      const r = createInterface({ input: process.stdin, output: process.stdout });
+      ok = ['y', 'yes'].includes((await r.question('  Write these changes? [y/N]: ')).trim().toLowerCase());
+      r.close();
+    } else {
+      say('  Nothing written — run it again with --yes to apply.');
+      return 0;
+    }
+  }
+  if (!ok) { say('  Nothing written.'); return 0; }
+  // Where nothing can be written, or no copy of the previous file can be kept, the command says so and leaves
+  // everything as it was, instead of dying with a stack trace.
+  const w = writeSettings(read, next, { dataDir: copyTo });
+  if (w.error === 'changed') { say(`  ${path} changed while the change was on screen — nothing written; run the command again.`); return 1; }
+  if (w.error === 'read-only') { say(`  ${w.target} is not writable — nothing was written. Make it writable, or add the entries by hand.`); return 1; }
+  if (w.error === 'folder') { say(`  the folder of ${w.target} is not writable — nothing was written. Make it writable, or add the entries by hand.`); return 1; }
+  if (w.error === 'no-copy') { say(`  could not keep a copy of ${path} among the board's snapshots (${w.message}) — nothing was written.`); return 1; }
+  if (w.error) { say(`  could not write ${w.target || path} (${w.message}) — nothing was written.`); return 1; }
+  done(`wrote ${w.target === path ? path : `${path} → ${w.target}`}`);
+  if (w.kept) say(`    the previous file is kept as ${w.kept}`);
+  say(action === 'install'
+    ? '    New Claude Code sessions pick it up. To take it off again: local-kanban hooks uninstall'
+    : '    New Claude Code sessions run without the board.');
+  return 0;
+}
+
+if (cmd === 'hooks') {
+  const action = argv[1];
+  if (action !== 'install' && action !== 'uninstall') { usage(); process.exit(2); }
+  process.exit(await hooksCommand(action, { port: flag('port') }));
 }
 
 if (cmd === 'skills') {
-  installSkills({ force: true });
-  say('\n  The skills in ~/.claude/skills now match this version of the package.');
+  // this refresh is for, which is asked where they are; with nothing to copy (new skills, equal files) nothing is asked
+  const { packagedSkillState, skillRoots } = await import(pathToFileURL(join(ROOT, 'src', 'skills.js')).href);
+  const copies = (name) => {
+    const state = packagedSkillState(name);
+    return state === 'differs' || (state === 'missing' && existsSync(join(skillRoots()[0], name))); // a folder without SKILL.md may hold older files
+  };
+  let dataDir = '';
+  if (['kanban', 'deploy'].some(copies)) {
+    const where = await boardDataDir(flag('port'));
+    if (where.error) { say(`\n  ${where.error}. Nothing was written.`); process.exit(1); }
+    dataDir = where.dir;
+  }
+  const { dir, failed } = await installSkills({ force: true, dataDir });
+  // a skill that could not be refreshed (its snapshot could not be made, say) is left as it was — the
+  // summary must not call it up to date, and the exit code tells a script the refresh did not go through
+  if (failed.length) {
+    say(`\n  ${failed.join(', ')} in ${dir} could not be refreshed — see above.`);
+    process.exit(1);
+  }
+  say(`\n  The skills in ${dir} now match this version of the package; other files in them are left as they were.`);
   process.exit(0);
 }
 
 if (cmd === 'start') {
   if (flag('port')) process.env.PORT = flag('port');
-  if (flag('data')) process.env.KB_DATA_DIR = resolve(flag('data'));
+  // shell does not expand a tilde after `=`, so `--data=~/x` arrives as is, and resolve() here made a
+  // real folder named «~» in the current one. The resolved, absolute value goes back into the
+  // environment for whatever the board starts as a child.
+  if (flag('data')) {
+    process.env.KB_DATA_DIR = flag('data');
+    const { DATA_DIR } = await import(pathToFileURL(join(ROOT, 'src', 'config.js')).href);
+    process.env.KB_DATA_DIR = DATA_DIR;
+  }
   // the server prints its address and backup path itself; the data directory is resolved by config.js
   await import(pathToFileURL(join(ROOT, 'src', 'server.js')).href);
   // the wizard follows below and must not run under `start`; the listening socket holds the process
@@ -122,7 +264,7 @@ say('\n  local-kanban — install\n');
 /* ── 1. port and data directory ─────────────────────────────────────────── */
 // imported here rather than at the top: a static import would run BEFORE the `start` branch,
 // which sets KB_DATA_DIR from --data, and the server would receive a stale cached value
-const { DATA_DIR, expandPath } = await import(pathToFileURL(join(ROOT, 'src', 'config.js')).href);
+const { DATA_DIR, expandPath, claudeDir } = await import(pathToFileURL(join(ROOT, 'src', 'config.js')).href);
 const port = await ask('Board port (listens on 127.0.0.1 only)', '3100');
 // the default comes from config.js, the single place that decides where data lives — otherwise
 // the wizard would offer a directory inside the package and the board would open a different one
@@ -192,11 +334,20 @@ ${env}
 
 /* ── 4. Claude Code skills ──────────────────────────────────────────────── */
 say('');
-if (await confirm('Install the Claude Code skills (kanban, deploy) into ~/.claude/skills?', true)) {
-  installSkills();
+if (await confirm(`Install the Claude Code skills (kanban, deploy) into ${join(claudeDir(), 'skills')}?`, true)) {
+  await installSkills();
   if (packaged) say('    after an update, refresh them:  local-kanban skills');
 } else {
   skip('skills not installed — later: ln -s "$(pwd)/skills/kanban" ~/.claude/skills/kanban');
+}
+
+say('');
+say('  Optional: connect the board to Claude Code — the subscription\'s limits in the sidebar (through the status');
+say(`  line) and answering Claude from the card (a PermissionRequest hook). It adds two entries to ${join(claudeDir(), 'settings.json')}.`);
+if (await confirm('  Show the change and connect?', false)) {
+  await hooksCommand('install', { port: port !== '3100' ? port : '', ask: (q) => confirm(q, false), dataDir });
+} else {
+  skip('not connected — later: local-kanban hooks install');
 }
 
 /* ── 5. the kb command ──────────────────────────────────────────────────── */

@@ -84,6 +84,7 @@ export async function processOp(row, api = github) {
     case 'close_issue': project = await api.ensureProject(project); await api.closeIssue(data, project); break;
     case 'reopen_issue': project = await api.ensureProject(project); await api.reopenIssue(data, project); break;
     case 'delete_issue': await api.deleteIssue(payload); break;
+    case 'remove_item': await api.removeFromProject(payload); break;
     default: break;
   }
 }

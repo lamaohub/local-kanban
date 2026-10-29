@@ -1,21 +1,24 @@
 import { cpSync, mkdirSync, existsSync, readdirSync, unlinkSync, renameSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { db, DATA_DIR, logError } from './db.js';
+import { localStamp, stampTime, zonedStamp, ZONED } from './stamp.js';
 
 const DIR = join(DATA_DIR, 'backups');
 
 const KEEP_DAILY = 7;
 const KEEP_MANUAL = 5;
 const DAILY_RE = /^kanban-\d{4}-\d{2}-\d{2}\.db$/;
-const MANUAL_RE = /^kanban-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}\.db$/;
+const MANUAL_RE = new RegExp(String.raw`^kanban-(?:\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}|${ZONED})\.db$`);
+const manualMoment = (name) => stampTime(name.slice('kanban-'.length, -'.db'.length));
+const byMoment = (a, b) => manualMoment(a) - manualMoment(b) || (a < b ? -1 : a > b ? 1 : 0);
 
 function backupFiles(re) {
   if (!existsSync(DIR)) return [];
   return readdirSync(DIR).filter((f) => re.test(f)).sort();
 }
 
-function rotate(re, keep) {
-  const files = backupFiles(re);
+function rotate(re, keep, order) {
+  const files = order ? backupFiles(re).sort(order) : backupFiles(re);
   while (files.length > keep) unlinkSync(join(DIR, files.shift()));
 }
 
@@ -68,22 +71,39 @@ export const backupState = { last_ok: null, last_error: null, last_error_at: nul
 
 export async function backupNow() {
   mkdirSync(DIR, { recursive: true });
-  const path = join(DIR, `kanban-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.db`);
+  const path = join(DIR, `kanban-${zonedStamp(new Date())}.db`);
   await snapshot(path);
   mirrorAttachments();
-  rotate(MANUAL_RE, KEEP_MANUAL);
+  rotate(MANUAL_RE, KEEP_MANUAL, byMoment);
   backupState.last_ok = new Date().toISOString();
   return path;
+}
+
+const PART_RE = /\.part(?:-journal|-wal|-shm)?$/;
+const OWN_PART_RE = /\.(\d+)\.\d+\.part(?:-journal|-wal|-shm)?$/;
+export function sweepPartials() {
+  let swept = 0;
+  for (const dir of [DIR, join(DIR, 'pre-migrate')]) {
+    let names = [];
+    try { names = readdirSync(dir); } catch { continue; }
+    for (const f of names) {
+      if (!PART_RE.test(f) || Number(OWN_PART_RE.exec(f)?.[1]) === process.pid) continue;
+      try { rmSync(join(dir, f), { force: true }); swept++; } catch {  }
+    }
+  }
+  return swept;
 }
 
 const BACKUP_EVERY_MS = 6 * 3600 * 1000;
 const BACKUP_RETRY_MS = 10 * 60 * 1000;
 export function startBackups() {
   mkdirSync(DIR, { recursive: true });
+  const swept = sweepPartials();
+  if (swept) console.log(`backup: swept ${swept} unfinished snapshot file${swept === 1 ? '' : 's'}`);
   let timer = null;
   const again = (ms) => { clearTimeout(timer); timer = setTimeout(run, ms); timer.unref?.(); };
   function run() {
-    const path = join(DIR, `kanban-${new Date().toISOString().slice(0, 10)}.db`);
+    const path = join(DIR, `kanban-${localStamp(new Date(), false)}.db`);
     if (existsSync(path)) {
       mirrorAttachments();
       backupState.last_ok = backupState.last_ok || statSync(path).mtime.toISOString();

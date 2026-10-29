@@ -25,7 +25,7 @@ after(() => { if (tmp) rmSync(tmp, { recursive: true, force: true }); });
 test('a label that differs only in case is not created again', () => {
   const inRepo = ['bug', 'documentation', 'docs', 'duplicate', 'enhancement', 'good first issue',
     'help wanted', 'invalid', 'question', 'wontfix', 'ui', 'feature', 'blocked',
-    'p:low', 'p:med', 'p:high', 'NoClaude', 'security', 'ask'];
+    'p:low', 'p:med', 'p:high', 'NoClaude', 'security', 'ask', 'check'];
   const missing = github.missingLabels(inRepo).map(([name]) => name);
   assert.deepEqual(missing, [],
     `the board tries to create labels GitHub already has under a different case: ${missing.join(', ')}`);

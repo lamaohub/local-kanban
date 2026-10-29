@@ -3,8 +3,12 @@
 // Tasks are addressed by key (TIC-3) or by global id. One line of output per action.
 
 import { parsePm2Services } from '../src/pm2-services.js';
+import { closeSync, writeSync } from 'node:fs';
+import { memoryText, moneyText, tokensText } from '../public/js/usage-rules.js';
+import { HOOK_WAIT_MS } from '../src/claude-hooks.js';
 
-const BASE = process.env.KB_URL || 'http://127.0.0.1:3100';
+// `//api/...`, and the board answered "Forbidden" or "Not Found" with code 2.
+const BASE = (process.env.KB_URL || 'http://127.0.0.1:3100').replace(/\/+$/, '');
 const PRI = { 0: '', 1: 'p1', 2: 'p2', 3: 'p3' };
 const PRI_BY_NAME = { none: 0, low: 1, med: 2, medium: 2, high: 3, p0: 0, p1: 1, p2: 2, p3: 3 };
 const ST_ALIAS = {
@@ -17,8 +21,9 @@ const ST_ALIAS = {
 // Exit codes are a contract for automation (scripts gate their moves on them):
 // 0 — success, 1 — the board is not responding, 2 — the request was rejected (4xx or an
 // unknown command), 3 — kb itself broke, 4 — the board answered, but with a failure of its
-// own (5xx) or with something that is not JSON. Previously an exception exited with 1 as well,
-// so "the board is down" was indistinguishable from "kb is broken".
+// own (5xx) or with something that is not JSON, or not of the shape the board answers with.
+// Previously an exception exited with 1 as well, so "the board is down" was indistinguishable from
+// "kb is broken".
 // Code 4 exists because 2 was answering two different questions at once. A live board that
 // answers with an honest 500 (a broken row in the database) used to exit with the SAME code as
 // a lawful refusal of a transition — there was no way to tell "the board falls over on my
@@ -30,23 +35,80 @@ const EXIT = { DOWN: 1, REJECTED: 2, INTERNAL: 3, BOARD_ERROR: 4 };
 
 function die(msg, code = EXIT.REJECTED) { process.stderr.write(msg + '\n'); process.exit(code); }
 
-async function api(method, path, body) {
+// that was a 20-line stack and exit code 1, which says "the board is not responding". Stop quietly, as cat does.
+process.stdout.on('error', (e) => {
+  if (e.code === 'EPIPE') process.exit(0);
+  die(`kb: cannot write the output — ${e.message}`, EXIT.INTERNAL);
+});
+
+// command it runs, in the terminal and in the desktop app alike; the board ties the task to the session,
+// so the card can show what that session did. Only a UUID is sent; a person's own terminal has none.
+const SESSION_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SESSION = SESSION_RE.test(process.env.CLAUDE_CODE_SESSION_ID || '') ? process.env.CLAUDE_CODE_SESSION_ID : '';
+// session by it, so the card can jump straight to the session that works on the task.
+const HOST = SESSION && /^local_[A-Za-z0-9-]{1,64}$/.test(process.env.CLAUDE_CODE_HOST_SESSION_ID || '') ? process.env.CLAUDE_CODE_HOST_SESSION_ID : '';
+
+// service on KB_URL that answers 200 {} to everything made `kb mv`/`done`/`add` print "undefined
+// undefined" and exit 0, `kb p` say "no projects", and `kb rm` report a delete it never made. An answer
+// of another shape is code 4, the same as an answer that is not JSON.
+const isObj = (d) => d !== null && typeof d === 'object' && !Array.isArray(d);
+const TASK = ['a task', (d) => isObj(d) && typeof d.key === 'string' && typeof d.status === 'string'];
+const LIST = ['a list', Array.isArray];
+const PROJECT = ['a project', (d) => isObj(d) && typeof d.slug === 'string'];
+const COMMENT = ['a comment', (d) => isObj(d) && Number.isInteger(d.id)];
+const ITEM = ['a checklist item', (d) => isObj(d) && typeof d.text === 'string'];
+const DOCS = ['the project documents', (d) => isObj(d) && Array.isArray(d.docs)];
+const TAKEN = ['a taken task', (d) => isObj(d) && Number.isInteger(d.blocked_n) && (d.task === null || TASK[1](d.task))];
+const SYNC = ['the sync state', (d) => isObj(d) && (d.configured === false || (Number.isInteger(d.pending) && Array.isArray(d.failed)))];
+const OK = ['a confirmation', (d) => isObj(d) && d.ok === true];
+const NOTHING = ['an empty answer', (d) => d === null];
+
+// fetch resolves `..` in a path: `kb note '../backups?' x` posted to /api/backups (a database
+// snapshot), `kb unlink '../errors?' x` cleared the error log, `kb desc '../projects/<slug>?' …`
+// rewrote a project, `kb rm '../horizons/6?'` deleted a goal. A task key is PREFIX-N or a numeric id —
+// exactly what the board resolves; a project is one encoded path segment, never `.` or `..`.
+const KEY_RE = /^(?:[a-z0-9]+-\d+|\d+)$/i;
+function key(id) {
+  if (!KEY_RE.test(id)) die(`kb: "${id}" is not a task key (like CK-12) or a task id`);
+  return encodeURIComponent(id);
+}
+function seg(s) {
+  if (s === '.' || s === '..') die(`kb: "${s}" is not a project`);
+  return encodeURIComponent(s);
+}
+
+async function api(method, path, body, expect = null) {
   let res;
   try {
     res = await fetch(BASE + path, {
       method,
-      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      headers: {
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+        ...(SESSION ? { 'X-Claude-Session': SESSION } : {}),
+        ...(HOST ? { 'X-Claude-Host-Session': HOST } : {}),
+      },
       body: body ? JSON.stringify(body) : undefined,
     });
   } catch {
     die('kb: board is not responding — pm2 restart kanban', EXIT.DOWN);
   }
-  if (res.status === 204) return null;
+  const shaped = (data) => {
+    if (expect && !expect[1](data)) {
+      die(`kb: the board answered ${res.status} with something that is not ${expect[0]} — is KB_URL (${BASE}) the board?`, EXIT.BOARD_ERROR);
+    }
+    return data;
+  };
+  if (res.status === 204) return shaped(null);
   const text = await res.text();
   let data = null;
   let parsed = false;
   try { data = JSON.parse(text); parsed = true; } catch { /* not JSON — see below */ }
   if (!res.ok) {
+    // not restarted). Fastify's own 404 says "Route POST:/api/tasks/take not found"; a bare "Not Found"
+    // told nothing.
+    if (res.status === 404 && parsed && /^Route [A-Z]+:/.test(String(data?.message))) {
+      die(`kb: the board does not know ${method} ${path.split('?')[0]} — it runs older code than this kb; restart the board`);
+    }
     const detail = parsed ? (data?.error || res.status) : `${res.status} ${text.slice(0, 200)}`;
     // 5xx is the board failing on us, not us asking for something forbidden — its own code.
     die(`kb: ${detail}`, res.status >= 500 ? EXIT.BOARD_ERROR : EXIT.REJECTED);
@@ -54,11 +116,15 @@ async function api(method, path, body) {
   if (!parsed) {
     die(`kb: the board answered ${res.status} with something that is not JSON — is KB_URL (${BASE}) the board?`, EXIT.BOARD_ERROR);
   }
-  return data;
+  if (typeof data?.warning?.text === 'string') process.stderr.write(`kb: warning — ${data.warning.text}\n`);
+  return shaped(data);
 }
 
+// kb take takes it first. Claude learns about the pin only from this mark.
+const PIN = '📌';
+
 function taskLine(t) {
-  const flags = [t.blocked ? '!' : '', PRI[t.priority] || ''].filter(Boolean).join(' ');
+  const flags = [t.pinned ? PIN : '', t.blocked ? '!' : '', PRI[t.priority] || ''].filter(Boolean).join(' ');
   const labels = (t.labels || []).length ? ` [${t.labels.join(',')}]` : '';
   return `${t.key} ${t.status}${flags ? ' ' + flags : ''} ${t.title}${labels}`;
 }
@@ -83,24 +149,60 @@ function printLinks(t) {
 const linksLine = (id, links) => `${id} ${links.map((l) => (REL[l.rel] || REL.related)[0] + l.key).join(' ') || '—'}`;
 
 // the skill had to explain two formats. The number goes into commit messages, the link is for eyes.
+function printMoves(t) {
+  if (t.moves?.length) console.log(`moved from: ${t.moves.map((m) => m.key).join(', ')}`);
+}
+
 function printIssue(t) {
   if (t.gh_issue_number) console.log(`issue: #${t.gh_issue_number}${t.gh_issue_url ? ' ' + t.gh_issue_url : ''}`);
   else if (t.gh_issue_url) console.log(`issue: ${t.gh_issue_url}`);
 }
 
 // sees cards in the column, and a bare "empty" made Claude report that there was nothing there.
-function emptyLine(todo) {
-  const blocked = todo.filter((t) => t.blocked).length;
-  return blocked ? `empty (${blocked} blocked)` : 'empty';
+// so Claude can name them instead of reporting an empty column.
+function emptyLine(blocked, byHand = []) {
+  const parts = [];
+  if (blocked) parts.push(`${blocked} blocked`);
+  if (byHand.length) parts.push(`${byHand.length} by hand: ${byHand.join(' ')}`);
+  return parts.length ? `empty (${parts.join(', ')})` : 'empty';
+}
+
+// it too. When another session worked on it before this one, its transcript path follows — a task sent
+// back for rework can be picked up knowing what was already done and tried.
+function printSessions(t) {
+  const ss = t.sessions || [];
+  if (!ss.length) return;
+  const latest = (list) => list.reduce((a, b) => (String(b.last_seen) > String(a.last_seen) ? b : a));
+  const earlier = ss.filter((x) => x.session_id !== SESSION.toLowerCase() && x.transcript);
+  const tail = earlier.length ? ` · earlier transcript: ${latest(earlier).transcript}` : '';
+  console.log(`claude sessions: ${ss.length}, last ${when({ created_at: latest(ss).last_seen }).trim()}${tail}`);
+}
+
+// What the task cost — the card shows the same under its sessions line: tokens first, then the money
+// with "≈" (what those tokens cost on the API; with a subscription it is notional), then how full the
+// conversation memory was on the last answer. Numbers are formatted by the card's own rules.
+const PLAIN = { num: (n, d) => Number(n).toFixed(d), tr: (s) => s, plural: (n, one, many) => (n === 1 ? one : many), esc: String, date: String, gap: '' };
+function printUsage(t) {
+  const u = t.usage;
+  if (!u || (!u.total && !u.context)) return;
+  const k = (n) => tokensText(n, PLAIN);
+  const parts = [`${k(u.total)} tokens (input ${k(u.tokens.input)}, output ${k(u.tokens.output)}, cache read ${k(u.tokens.cache_read)}, cache write ${k(u.tokens.cache_write)})`];
+  const money = moneyText(u.cost, PLAIN);
+  if (money) parts.push(`≈${money} at API prices of ${u.prices_as_of}`);
+  if (u.unpriced) parts.push(`${k(u.unpriced)} tokens of ${u.unpriced_models.join(', ')} have no price`);
+  if (u.partial_answers) parts.push(`${u.partial_answers} answer${u.partial_answers === 1 ? '' : 's'} recorded without a final count (output under-recorded)`);
+  const memory = memoryText(u.context, PLAIN);
+  if (memory) parts.push(`context ${memory}${u.context.window ? ` of ${k(u.context.window)}` : ''} (${u.context.model})`);
+  console.log(`claude usage: ${parts.join(' · ')}`);
 }
 
 function printAttachments(t) {
   for (const a of (t.attachments || [])) console.log(`📎 screenshot (open it with Read): ${a.path}`);
 }
 
-// Comments. Three authors: the human ('me'), Claude, and 'git' — the commit stat the board attaches
-// by itself on the move to review. Each gets its own mark: a commit printed as 👤 read as the human
-const WHO = { claude: '🤖', git: '⎇' };
+// Comments. Four authors: the human ('me'), Claude, 'git' — the commit stat the board attaches by itself
+// on the move to review — and 'board', the record of an answer the person gave Claude from the card
+const WHO = { claude: '🤖', git: '⎇', board: '☑' };
 
 // The database keeps UTC ('YYYY-MM-DD HH:MM:SS'); print local time, to the minute — enough to tell
 function when(c) {
@@ -126,7 +228,7 @@ function printComments(cs, window) {
   const keep = new Set();
   let lastReport = -1;
   cs.forEach((c, i) => { if (c.author === 'claude') lastReport = i; });
-  const human = (c) => c.author !== 'claude' && c.author !== 'git';
+  const human = (c) => !Object.hasOwn(WHO, c.author);
   cs.forEach((c, i) => { if (i > lastReport && human(c)) keep.add(i); });
   if (!keep.size) {
     const i = cs.findLastIndex((c) => human(c) && c.body);
@@ -139,23 +241,172 @@ function printComments(cs, window) {
   cs.forEach((c, i) => { if (keep.has(i)) printComment(c); });
 }
 
+// session's figures as JSON on stdin; the subscription's rate limits (`rate_limits.five_hour`/`seven_day`)
+// reach nothing else. `kb statusline` forwards them to the board and passes the JSON on unchanged, so it
+// goes IN FRONT of a status line already configured: `kb statusline | node ~/.claude/my-statusline.js`.
+// Alone, `kb statusline --line` prints a short line of its own instead of the JSON.
+// A status line must never break and never wait on the board: stdout is written and closed first (the
+// command after the pipe reads to the end of its input, so it would otherwise wait for this process to
+// exit), the board gets one try, and every failure is silent, with exit code 0.
+// kb waits for the board's answer only a moment. Claude Code waits for the whole status line command, and the
+// shell running `{ kb statusline … || cat; } | { … }` waits for kb as well — so a board that takes the connection
+// hook — Node aborts a request whose client has gone before its body was read): the answer is what says the board
+// has taken it. So kb waits for the answer STATUSLINE_ANSWER_MS after the request is out, and no longer: a board
+// that never answers costs the status line that, not a second. The time limit is left for a board that cannot even
+// be reached (a connection that is never accepted).
+const STATUSLINE_TIMEOUT_MS = 1000;
+const STATUSLINE_ANSWER_MS = 300;
+const STDIN_MAX = 1 << 20;
+
+// Claude Code writes the JSON and closes stdin; a writer that never closes it must not hang the status
+// line, so after a few seconds whatever has arrived is taken as the input.
+const STDIN_WAIT_MS = 3000;
+function readStdin() {
+  return new Promise((resolve) => {
+    const chunks = [];
+    let size = 0;
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      process.stdin.destroy();
+      resolve(Buffer.concat(chunks).toString('utf8'));
+    };
+    const timer = setTimeout(finish, STDIN_WAIT_MS);
+    process.stdin.on('data', (c) => { size += c.length; if (size <= STDIN_MAX) chunks.push(c); });
+    process.stdin.on('end', finish);
+    process.stdin.on('error', finish);
+  });
+}
+
+function writeAndClose(text) {
+  const buf = Buffer.from(text, 'utf8');
+  let off = 0;
+  while (off < buf.length) {
+    try { off += writeSync(1, buf, off); } catch (e) { if (e.code !== 'EAGAIN') return; }
+  }
+  try { closeSync(1); } catch { /* already closed */ }
+}
+
+function statusLineText(data) {
+  const pct = (v) => (typeof v === 'number' && Number.isFinite(v) ? `${Math.round(v)}%` : null);
+  const parts = [];
+  const five = pct(data?.rate_limits?.five_hour?.used_percentage);
+  const week = pct(data?.rate_limits?.seven_day?.used_percentage);
+  const ctx = pct(data?.context_window?.used_percentage);
+  if (five) parts.push(`5h ${five}`);
+  if (week) parts.push(`7d ${week}`);
+  if (ctx) parts.push(`ctx ${ctx}`);
+  return parts.join(' · ');
+}
+
+/** POST `body` and hang up on the board's answer, on a failure, STATUSLINE_ANSWER_MS after the request is out or at
+    the time limit, whichever comes first. Resolves either way. node:http is loaded here, not at the top: loading it takes some
+    20 ms of processor time, which every other command of kb would pay for nothing. */
+async function postAndGo(url, body) {
+  let u;
+  let request;
+  try {
+    u = new URL(url);
+    ({ request } = await import(u.protocol === 'https:' ? 'node:https' : 'node:http'));
+  } catch { return; }
+  return new Promise((resolve) => {
+    let req;
+    let timer = null;
+    const go = () => { clearTimeout(timer); req?.destroy(); resolve(); };
+    try {
+      req = request(u, {
+        method: 'POST',
+        agent: false,
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      });
+    } catch { resolve(); return; }
+    timer = setTimeout(go, STATUSLINE_TIMEOUT_MS);
+    req.on('error', go);
+    req.on('response', go);
+    // the callback runs once the whole request has been handed to the system. The board has it then, but may not
+    req.end(body, () => { clearTimeout(timer); timer = setTimeout(go, STATUSLINE_ANSWER_MS); });
+  });
+}
+
+async function statusline() {
+  if (process.stdin.isTTY) die('kb statusline — reads the status line JSON Claude Code pipes in; put it in front of your status line: kb statusline | <your command>, or alone: kb statusline --line');
+  const raw = await readStdin();
+  let data = null;
+  try { data = JSON.parse(raw); } catch { /* not JSON — passed on as it came */ }
+  writeAndClose(args.includes('--line') ? `${statusLineText(data)}\n` : raw);
+  if (!data?.rate_limits || typeof data.rate_limits !== 'object') return;
+  // the board is down or slow — the status line does not care
+  await postAndGo(BASE + '/api/limits', JSON.stringify({ rate_limits: data.rate_limits, model: data.model?.id }));
+}
+
+// a question (AskUserQuestion) or a plan (ExitPlanMode) — and hands it the request as JSON on stdin. kb gives
+// the request to the board, where it shows up in the card of the task the session works on, and waits for
+// the answer: long polls, up to HOOK_WAIT_MS (src/claude-hooks.js) — a minute short of the hook's timeout, so
+// kb ends its wait itself. The answer goes back to Claude Code as `hookSpecificOutput.decision`. Claude Code
+// keeps its own dialog meanwhile and takes whichever answer comes first; when the person answers there, it
+// stops this process.
+// Whatever goes wrong — no board, a board that does not know this session, a board that went away mid-wait —
+// the hook prints nothing and exits 0: Claude Code then simply keeps asking in its own dialog.
+const HOOK_POLL_MS = 40_000; // the board holds a poll for 25 s; a poll that takes longer is lost
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function hookPermission() {
+  if (process.stdin.isTTY) die('kb hook permission — the PermissionRequest hook of Claude Code: reads the request it pipes in');
+  let input = null;
+  try { input = JSON.parse(await readStdin()); } catch { return; }
+  if (!input || input.hook_event_name !== 'PermissionRequest') return;
+  let ask = null;
+  try {
+    const r = await fetch(BASE + '/api/asks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+      signal: AbortSignal.timeout(3000),
+    });
+    if (r.ok) ask = await r.json();
+  } catch { return; }
+  if (!ask || typeof ask.id !== 'string') return;
+  const deadline = Date.now() + HOOK_WAIT_MS;
+  let misses = 0;
+  while (Date.now() < deadline) {
+    let d = null;
+    try {
+      const r = await fetch(`${BASE}/api/asks/${encodeURIComponent(ask.id)}/wait`, { signal: AbortSignal.timeout(HOOK_POLL_MS) });
+      if (!r.ok) return;
+      d = await r.json();
+      misses = 0;
+    } catch {
+      if (++misses >= 5) return; // the board is gone for good
+      await sleep(1000);
+      continue;
+    }
+    if (d && d.decision && (d.decision.behavior === 'allow' || d.decision.behavior === 'deny')) {
+      writeAndClose(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: d.decision } }));
+      return;
+    }
+    if (!d || d.gone) return;
+  }
+}
+
 const [cmd, ...args] = process.argv.slice(2);
 
 async function tick(done) {
   const [id, n] = args;
   const no = Number(n);
   if (!id || !Number.isInteger(no) || no < 1) die(`kb ${done ? 'check' : 'uncheck'} <key> <n>  (n = the item number, from 1, in the order kb show prints them)`);
-  const t = await api('GET', `/api/tasks/${id}`);
+  const t = await api('GET', `/api/tasks/${key(id)}`, null, TASK);
   const items = t.checklist || [];
   if (no > items.length) die(`kb: ${t.key} has ${items.length ? `only ${items.length} checklist item${items.length === 1 ? '' : 's'}` : 'no checklist'}`);
-  const item = await api('PATCH', `/api/tasks/${id}/checklist/${items[no - 1].id}`, { done });
+  const item = await api('PATCH', `/api/tasks/${t.id}/checklist/${items[no - 1].id}`, { done }, ITEM);
   const open = items.filter((c, i) => (i === no - 1 ? !item.done : !c.done)).length;
   console.log(`${t.key} - [${item.done ? 'x' : ' '}] ${item.text} (${open} open)`);
 }
 
 const commands = {
   async p() {
-    const ps = await api('GET', '/api/projects');
+    const ps = await api('GET', '/api/projects', null, LIST);
     if (!ps.length) return console.log('no projects');
     for (const p of ps) {
       console.log(`${p.slug} (${p.prefix}) b${p.c_backlog || 0} t${p.c_todo || 0} pp${p.c_prep || 0} d${p.c_doing || 0} dp${p.c_deploy || 0} r${p.c_review || 0} ✓${p.c_done || 0}${p.c_blocked ? ` !${p.c_blocked}` : ''}`);
@@ -169,7 +420,7 @@ const commands = {
     const q = new URLSearchParams({ project: proj });
     if (si >= 0) q.set('status', ST_ALIAS[args[si + 1]] || args[si + 1]);
     if (args.includes('-a')) q.set('all', '1');
-    const ts = await api('GET', `/api/tasks?${q}`);
+    const ts = await api('GET', `/api/tasks?${q}`, null, LIST);
     if (!ts.length) return console.log('empty');
     for (const t of ts) console.log(taskLine(t));
   },
@@ -177,52 +428,64 @@ const commands = {
   async next() {
     const [proj] = args;
     if (!proj) die('kb next <project>');
-    const ts = await api('GET', `/api/tasks?${new URLSearchParams({ project: proj, status: 'todo' })}`);
-    const free = ts.filter((t) => !t.blocked);
-    console.log(free.length ? taskLine(free[0]) : emptyLine(ts));
+    const ts = await api('GET', `/api/tasks?${new URLSearchParams({ project: proj, status: 'todo' })}`, null, LIST);
+    // a task the human does by hand (noclaude) is never the next one for Claude: take skips it too
+    const mine = ts.filter((t) => !(Array.isArray(t.labels) && t.labels.includes('noclaude')));
+    const free = mine.filter((t) => !t.blocked).sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
+    const byHand = ts.filter((t) => !mine.includes(t)).sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0)).map((t) => t.key);
+    console.log(free.length ? taskLine(free[0]) : emptyLine(mine.length - free.length, byHand));
   },
 
   // take the next task and put it straight into prep (study before code); prints what the human
   // wrote since Claude's last report (notes from a send-back). Writing code → kb mv <key> doing.
+  // To do and move the first task with a second request, so two takes started together got the same
+  // task (19 times out of 20, both with code 0). The answer is the full card, so nothing is re-read.
   async take() {
     const [proj] = args;
     if (!proj) die('kb take <project>');
-    const ts = await api('GET', `/api/tasks?${new URLSearchParams({ project: proj, status: 'todo' })}`);
-    const free = ts.filter((t) => !t.blocked);
-    if (!free.length) return console.log(emptyLine(ts));
-    const t = await api('PATCH', `/api/tasks/${free[0].id}`, { status: 'prep' });
-    console.log(taskLine({ ...t, labels: t.labels }));
+    const { task: t, blocked_n: blocked, by_hand: byHand } = await api('POST', '/api/tasks/take', { project: proj }, TAKEN);
+    if (!t) return console.log(emptyLine(blocked, Array.isArray(byHand) ? byHand.filter((k) => typeof k === 'string') : []));
+    console.log(taskLine(t));
     if (t.description) console.log(t.description);
-    // PATCH answers with the bare row; the checklist and the attachments live on the full card
-    const full = await api('GET', `/api/tasks/${t.id}`);
-    printChecklist(full);
-    printLinks(full);
-    printIssue(full);
-    printAttachments(full);
-    printComments(await api('GET', `/api/tasks/${t.id}/comments`), 0);
+    printChecklist(t);
+    printLinks(t);
+    printIssue(t);
+    printMoves(t);
+    printSessions(t);
+    printUsage(t);
+    printAttachments(t);
+    printComments(await api('GET', `/api/tasks/${t.id}/comments`, null, LIST), 0);
   },
 
   // leave a note and move to review in one command
   async review() {
     const [id, note] = args;
     if (!id || !note) die('kb review <key> "note"');
-    await api('POST', `/api/tasks/${id}/comments`, { body: note, author: 'claude' });
-    const t = await api('PATCH', `/api/tasks/${id}`, { status: 'review' });
+    // The move first, the note only after it: a refused move (todo → review) used to leave the note on the card
+    // anyway, and the retry added a second one. Moving a task already in review again changes nothing.
+    const t = await api('PATCH', `/api/tasks/${key(id)}`, { status: 'review' }, TASK);
+    const unsaved = (code) => { if (code) process.stderr.write(`kb: ${t.key} is in review, but the note did not save — kb note ${t.key} "…"\n`); };
+    process.on('exit', unsaved);
+    await api('POST', `/api/tasks/${key(id)}/comments`, { body: note, author: 'claude' }, COMMENT);
+    process.off('exit', unsaved);
     console.log(`${t.key} review 📝`);
   },
 
   async show() {
     const [id] = args;
     if (!id) die('kb show <key>');
-    const t = await api('GET', `/api/tasks/${id}`);
-    console.log(`${t.key} ${t.project} ${t.status}${t.blocked ? ` blocked: ${t.blocked_reason || ''}` : ''}${PRI[t.priority] ? ' ' + PRI[t.priority] : ''}${t.labels.length ? ' [' + t.labels.join(',') + ']' : ''}`);
+    const t = await api('GET', `/api/tasks/${key(id)}`, null, TASK);
+    console.log(`${t.key} ${t.project} ${t.status}${t.pinned ? ' ' + PIN : ''}${t.blocked ? ` blocked: ${t.blocked_reason || ''}` : ''}${PRI[t.priority] ? ' ' + PRI[t.priority] : ''}${t.labels.length ? ' [' + t.labels.join(',') + ']' : ''}`);
     console.log(t.title);
     if (t.description) console.log(t.description);
     printChecklist(t);
     printLinks(t);
     printIssue(t);
+    printMoves(t);
+    printSessions(t);
+    printUsage(t);
     printAttachments(t);
-    printComments(await api('GET', `/api/tasks/${id}/comments`), 5);
+    printComments(await api('GET', `/api/tasks/${t.id}/comments`, null, LIST), 5);
   },
 
   async add() {
@@ -245,29 +508,35 @@ const commands = {
       body.status = ST_ALIAS[args[si + 1]];
       if (!body.status) die('kb: status backlog|todo|prep|doing|deploy|review|done');
     }
-    const t = await api('POST', '/api/tasks', body);
+    const t = await api('POST', '/api/tasks', body, TASK);
     console.log(`${t.key} ${t.status} ${t.project}`);
   },
 
   async mv() {
     const [id, st] = args;
     const status = ST_ALIAS[st];
-    if (!id || !status) die('kb mv <key> backlog|todo|prep|doing|deploy|review|done|cancelled');
-    const t = await api('PATCH', `/api/tasks/${id}`, { status });
+    if (!id || !status) die('kb mv <key> backlog|todo|prep|doing|deploy|review');
+    const k = key(id);
+    // started by the board runs only after asking (src/phantom.js), while its `kb mv` goes without asking. Before
+    // this, `kb mv <key> done` sent the very request of `kb done` and skipped the question.
+    if (status === 'done' || status === 'cancelled') {
+      die(`kb mv does not close a task: done and cancelled are the person's word — kb ${status === 'done' ? 'done' : 'cancel'} ${id}`);
+    }
+    const t = await api('PATCH', `/api/tasks/${k}`, { status }, TASK);
     console.log(`${t.key} ${t.status}`);
   },
 
   async done() {
     const [id] = args;
     if (!id) die('kb done <key>');
-    const t = await api('PATCH', `/api/tasks/${id}`, { status: 'done' });
+    const t = await api('PATCH', `/api/tasks/${key(id)}`, { status: 'done' }, TASK);
     console.log(`${t.key} done`);
   },
 
   async cancel() {
     const [id] = args;
     if (!id) die('kb cancel <key>');
-    const t = await api('PATCH', `/api/tasks/${id}`, { status: 'cancelled' });
+    const t = await api('PATCH', `/api/tasks/${key(id)}`, { status: 'cancelled' }, TASK);
     console.log(`${t.key} cancelled`);
   },
 
@@ -275,35 +544,46 @@ const commands = {
     const [id, p] = args;
     const pr = PRI_BY_NAME[p];
     if (!id || pr === undefined) die('kb pri <key> high|med|low|none');
-    const t = await api('PATCH', `/api/tasks/${id}`, { priority: pr });
+    const t = await api('PATCH', `/api/tasks/${key(id)}`, { priority: pr }, TASK);
     console.log(`${t.key} ${PRI[t.priority] || 'p0'}`);
   },
 
+  // it has. kb used to read the set and write it back whole: ten parallel `kb lbl +label` kept 4-5 of the
+  // ten labels, each one wiping what the others had just added. The last word on a label wins: +ui -ui
+  // removes it. A word without + or - is refused instead of being silently skipped.
   async lbl() {
     const [id, ...ops] = args;
-    if (!id || !ops.length) die('kb lbl <key> +bug -ui  (+ to add, - to remove)');
-    const t = await api('GET', `/api/tasks/${id}`);
-    const labels = new Set(t.labels);
+    const usage = 'kb lbl <key> +bug -ui  (+ to add, - to remove)';
+    if (!id || !ops.length) die(usage);
+    const add = new Set();
+    const remove = new Set();
     for (const op of ops) {
-      if (op.startsWith('+')) labels.add(op.slice(1));
-      else if (op.startsWith('-')) labels.delete(op.slice(1));
+      const name = op.slice(1).trim(); // the board trims a label name — ask for the name it will store
+      if (!name || !'+-'.includes(op[0])) die(usage);
+      (op[0] === '+' ? add : remove).add(name);
+      (op[0] === '+' ? remove : add).delete(name);
     }
-    const fresh = await api('PATCH', `/api/tasks/${id}`, { labels: [...labels] });
+    const fresh = await api('PATCH', `/api/tasks/${key(id)}`, { labels_add: [...add], labels_remove: [...remove] }, TASK);
+    // A board on older code (updated, not restarted) does not know labels_add/labels_remove: its PATCH
+    // ignores them and answers 200 with the set unchanged — kb printed that and exited 0, as if done.
+    const missed = [...[...add].filter((l) => !fresh.labels.includes(l)).map((l) => `+${l}`),
+      ...[...remove].filter((l) => fresh.labels.includes(l)).map((l) => `-${l}`)];
+    if (missed.length) die(`kb: the board did not apply ${missed.join(' ')} — it runs older code than this kb; restart the board`);
     console.log(`${fresh.key} [${fresh.labels.join(',')}]`);
   },
 
   async desc() {
     const [id, text] = args;
     if (!id || text === undefined) die('kb desc <key> "description"  (set or overwrite the description)');
-    const t = await api('PATCH', `/api/tasks/${id}`, { description: text });
+    const t = await api('PATCH', `/api/tasks/${key(id)}`, { description: text }, TASK);
     console.log(`${t.key} 📝 description updated`);
   },
 
   async note() {
     const [id, body] = args;
     if (!id || !body) die('kb note <key> "text"');
-    await api('POST', `/api/tasks/${id}/comments`, { body, author: 'claude' });
-    const t = await api('GET', `/api/tasks/${id}`);
+    await api('POST', `/api/tasks/${key(id)}/comments`, { body, author: 'claude' }, COMMENT);
+    const t = await api('GET', `/api/tasks/${key(id)}`, null, TASK);
     console.log(`${t.key} 📝`);
   },
 
@@ -315,14 +595,16 @@ const commands = {
   async link() {
     const [id, other, rel = 'related'] = args;
     if (!id || !other || !Object.hasOwn(REL, rel)) die('kb link <key> <key> [child|parent|related]  (child: the second task becomes a sub-task of the first)');
-    const links = await api('POST', `/api/tasks/${id}/links`, { key: other, rel });
+    const links = await api('POST', `/api/tasks/${key(id)}/links`, { key: other, rel }, LIST);
     console.log(linksLine(id, links));
   },
 
   async unlink() {
     const [id, other] = args;
     if (!id || !other) die('kb unlink <key> <key>');
-    const links = await api('DELETE', `/api/tasks/${id}/links/${other}`);
+    const otherKey = key(other);
+    const t = await api('GET', `/api/tasks/${key(id)}`, null, TASK);
+    const links = await api('DELETE', `/api/tasks/${t.id}/links/${otherKey}`, null, LIST);
     console.log(linksLine(id, links));
   },
 
@@ -334,28 +616,31 @@ const commands = {
   async block() {
     const [id, reason] = args;
     if (!id) die('kb block <key> ["reason"]');
-    const t = await api('PATCH', `/api/tasks/${id}`, { blocked: true, blocked_reason: reason || '' });
+    const t = await api('PATCH', `/api/tasks/${key(id)}`, { blocked: true, blocked_reason: reason || '' }, TASK);
     console.log(`${t.key} blocked${t.blocked_reason ? ': ' + t.blocked_reason : ''}`);
   },
 
   async unblock() {
     const [id] = args;
     if (!id) die('kb unblock <key>');
-    const t = await api('PATCH', `/api/tasks/${id}`, { blocked: false });
+    const t = await api('PATCH', `/api/tasks/${key(id)}`, { blocked: false }, TASK);
     console.log(`${t.key} unblocked`);
   },
 
+  // get the DELETE itself, and kb reported the task deleted; now the read fails before anything
+  // destructive is sent. The delete goes by the id the board answered with, and prints its key.
   async rm() {
     const [id] = args;
     if (!id) die('kb rm <key>');
-    await api('DELETE', `/api/tasks/${id}`);
-    console.log(`${id} deleted`);
+    const t = await api('GET', `/api/tasks/${key(id)}`, null, TASK);
+    await api('DELETE', `/api/tasks/${t.id}`, null, NOTHING);
+    console.log(`${t.key} deleted`);
   },
 
   async info() {
     const [proj] = args;
     if (!proj) die('kb info <project>');
-    const p = await api('GET', `/api/projects/${proj}`);
+    const p = await api('GET', `/api/projects/${seg(proj)}`, null, PROJECT);
     const out = [`${p.slug} (${p.prefix}): ${p.name}`];
     if (p.path) out.push(`path: ${p.path}`);
     if (p.deploy_skill) out.push(`deploy_skill: ${p.deploy_skill}${p.deploy_skill_path ? ` (${p.deploy_skill_path})` : ''}`);
@@ -368,7 +653,7 @@ const commands = {
     // page; without this line Claude went looking by itself and sometimes missed. A missing
     // CLAUDE.md is said out loud — it is a signal (the task starts without architecture notes).
     if (p.path) {
-      const d = await api('GET', `/api/projects/${encodeURIComponent(p.slug)}/docs`);
+      const d = await api('GET', `/api/projects/${encodeURIComponent(p.slug)}/docs`, null, DOCS);
       const found = (d.docs || []).filter((x) => x.exists).map((x) => x.name);
       if (!d.path_exists) out.push('docs: — the project folder does not exist on this machine');
       else if (!found.includes('CLAUDE.md')) out.push(`docs: no CLAUDE.md${found.length ? ` — read ${found.join(', ')} instead` : ', and no README.md / ARCHITECTURE.md either'}`);
@@ -380,7 +665,7 @@ const commands = {
   async svc() {
     const [proj] = args;
     if (!proj) die('kb svc <project>');
-    const list = await api('GET', `/api/projects/${proj}/status`);
+    const list = await api('GET', `/api/projects/${seg(proj)}/status`, null, LIST);
     for (const s of list) {
       if (s.status === 'not found') { console.log(`${s.name}: not found in pm2`); continue; }
       console.log(`${s.name}: ${s.status} | up ${s.uptime_h}h | rst ${s.restarts} | ${s.mem_mb}MB | cpu ${s.cpu}%`);
@@ -388,7 +673,7 @@ const commands = {
   },
 
   async sync() {
-    const s = await api('GET', '/api/sync');
+    const s = await api('GET', '/api/sync', null, SYNC);
     if (s.configured === false) { console.log('sync is off (local-only) — set owner/repo in the board settings or via KB_GH_OWNER/KB_GH_REPO'); return; }
     let line = `queue:${s.pending}`;
     if (s.failed.length) line += ` failed:${s.failed.length} (${s.failed[0].op}: ${(s.failed[0].last_error || '').slice(0, 80)})`;
@@ -397,13 +682,22 @@ const commands = {
   },
 
   async retry() {
-    await api('POST', '/api/sync/retry');
+    await api('POST', '/api/sync/retry', null, OK);
     console.log('ok');
+  },
+
+  async statusline() { await statusline(); },
+
+  async hook() {
+    if (args[0] !== 'permission') die('kb hook permission  (the PermissionRequest hook of Claude Code)');
+    try { await hookPermission(); } catch { /* a hook that breaks must not break Claude: no answer, its own dialog */ }
   },
 };
 
-if (!cmd || !commands[cmd]) {
-  die('kb p|ls|next|take|show|add|mv|review|done|cancel|pri|lbl|desc|note|link|unlink|check|uncheck|block|unblock|rm|info|svc|sync|retry');
+// `__proto__` — they come from the prototype — and `kb constructor` exited with 1 ("the board is not
+// responding") and a raw stack.
+if (!cmd || !Object.hasOwn(commands, cmd)) {
+  die('kb p|ls|next|take|show|add|mv|review|done|cancel|pri|lbl|desc|note|link|unlink|check|uncheck|block|unblock|rm|info|svc|sync|retry|statusline|hook');
 }
 commands[cmd]().catch((e) => {
   // die() inside a command already exited the process — only real exceptions reach here.

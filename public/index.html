@@ -1,8 +1,8 @@
 <!doctype html>
-<html lang="en" class="booting">
+<html lang="en" class="booting" data-design="v3">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Kanban</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <meta name="theme-color" content="#e8704e">
@@ -19,25 +19,30 @@
 <body>
 <div class="layout">
   <aside class="sidebar">
+    <button id="attn" type="button" class="side-attn hidden"></button>
     <div class="sidebar-head">Projects</div>
     <div id="projects"><div class="boot-side" aria-hidden="true">
       <span class="boot-line"></span><span class="boot-line short"></span>
       <span class="boot-line"></span><span class="boot-line short"></span>
       <span class="boot-line"></span>
     </div></div>
+    <div id="limits" class="side-limits" hidden></div>
   </aside>
+  <div id="side-scrim" class="side-scrim"></div>
 
   <main class="main">
     <header class="topbar">
       <div class="topbar-left">
+        <button id="side-open" type="button" class="btn-icon side-open-btn"></button>
         <h1 id="project-title">—</h1>
         <button id="project-menu" class="btn-icon" title="Project settings">⋯</button>
-        <span id="project-meta" class="muted"></span>
       </div>
       <div class="topbar-right">
         <span id="week-stats" class="muted" title="Done in the last 7 days"></span>
         <button id="sound-badge" class="sound-badge hidden" title="The browser blocked sound until the first click — click to enable">sound off</button>
         <button id="offline-badge" class="offline-badge hidden" title="The board could not reach the server — the change was not saved">not saved</button>
+        <button id="load-badge" class="load-badge hidden"></button>
+        <button id="live-badge" class="load-badge hidden"></button>
         <span id="sync-badge" class="sync-badge" title="GitHub sync queue"></span>
       </div>
     </header>
@@ -48,6 +53,11 @@
     <div id="board" class="board"></div>
     <svg id="link-lines" class="link-lines" aria-hidden="true"></svg>
     <div id="dashboard" class="dashboard hidden"></div>
+    <div id="now" class="now-view hidden"></div>
+    <div id="review" class="now-view review-view hidden"></div>
+    <div id="done" class="now-view done-view hidden"></div>
+    <div id="automations" class="now-view auto-view hidden"></div>
+    <div id="health" class="now-view health-view hidden"></div>
     <div id="settings" class="settings hidden"></div>
     <div id="horizon" class="horizon-view hidden"></div>
     <div id="calendar" class="calendar-view hidden"></div>
@@ -78,6 +88,8 @@
     <div class="drawer-head">
       <span id="drawer-id" class="drawer-key"></span>
       <div class="drawer-head-actions">
+        <button id="d-launch" class="btn-icon hidden"></button>
+        <button id="d-session" class="btn-icon hidden"></button>
         <button id="d-return-icon" class="btn-icon hidden" title="Return to work">↩</button>
         <button id="drawer-menu" class="btn-icon hidden" title="Card actions">⋯</button>
         <button id="drawer-close" class="btn-icon" title="Close">✕</button>
@@ -90,6 +102,8 @@
 
     <div id="drawer-content">
       <div id="d-lock-note" class="lock-note hidden">Claude is working on this task — fields are locked, comments are open</div>
+      <div id="d-save-note" class="lock-note hidden" role="status"></div>
+      <div id="d-asks" class="d-asks hidden"></div>
 
       <div class="chip-row">
         <div class="kbsel chip-sel hidden" id="d-project"></div>
@@ -100,9 +114,12 @@
       <div class="meta-row">
         <div id="d-labels" class="labels-row"></div>
         <div id="d-links" class="links-row hidden"></div>
+        <input type="file" id="d-file" class="hidden" accept="image/png,image/jpeg,image/webp,image/gif" multiple>
+        <button id="d-attach" type="button" class="link-chip link-add attach-chip form-attach"></button>
       </div>
 
       <textarea id="d-title" class="d-title" rows="1" placeholder="Task title"></textarea>
+      <div id="d-desc-conflict" class="desc-conflict hidden" role="status"></div>
       <div class="desc-wrap">
         <textarea id="d-desc" class="d-desc" placeholder="Description…"></textarea>
         <button id="d-checklist-add" class="desc-menu-btn" title="Add checklist item" aria-label="Add checklist item">
@@ -122,11 +139,35 @@
         <button id="d-accept-btn" class="btn-accept hidden">✓ Accept task</button>
       </div>
 
+      <div id="d-tabs" class="d-tabs hidden"></div>
+
       <div class="comments" id="comments-block">
         <div id="comments"></div>
         <div class="comment-form">
           <textarea id="c-input" placeholder="Comment…" rows="1" autocomplete="off"></textarea>
+          <input type="file" id="c-file" class="hidden" accept="image/png,image/jpeg,image/webp,image/gif" multiple>
+          <button id="c-attach" type="button" class="btn-ghost form-attach"></button>
           <button id="c-send" class="btn-primary">↑</button>
+        </div>
+      </div>
+
+      <div id="work-block" class="work hidden"><div id="work"></div></div>
+
+      <div id="term-block" class="term hidden">
+        <div class="term-head"><span id="term-state" class="term-state"></span><button id="term-resume" type="button" class="btn-primary term-resume hidden"></button><button id="term-stop" type="button" class="btn-ghost term-stop"></button></div>
+        <div id="term-note" class="term-note hidden"></div>
+        <pre id="term-screen" class="term-screen"></pre>
+        <div class="term-dock">
+          <div id="term-grip" class="term-grip" role="separator" aria-orientation="horizontal" tabindex="0"></div>
+          <div id="term-links" class="term-links hidden"></div>
+          <div id="term-keys" class="term-keys"></div>
+          <div class="comment-form term-form">
+            <textarea id="term-input" rows="1" autocomplete="off"></textarea>
+            <input type="file" id="term-file" class="hidden" accept="image/png,image/jpeg,image/webp,image/gif" multiple>
+            <button id="term-attach" type="button" class="btn-ghost form-attach" disabled></button>
+            <button id="term-to-chat" type="button" class="btn-ghost term-to-chat"></button>
+            <button id="term-send" type="button" class="btn-ghost term-send">↑</button>
+          </div>
         </div>
       </div>
     </div>

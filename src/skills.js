@@ -1,8 +1,7 @@
 
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join, resolve, sep } from 'node:path';
-import { skillsExtra } from './config.js';
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve, sep } from 'node:path';
+import { ROOT, claudeDir, missingClaudeDir, missingClaudeDirError, skillsExtra } from './config.js';
 import { snapshotDir, snapshotFile } from './file-snapshot.js';
 
 export const SKILL_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -12,8 +11,7 @@ export const BOARD_SKILL = 'kanban';
 export const GENERIC_DEPLOY_SKILL = 'deploy';
 
 export function skillRoots() {
-  const home = process.env.HOME || homedir();
-  return [join(home, '.claude', 'skills'), ...skillsExtra()].map((r) => resolve(r));
+  return [join(claudeDir(), 'skills'), ...skillsExtra()].map((r) => resolve(r));
 }
 
 export function resolveSkillPath(name) {
@@ -92,6 +90,7 @@ export function writeSkill(name, text, confirmPath) {
   if (confirmPath !== info.real_path) {
     return { error: 'the file on disk is not the one the page was editing', code: 409, real_path: info.real_path };
   }
+  if (!info.exists && missingClaudeDir()) return { error: missingClaudeDirError(), code: 409, reason: 'no-folder' };
   const backup = snapshotFile('skills', name, info.path);
   mkdirSync(join(info.path, '..'), { recursive: true });
   writeFileSync(info.path, text);
@@ -116,4 +115,98 @@ export function deleteSkill(name, confirmPath) {
     try { if (!readdirSync(dir).length) rmSync(dir, { recursive: true, force: true }); } catch {  }
   }
   return { name, removed: true, link_only: unlinkedOnly, backup, backup_name: backup ? backup.split(sep).pop() : null };
+}
+
+export function packagedSkillNames() {
+  try {
+    return readdirSync(join(ROOT, 'skills'))
+      .filter((name) => SKILL_NAME_RE.test(name) && existsSync(join(ROOT, 'skills', name, 'SKILL.md')))
+      .sort();
+  } catch { return []; }
+}
+
+function packageFiles(name) {
+  const dir = join(ROOT, 'skills', name);
+  try {
+    return readdirSync(dir, { recursive: true }).filter((rel) => statSync(join(dir, rel)).isFile()).sort();
+  } catch { return []; }
+}
+
+const installedDir = (name) => join(skillRoots()[0], name);
+
+export function throughLink(target, rel) {
+  let p = target;
+  for (const part of ['', ...rel.split(sep)]) {
+    if (part) p = join(p, part);
+    try { if (lstatSync(p).isSymbolicLink()) return true; } catch { return false; }
+  }
+  return false;
+}
+
+export function packagedSkillState(name) {
+  if (!name || !SKILL_NAME_RE.test(name)) return null;
+  const files = packageFiles(name);
+  if (!files.includes('SKILL.md')) return null;
+  const source = join(ROOT, 'skills', name);
+  const target = installedDir(name);
+  let dirLink;
+  try { dirLink = lstatSync(target).isSymbolicLink(); } catch { return 'missing'; }
+  if (dirLink) {
+    try { if (realpathSync(target) === realpathSync(source)) return 'same'; } catch {  }
+    return 'link';
+  }
+  if (!existsSync(join(target, 'SKILL.md'))) return 'missing';
+  let differs = false;
+  for (const rel of files) {
+    if (throughLink(target, rel)) return 'link';
+    if (differs) continue;
+    try { differs = !readFileSync(join(target, rel)).equals(readFileSync(join(source, rel))); } catch { differs = true; }
+  }
+  return differs ? 'differs' : 'same';
+}
+
+/** The installed skill folder is a link to the package's own skills/<name> (a clone, as its wizard links it). */
+function selfLink(name) {
+  const target = installedDir(name);
+  try { return lstatSync(target).isSymbolicLink() && realpathSync(target) === realpathSync(join(ROOT, 'skills', name)); } catch { return false; }
+}
+
+export function copyFromPackage(name, target = installedDir(name), { dataDir } = {}) {
+  const source = join(ROOT, 'skills', name);
+  const files = packageFiles(name);
+  if (missingClaudeDir()) throw new Error(missingClaudeDirError());
+  const linked = files.find((rel) => throughLink(target, rel));
+  if (linked) throw new Error(`${join(target, linked)} goes through a link to a file elsewhere — the board does not write through it`);
+  const written = [];
+  for (const rel of files) {
+    const from = join(source, rel);
+    const to = join(target, rel);
+    if (existsSync(to) && readFileSync(to).equals(readFileSync(from))) continue;
+    const label = rel === 'SKILL.md' ? name : `${name}-${rel.split(sep).join('-')}`;
+    const kept = existsSync(to) ? snapshotFile('skills', label, to, { dataDir }) : null;
+    mkdirSync(dirname(to), { recursive: true });
+    copyFileSync(from, to);
+    written.push({ rel, kept });
+  }
+  return written;
+}
+
+export function refreshPackagedSkill(name, confirmPath = null) {
+  const state = packagedSkillState(name);
+  if (state === null) return { error: 'the board does not ship this skill', code: 404, reason: 'not-packaged' };
+  if (state === 'link') return { error: 'the skill is a link to a file elsewhere — the board does not write through it', code: 409, reason: 'link' };
+  if (missingClaudeDir()) return { error: missingClaudeDirError(), code: 409, reason: 'no-folder' };
+  // a clone's link to its own skills/ IS the board's version: nothing to write, and no write goes through a link (an
+  if (selfLink(name)) return { name, written: [], kept: [], state };
+  const real = realPathOf(join(installedDir(name), 'SKILL.md'));
+  if (confirmPath !== null && confirmPath !== real) {
+    return { error: 'the file on disk is not the one the page was showing', code: 409, reason: 'changed', real_path: real };
+  }
+  const written = copyFromPackage(name);
+  return {
+    name,
+    written: written.map((w) => w.rel),
+    kept: written.filter((w) => w.kept).map((w) => w.kept.split(sep).pop()),
+    state: packagedSkillState(name),
+  };
 }

@@ -1,39 +1,84 @@
 
 import { clearSelection, closeOpenSelect, initMarquee, multiAction, renderBoard, scheduleDrawLinks, selectedIds } from './board.js';
 import { chaosPending } from './chaos.js';
-import { $, ALL, CHAOS, DASH, SETTINGS, api, loadLabelPalette, seg, state } from './core.js';
-import { addChecklistItem, applyCommentDraft, applyKeepDrawer, applyTitleLabelShortcut, closeDrawer, commentDrafts, deleteTask, doAutosave, kbMoveCard, kbMoveCursor, onDrawerPaste, openDrawer, openDrawerMenu, openDrawerNew, openReturnPop, pendingAttachments, renderComments, scheduleAutosave, setKbCursor } from './drawer.js';
-import { closeProjectSettings, openProjectSettings } from './project.js';
-import { applyCompact, applyTheme, getSetting, matchKey, syncLangToServer } from './settings.js';
-import { closeTopLayer, loadTasks, maybeOnboarding, switchProject } from './sidebar.js';
-import { autoGrow, connectSSE, ensureAudio, ensureSSE, refresh, refreshSync } from './sse.js';
+import { $, ALL, AUTO, HEALTH, CALENDAR, CHAOS, DASH, DONE, HORIZON, NOW, REVIEW, SETTINGS, api, hasUnsaved, ic, liftCurtain, loadLabelPalette, seg, state, tr } from './core.js';
+import { addChecklistItem, applyCommentDraft, applyKeepDrawer, applyTitleLabelShortcut, closeDrawer, commentDrafts, deleteTask, doAutosave, initTerminal, kbMoveCard, kbMoveCursor, launchOpenTask, onDrawerPaste, openDrawer, uploadCommentImage, wirePicturePick, wireTaskPicture, openDrawerMenu, openDrawerNew, openOpenTaskSession, openReturnPop, showOwnComment, pendingAttachments, pullDrawerFresh, queueComment, commentArrived, sayRefused, scheduleAutosave, setKbCursor, wireCardBack, descTyped, descConflictPending } from './drawer.js';
+import { closeProjectSettings, fileEditorHasChanges, openProjectSettings, projectSettingsDirty } from './project.js';
+import { applyCompact, applyTheme, customBinding, getSetting, listenForInstall, matchKey, skillDirty, syncLangToServer } from './settings.js';
+import { closeTopLayer, loadTasks, switchProject } from './sidebar.js';
+import { maybeOnboarding, wizardResumes } from './onboarding.js';
+import { autoGrow, connectSSE, ensureAudio, ensureSSE, refresh, refreshSync, streamOpened } from './sse.js';
+import { loadUntilDone, searchInput } from './live-rules.js';
+import { renderLimits } from './limits.js';
+import { blockZoom } from './no-zoom.js';
+import { watchTyping } from './lost-field.js';
+import { initGlyphs } from './glyphs.js';
+import { openAttentionList } from './attention.js';
+import { openSearch } from './search.js';
+import { columnsDirty } from './now-terms.js';
+import { chatDirty } from './chat.js';
+import { localStore, sessionStore } from './store.js';
 
 /* ── init ── */
 $('new-task').onclick = () => openDrawerNew('backlog');
 $('drawer-close').onclick = closeDrawer;
 $('drawer-menu').onclick = openDrawerMenu;
 $('d-return-icon').onclick = openReturnPop;
+$('d-launch').innerHTML = ic('play', 14);
+$('d-launch').title = tr('Start this task in Claude');
+$('d-launch').onclick = launchOpenTask;
+$('d-session').innerHTML = ic('open', 14);
+$('d-session').title = tr('Open its Claude session');
+$('d-session').onclick = openOpenTaskSession;
+initTerminal();
+wireCardBack();
+$('attn').onclick = openAttentionList;
 $('d-accept-btn').onclick = async () => {
-  if (!state.drawerKey) return;
-  await api('PATCH', `/api/tasks/${seg(state.drawerKey)}`, { status: 'done' });
-  closeDrawer();
+  const key = state.drawerKey;
+  if (!key) return;
+  try { await api('PATCH', `/api/tasks/${seg(key)}`, { status: 'done' }); } catch (e) { sayRefused(e, key); return; }
+  if (key === state.drawerKey) closeDrawer();
   await refresh();
 };
+$('d-desc').addEventListener('input', descTyped);
 $('d-desc').addEventListener('input', scheduleAutosave);
 $('d-checklist-add').onclick = addChecklistItem;
 $('d-title').addEventListener('input', (e) => { autoGrow(e.target); applyTitleLabelShortcut(); scheduleAutosave(); });
 $('d-title').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.target.blur(); doAutosave(); }
+  if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
+  e.preventDefault();
+  const desc = $('d-desc');
+  if (desc.disabled) e.target.blur();
+  else { desc.focus(); desc.setSelectionRange(desc.value.length, desc.value.length); }
+  doAutosave();
 });
+$('d-title').addEventListener('blur', pullDrawerFresh);
+$('d-desc').addEventListener('blur', pullDrawerFresh);
 $('project-menu').onclick = () => openProjectSettings();
+// same comment again — the field is emptied only by the answer. One send per task at a time; the rest are ignored,
+// but not for longer than COMMENT_HOLD_MS — a request that never answers must not lock the field of the task for good
+const commentSending = new Map();
+const COMMENT_HOLD_MS = 15000;
 $('c-send').onclick = async () => {
   const body = $('c-input').value.trim();
-  if (!body || !state.drawerKey) return;
-  await api('POST', `/api/tasks/${seg(state.drawerKey)}/comments`, { body, author: 'me' });
-  commentDrafts.delete(state.drawerKey);
-  $('c-input').value = '';
+  const key = state.drawerKey;
+  if (!body || !key || Date.now() - (commentSending.get(key) ?? -Infinity) < COMMENT_HOLD_MS) return;
+  const at = Date.now();
+  commentSending.set(key, at);
+  let sent = null;
+  try { sent = await api('POST', `/api/tasks/${seg(key)}/comments`, { body, author: 'me' }); }
+  catch (e) {
+    if (!e?.offline) { sayRefused(e, key); return; }
+    queueComment(key, body);
+  } finally { if (commentSending.get(key) === at) commentSending.delete(key); }
+  // typed on while it went: what is left after the sent text is a comment of its own — it stays, the sent text goes
+  const rest = (text) => { const t = text.trimStart(); return t.startsWith(body) ? t.slice(body.length).trimStart() : text; };
+  const draft = rest(commentDrafts.get(key) || '');
+  if (draft.trim()) commentDrafts.set(key, draft); else commentDrafts.delete(key);
+  if (sent) { commentArrived(key, sent); showOwnComment(key, sent.id); }
+  if (state.drawerKey !== key) return;
+  $('c-input').value = rest($('c-input').value);
   autoGrow($('c-input'));
-  renderComments(state.drawerKey);
 };
 $('c-input').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('c-send').click(); }
@@ -46,19 +91,18 @@ $('c-input').addEventListener('input', (e) => {
   }
 });
 $('drawer').addEventListener('paste', onDrawerPaste);
+wirePicturePick($('c-input').closest('.comment-form'), uploadCommentImage, { at: () => state.drawerKey });
+wireTaskPicture();
 
-let searchTimer = null;
-$('search').addEventListener('input', (e) => {
-  state.search = e.target.value.trim();
-  renderBoard();
-  clearTimeout(searchTimer);
-  searchTimer = setTimeout(loadTasks, 120);
-});
+const typedSearch = searchInput({ render: (q) => { state.search = q; renderBoard(); }, load: loadTasks });
+$('search').addEventListener('input', (e) => typedSearch(e.target.value.trim()));
 
 window.addEventListener('resize', scheduleDrawLinks);
+blockZoom(document);
+const typingLost = watchTyping(document);
 $('board').addEventListener('scroll', scheduleDrawLinks, true);
 
-const POPUP_SELECTOR = '.modal-overlay, #card-menu, #col-sort-menu, #drawer-menu-pop, #return-pop, .lbl-picker, #status-picker, .lightbox, .kbsel.open';
+const POPUP_SELECTOR = '.modal-overlay, #card-menu, #col-sort-menu, #drawer-menu-pop, #return-pop, .lbl-picker, #status-picker, .lightbox, .kbsel.open, .pp-select.open';
 
 function escClosePopup() {
   if (document.querySelector('.kbsel.open')) { closeOpenSelect(); return true; }
@@ -85,9 +129,18 @@ document.addEventListener('keydown', (e) => {
     else if (state.kbCursor != null) setKbCursor(null);
     return;
   }
-  if (e.key === 'Enter' && e.metaKey && !$('drawer').classList.contains('hidden')) { doAutosave(); return; }
-
+  if (e.key === 'Enter' && e.metaKey) {
+    const d = $('drawer');
+    if (!d.classList.contains('hidden') && !d.classList.contains('is-empty') && d.contains(document.activeElement)) { doAutosave(); return; }
+  }
   const inField = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable;
+  if (document.querySelector(POPUP_SELECTOR)) { if (e.key === 'Backspace' && !inField) e.preventDefault(); return; }
+
+  // window check on purpose: with the search (or any window) open, a second ⌘F goes to the browser's own find.
+  if (matchKey(e, 'search') && (!inField || e.metaKey || e.ctrlKey)) { e.preventDefault(); openSearch(); return; }
+
+  if (!inField && typingLost()) { if (e.key === 'Backspace') e.preventDefault(); return; }
+
   const drawerClosed = $('drawer').classList.contains('hidden') || $('drawer').classList.contains('is-empty');
 
   if (drawerClosed && !inField && (matchKey(e, 'prevProject') || matchKey(e, 'nextProject'))) {
@@ -96,7 +149,7 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
-  const delDefault = !(getSetting('keymap') || {}).deleteCard;
+  const delDefault = !customBinding('deleteCard');
   if ((matchKey(e, 'deleteCard') || (delDefault && e.key === 'Backspace' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey)) && !inField) {
     if (selectedIds.size) { e.preventDefault(); multiAction('del'); return; }
     if (!drawerClosed && state.drawerKey) { e.preventDefault(); deleteTask(state.drawerKey); return; }
@@ -115,7 +168,6 @@ document.addEventListener('keydown', (e) => {
     openDrawerNew('backlog');
     return;
   }
-  if (document.querySelector(POPUP_SELECTOR)) return;
 
   const ARROW = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
   if (ARROW[e.key] && !e.metaKey && !e.ctrlKey && !e.altKey) {
@@ -131,16 +183,18 @@ document.addEventListener('keydown', (e) => {
 });
 
 applyTheme();
+listenForInstall();
+initGlyphs({ enabled: () => getSetting('glyphs') !== false });
 applyCompact();
 applyCommentDraft(null);
 state.dashRange = getSetting('dashRange');
-const sessionSlug = sessionStorage.getItem('kb.session.slug');
+const sessionSlug = sessionStore.getItem('kb.session.slug');
 if (sessionSlug) {
   state.slug = sessionSlug;
 } else if (getSetting('startScreen') === 'chaos') {
   state.slug = CHAOS;
 } else if (getSetting('startScreen') === 'last') {
-  const last = localStorage.getItem('kb.ui.project');
+  const last = localStore.getItem('kb.ui.project');
   if (last && last !== SETTINGS) state.slug = last;
 }
 
@@ -148,10 +202,11 @@ const launchParams = new URLSearchParams(location.search);
 const launchAction = launchParams.get('action');
 if (launchParams.get('view') === 'dash') state.slug = DASH;
 if (launchAction === 'new') {
-  const last = localStorage.getItem('kb.ui.project');
+  const last = localStore.getItem('kb.ui.project');
   state.slug = (last && last !== SETTINGS && last !== DASH) ? last : ALL;
 }
 if (location.search) history.replaceState(null, '', location.pathname);
+document.documentElement.classList.toggle('boot-view', [DASH, NOW, REVIEW, DONE, AUTO, HEALTH, CHAOS, SETTINGS, HORIZON, CALENDAR].includes(state.slug));
 
 let appVer = null;
 export let pendingReload = false;
@@ -160,11 +215,16 @@ function safeToReload() {
   const drawerBusy = !d.classList.contains('hidden') && !d.classList.contains('is-empty');
   return !drawerBusy && !selectedIds.size && !document.querySelector(POPUP_SELECTOR) && !hasUnsavedInput();
 }
-function hasUnsavedInput() {
+export function hasUnsavedInput() {
   const chaos = $('chaos-input');
   if (chaos && chaos.value.trim()) return true;
   if (chaosPending.length || pendingAttachments.length) return true;
   if (commentDrafts.size) return true;
+  if (hasUnsaved()) return true;
+  if (projectSettingsDirty() || fileEditorHasChanges() || skillDirty()) return true;
+  if (columnsDirty()) return true;
+  if (chatDirty()) return true;
+  if (descConflictPending()) return true;
   const ae = document.activeElement;
   if (ae && /^(INPUT|TEXTAREA)$/.test(ae.tagName) && ae.value.trim()) return true;
   return false;
@@ -183,6 +243,8 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').cat
 
 function bootDone() {
   const html = document.documentElement;
+  try { sessionStore.removeItem('kb.session.bootReload'); } catch {  }
+  if (!wizardResumes()) liftCurtain();
   if (!html.classList.contains('booting')) return;
   html.classList.remove('booting');
   html.classList.add('booted');
@@ -190,7 +252,8 @@ function bootDone() {
 }
 setTimeout(bootDone, 8000);
 
-loadLabelPalette().catch(() => {}).then(() => refresh()).catch(() => {}).then(() => {
+const streamOrLate = Promise.race([streamOpened, new Promise((resolve) => { setTimeout(resolve, 1500); })]);
+Promise.all([loadLabelPalette().catch(() => {}), streamOrLate]).then(() => loadUntilDone(refresh)).catch(() => {}).then(() => {
   bootDone();
   refreshSync(); applyKeepDrawer();
   if (launchAction === 'new') openDrawerNew('backlog');
@@ -201,8 +264,12 @@ initMarquee();
 connectSSE();
 ensureAudio();
 checkVersion();
-setInterval(refreshSync, 30000);
+let syncSeenAt = Date.now();
+const syncTick = () => { if (document.hidden) return; syncSeenAt = Date.now(); refreshSync(); };
+setInterval(syncTick, 30000);
+document.addEventListener('visibilitychange', () => { if (Date.now() - syncSeenAt >= 30000) syncTick(); });
 setInterval(checkVersion, 30000);
 window.addEventListener('focus', checkVersion);
-setInterval(renderBoard, 60000);
+setInterval(() => { if (!document.hidden && !$('board').classList.contains('hidden')) renderBoard(); }, 60000);
 setInterval(ensureSSE, 20000);
+setInterval(renderLimits, 60000);

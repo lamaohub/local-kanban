@@ -1,7 +1,9 @@
 import { db } from '../db.js';
 import { bus } from '../bus.js';
+import { currentLive } from '../claude-live.js';
+import { localDay, usageSince } from '../claude-usage.js';
+import { noclaudeFilter } from '../task-shape.js';
 
-const noclaudeFilter = (alias = '', only = false) => `${alias}labels ${only ? '' : 'NOT '}LIKE '%"noclaude"%'`;
 const LIVE_TASKS = (alias = '') => `${alias}project_id IN (SELECT id FROM projects WHERE archived = 0)`;
 
 const SINCE_LOCAL_MIDNIGHT = "datetime('now','localtime','start of day', ?, 'utc')";
@@ -19,15 +21,57 @@ export default async function dashboardRoutes(app) {
 
   const RANGE_DAYS = { week: 7, month: 30, half: 182, year: 365 };
 
-  const DASH_TTL = 2000;
+  const DASH_TTL = 30_000;
+  const DASH_QUIET = new Set(['task.work', 'task.live', 'task.comment', 'task.linked', 'task.attached', 'sync.status', 'session.chat', 'share.updated', 'automation.updated']);
   const dashCache = new Map(); // range -> { at, data }
-  bus.on('event', () => dashCache.clear());
+  bus.on('event', (ev) => { if (!DASH_QUIET.has(ev?.type)) dashCache.clear(); });
+
+  const peakCount = { last: 0, total: 0, byHour: new Array(24).fill(0) };
+  const HOUR = "CAST(strftime('%H', created_at, 'localtime') AS INTEGER)";
+  function peakHour() {
+    const { m, n } = db.prepare('SELECT COALESCE(MAX(id), 0) AS m, COUNT(*) AS n FROM task_events').get();
+    const add = (rows) => { for (const r of rows) { peakCount.byHour[r.h] += r.c; peakCount.total += r.c; } };
+    if (m > peakCount.last) {
+      add(db.prepare(`SELECT ${HOUR} AS h, COUNT(*) AS c FROM task_events WHERE id > ? GROUP BY h`).all(peakCount.last));
+      peakCount.last = m;
+    }
+    if (peakCount.total !== n || m < peakCount.last) {
+      Object.assign(peakCount, { last: m, total: 0, byHour: new Array(24).fill(0) });
+      add(db.prepare(`SELECT ${HOUR} AS h, COUNT(*) AS c FROM task_events GROUP BY h`).all());
+    }
+    if (!peakCount.total) return null;
+    return peakCount.byHour.indexOf(Math.max(...peakCount.byHour));
+  }
+
+  const RECENT_N = 30;
+  function recentRows() {
+    const page = db.prepare(`SELECT e.id, e.task_id, e.status, e.created_at, (p.prefix || '-' || t.task_no) AS key,
+        t.title, p.name AS project, p.archived
+      FROM task_events e JOIN tasks t ON t.id = e.task_id JOIN projects p ON p.id = t.project_id
+      WHERE e.id < ? ORDER BY e.id DESC LIMIT 200`);
+    const seen = new Set();
+    const out = [];
+    let before = Number.MAX_SAFE_INTEGER;
+    for (;;) {
+      const rows = page.all(before);
+      for (const r of rows) {
+        if (seen.has(r.task_id)) continue;
+        seen.add(r.task_id);
+        if (!r.archived) out.push({ status: r.status, created_at: r.created_at, key: r.key, title: r.title, project: r.project });
+        if (out.length === RECENT_N) return out;
+      }
+      if (rows.length < 200) return out;
+      before = rows[rows.length - 1].id;
+    }
+  }
 
   app.get('/api/dashboard', (req) => {
     const range = Object.hasOwn(RANGE_DAYS, req.query.range) ? req.query.range : 'week';
+    const withLive = (data) => ({ ...data, waiting: { ...data.waiting, claude: currentLive().filter((x) => !['busy', 'starting', 'unsent'].includes(x.claude) && x.broke !== 'retrying')
+      .map((x) => ({ key: x.key, title: x.title, project: x.project_name, status: x.status, claude: x.claude, since: x.since, resets: x.resets ?? null, ...(x.interrupted ? { interrupted: true } : {}), ...(x.broke ? { broke: x.broke } : {}) })) } });
     const hit = dashCache.get(range);
-    if (hit && Date.now() - hit.at < DASH_TTL) return hit.data;
-    const LIVE_EVENTS = (alias = '') => `${alias}task_id IN (SELECT id FROM tasks WHERE ${LIVE_TASKS()})`;
+    if (hit && Date.now() - hit.at < DASH_TTL) return withLive(hit.data);
+    const LIVE_EVENTS = (alias = '') => `+${alias}task_id IN (SELECT id FROM tasks WHERE ${LIVE_TASKS()})`;
     const LIVE = LIVE_TASKS();
     const NOT_NOCLAUDE = noclaudeFilter();
     const IS_NOCLAUDE = noclaudeFilter('', true);
@@ -94,20 +138,23 @@ export default async function dashboardRoutes(app) {
 
     const planning = { funnel, next, matrix, health };
 
-    const heatDays = db.prepare(`SELECT strftime('%Y-%m-%d', created_at, 'localtime') AS d, COUNT(DISTINCT task_id) AS n FROM task_events WHERE ${LIVE_EVENTS()} AND created_at >= datetime('now','localtime','start of day', ?, 'utc') GROUP BY d ORDER BY d`).all(sinceArg);
-    const heatTime = db.prepare(`SELECT CAST(strftime('%w', created_at, 'localtime') AS INTEGER) AS w, CAST(strftime('%H', created_at, 'localtime') AS INTEGER) AS h, COUNT(DISTINCT task_id) AS n FROM task_events WHERE ${LIVE_EVENTS()} AND created_at >= datetime('now','localtime','start of day', ?, 'utc') GROUP BY w, h`).all(sinceArg);
+    const heatDayMap = new Map();
+    const heatTimeMap = new Map();
+    const slots = db.prepare(`SELECT strftime('%Y-%m-%d %w %H', created_at, 'localtime') AS k, task_id FROM task_events
+      WHERE ${LIVE_EVENTS()} AND created_at >= datetime('now','localtime','start of day', ?, 'utc') GROUP BY k, task_id`).all(sinceArg);
+    const addTo = (map, k, id) => { if (!map.has(k)) map.set(k, new Set()); map.get(k).add(id); };
+    for (const { k, task_id } of slots) { addTo(heatDayMap, k.slice(0, 10), task_id); addTo(heatTimeMap, k.slice(11), task_id); }
+    const heatDays = [...heatDayMap].sort(([a], [b]) => (a < b ? -1 : 1)).map(([d, ids]) => ({ d, n: ids.size }));
+    const heatTime = [...heatTimeMap].map(([wh, ids]) => ({ w: Number(wh.slice(0, 1)), h: Number(wh.slice(2)), n: ids.size }));
     const donePerDay = db.prepare(`SELECT strftime('%Y-%m-%d', done_at, 'localtime') AS d, COUNT(*) AS n FROM tasks WHERE ${LIVE} AND done_at IS NOT NULL AND done_at >= datetime('now','localtime','start of day', ?, 'utc') GROUP BY d ORDER BY d`).all(sinceArg);
     const topProjects = db.prepare("SELECT p.name, COUNT(*) AS n FROM tasks t JOIN projects p ON p.id = t.project_id WHERE p.archived = 0 AND t.status = 'done' AND t.done_at >= datetime('now','localtime','start of day', ?, 'utc') GROUP BY p.id ORDER BY n DESC, p.name LIMIT 6").all(sinceArg);
 
-    const recent = db.prepare(`
-      SELECT e.status, e.created_at, (p.prefix || '-' || t.task_no) AS key, t.title, p.name AS project
-      FROM task_events e
-      JOIN (SELECT task_id, MAX(id) AS mid FROM task_events GROUP BY task_id) last ON last.mid = e.id
-      JOIN tasks t ON t.id = e.task_id JOIN projects p ON p.id = t.project_id AND p.archived = 0
-      ORDER BY e.id DESC LIMIT 30
-    `).all();
-
-    const peak = db.prepare("SELECT CAST(strftime('%H', created_at, 'localtime') AS INTEGER) AS h, COUNT(*) AS n FROM task_events GROUP BY h ORDER BY n DESC LIMIT 1").get();
+    const recent = recentRows();
+    const peak = peakHour();
+    const firstDay = new Date();
+    firstDay.setHours(0, 0, 0, 0);
+    firstDay.setDate(firstDay.getDate() - (RANGE_DAYS[range] - 1));
+    const usage = usageSince(localDay(firstDay.getTime()));
     const since = db.prepare("SELECT strftime('%Y-%m-%d', MIN(created_at), 'localtime') AS d FROM task_events").get().d;
     const rangeStart = db.prepare("SELECT strftime('%Y-%m-%d', 'now', 'localtime', 'start of day', ?) AS d").get(sinceArg).d;
     const rangeSince = since && since > rangeStart ? since : rangeStart;
@@ -124,9 +171,10 @@ export default async function dashboardRoutes(app) {
       top_projects: topProjects,
       recent,
       range_since: rangeSince,
-      fun: { done_total: doneTotal, peak_hour: peak ? peak.h : null, since },
+      fun: { done_total: doneTotal, peak_hour: peak, since },
+      usage,
     };
     dashCache.set(range, { at: Date.now(), data: out });
-    return out;
+    return withLive(out);
   });
 }

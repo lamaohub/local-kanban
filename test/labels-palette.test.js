@@ -56,7 +56,8 @@ test('internal labels (priority, blocked) stay out of the pickers — sync ops s
 
 test('selectable = the whole palette minus the internal ones, nothing extra', async () => {
   const { selectable } = await palette();
-  const want = Object.keys(LABELS).filter((n) => !MANAGED_LABELS.has(n));
+  // `check` marks the task the Claude review section makes itself — in the palette (it syncs), not in the pickers
+  const want = Object.keys(LABELS).filter((n) => !MANAGED_LABELS.has(n) && n !== 'check');
   assert.deepEqual(selectable.sort(), want.sort());
 });
 

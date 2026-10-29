@@ -1,7 +1,8 @@
 import Database from 'better-sqlite3';
 import { readFileSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { DATA_DIR, ROOT, langOverride, ghOwnerEnv, ghRepoEnv } from './config.js';
+import { ZONED, stampTime, zonedStamp } from './stamp.js';
 
 export { DATA_DIR };
 
@@ -37,6 +38,16 @@ const MIGRATIONS = [
     if (!cols.length || cols.some((c) => c.name === 'started_at')) return;
     db.exec('ALTER TABLE sync_queue ADD COLUMN started_at TEXT');
   } },
+  { v: 7, name: 'task-events-session-id', up: () => {
+    const cols = db.prepare('PRAGMA table_info(task_events)').all();
+    if (!cols.length || cols.some((c) => c.name === 'session_id')) return;
+    db.exec('ALTER TABLE task_events ADD COLUMN session_id TEXT');
+  } },
+  { v: 8, name: 'task-sessions-host', up: () => {
+    const cols = db.prepare('PRAGMA table_info(task_sessions)').all();
+    if (!cols.length || cols.some((c) => c.name === 'host_session')) return;
+    db.exec('ALTER TABLE task_sessions ADD COLUMN host_session TEXT');
+  } },
 ];
 export const SCHEMA_VERSION = MIGRATIONS.at(-1).v;
 
@@ -58,7 +69,6 @@ try {
   db.pragma('foreign_keys = ON');
 } catch (e) { dieOnBrokenDatabase(e); }
 export { db };
-db.function('kb_lower', { deterministic: true }, (s) => (s === null || s === undefined ? null : String(s).toLowerCase()));
 
 try {
   migrate();
@@ -91,11 +101,11 @@ function migrate() {
 }
 
 function preMigrateBackup(fromVersion) {
+  if (process.env.KB_PREVIEW_TTL_MS) return;
   if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' LIMIT 1").get()) return;
   const dir = join(DATA_DIR, 'backups', 'pre-migrate');
   mkdirSync(dir, { recursive: true });
-  const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
-  const target = join(dir, `kanban-v${fromVersion}-${stamp}.db`);
+  const target = join(dir, `kanban-v${fromVersion}-${zonedStamp(new Date())}.db`);
   const tmp = `${target}.part`;
   rmSync(tmp, { force: true });
   try {
@@ -105,8 +115,15 @@ function preMigrateBackup(fromVersion) {
     rmSync(tmp, { force: true });
     throw e;
   }
-  const files = readdirSync(dir).filter((f) => f.endsWith('.db')).sort();
-  for (const f of files.slice(0, -5)) rmSync(join(dir, f), { force: true });
+  const made = basename(target);
+  for (const f of preMigrateToDrop(readdirSync(dir))) if (f !== made) rmSync(join(dir, f), { force: true });
+}
+
+export function preMigrateToDrop(names, keep = 5) {
+  const re = new RegExp(String.raw`^kanban-v(\d+)-(\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}|${ZONED})\.db$`);
+  const snaps = names.map((f) => [f, re.exec(f)]).filter(([, m]) => m).map(([f, m]) => ({ f, at: stampTime(m[2]), v: Number(m[1]) }))
+    .sort((a, b) => a.at - b.at || a.v - b.v);
+  return snaps.slice(0, Math.max(0, snaps.length - keep)).map(({ f }) => f);
 }
 
 function legacyMigrate() {
@@ -228,8 +245,7 @@ export function logError(source, scope, message, detail, opId = null) {
     const now = Date.now();
     const seen = lastLogged.get(key);
     if (seen && now - seen.at < DEDUP_MS) {
-      db.prepare('UPDATE app_errors SET repeats = repeats + 1 WHERE id = ?').run(seen.id);
-      return;
+      if (db.prepare('UPDATE app_errors SET repeats = repeats + 1 WHERE id = ?').run(seen.id).changes) return;
     }
     for (const [k, v] of lastLogged) { if (now - v.at >= DEDUP_MS) lastLogged.delete(k); }
     const info = db.prepare('INSERT INTO app_errors(source, scope, message, detail, op_id) VALUES(?, ?, ?, ?, ?)')
@@ -239,6 +255,11 @@ export function logError(source, scope, message, detail, opId = null) {
   } catch (e) {
     console.error('logError failed:', e?.message || e, '|', source, scope, message);
   }
+}
+
+export function clearErrors() {
+  db.prepare('DELETE FROM app_errors').run();
+  lastLogged.clear();
 }
 
 export function resolveErrors(opId) {
@@ -281,7 +302,7 @@ export function genPrefix(slug, used = new Set()) {
   const words = slug.replace(/[^a-z0-9-]/gi, '').split('-').filter(Boolean);
   let base = words.length >= 2
     ? words.map((w) => w[0]).join('').slice(0, 3).toUpperCase()
-    : slug.slice(0, 3).toUpperCase();
+    : (words[0] || '').slice(0, 3).toUpperCase();
   if (base.length < 2) base = (base + 'XX').slice(0, 2);
   let prefix = base;
   let n = 2;
@@ -303,9 +324,11 @@ export function nextTaskNo(projectId) {
   db.prepare(`
     UPDATE projects SET next_task_no = COALESCE(
       next_task_no,
-      (SELECT COALESCE(MAX(task_no), 0) FROM tasks WHERE project_id = ?) + 1
+      -- acceptance CK-689: a key moved out (task_moves, CK-686) leads to its task — its number is taken too
+      MAX((SELECT COALESCE(MAX(task_no), 0) FROM tasks WHERE project_id = ?),
+          (SELECT COALESCE(MAX(task_no), 0) FROM task_moves WHERE project_id = ?)) + 1
     ) WHERE id = ?
-  `).run(projectId, projectId);
+  `).run(projectId, projectId, projectId);
   const { n } = db.prepare('SELECT next_task_no AS n FROM projects WHERE id = ?').get(projectId);
   db.prepare('UPDATE projects SET next_task_no = next_task_no + 1 WHERE id = ?').run(projectId);
   return n;

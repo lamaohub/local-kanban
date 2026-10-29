@@ -99,3 +99,16 @@ test('work_truncated reaches the client, otherwise the mark cannot be drawn', as
   assert.equal(shown.work_truncated, 1);
   assert.equal(shown.work_seconds, CAP);
 });
+
+test('a run that starts in the future (the clock went back) adds nothing and takes nothing away', async () => {
+  const pid = db.prepare("SELECT id FROM projects WHERE slug='demo'").get().id;
+  const key = `DM-${++no}`;
+  db.prepare(`INSERT INTO tasks (project_id, task_no, title, status, work_seconds, work_started_at)
+              VALUES (?,?,?,'doing',600, datetime('now', '+1 hour'))`).run(pid, no, `t${no}`);
+  const r = await patch(key, { status: 'review' });
+  assert.equal(r.statusCode, 200);
+  const t = row(key);
+  assert.equal(t.work_seconds, 600, `work_seconds = ${t.work_seconds}: the run from the future was subtracted`);
+  assert.equal(t.work_truncated, 0);
+  assert.equal(t.work_started_at, null);
+});

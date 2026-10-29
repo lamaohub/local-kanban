@@ -1,12 +1,22 @@
 
 import { fmtWork } from './board.js';
-import { $, ALL, LANG, api, esc, ic, state, tr } from './core.js';
+import { $, ALL, LANG, api, esc, fmtNum, ic, state, tr } from './core.js';
 import { openDrawer } from './drawer.js';
-import { HEAT_LEGEND, RANGE_BTN, RANGE_LABEL, calendarHTML, dashPanel, doneBarsHTML, feedHTML, openStatusPicker, plural, statCard, streaks, timeHeatHTML, topProjHTML, waitingHTML } from './settings.js';
+import { HEAT_LEGEND, RANGE_BTN, RANGE_LABEL, calendarHTML, dashPanel, doneBarsHTML, feedHTML, getSetting, openStatusPicker, plural, setWaitFolded, statCard, streaks, timeHeatHTML, topProjHTML, waitingHTML, ymdLocal } from './settings.js';
 import { selectProject } from './sidebar.js';
-import { refresh } from './sse.js';
+import { refresh, usageFmt } from './sse.js';
+import { usagePanel } from './usage-rules.js';
 
+let seq = 0;
+let drawnDay = '';
+function dayTurned() {
+  if (document.hidden || $('dashboard').classList.contains('hidden') || !drawnDay) return;
+  if (ymdLocal(new Date()) !== drawnDay) renderDashboard();
+}
+setInterval(dayTurned, 60000);
+document.addEventListener('visibilitychange', dayTurned);
 export async function renderDashboard() {
+  const my = ++seq;
   const dash = $('dashboard');
   if (!state.projects.length) {
     dash.innerHTML = `<div class="dash-wrap"><div class="panel demo-cta">
@@ -24,7 +34,9 @@ export async function renderDashboard() {
   }
   let d;
   try { d = await api('GET', `/api/dashboard?range=${state.dashRange}`); }
-  catch { dash.innerHTML = `<div class="dash-wrap"><div class="muted">${tr('Could not load the dashboard.')}</div></div>`; return; }
+  catch { if (my === seq) dash.innerHTML = `<div class="dash-wrap"><div class="muted">${tr('Could not load the dashboard.')}</div></div>`; return; }
+  if (my !== seq) return;
+  drawnDay = ymdLocal(new Date());
 
   const s = d.summary;
   const rlab = RANGE_LABEL[d.range] || tr('this week');
@@ -32,18 +44,18 @@ export async function renderDashboard() {
   const den = s.done_period + s.active;
   const pct = den ? Math.round((s.done_period / den) * 100) : 0;
   const [cur, mx] = streaks(d.done_per_day);
-  const cyc = s.cycle_hours_period != null ? `${s.cycle_hours_period.toFixed(1)} ${tr('h')}` : '—';
+  const cyc = s.cycle_hours_period != null ? `${fmtNum(s.cycle_hours_period)} ${tr('h')}` : '—';
   const q = d.queue;
   const low = q.todo_ready <= 2;
 
-  const cards = '<div class="dcards">'
+  const cards = '<div class="dcards-box"><div class="dcards">'
     + statCard(tr('Done'), s.done_period, rlab)
     + statCard(tr('Active'), s.active, tr('queued and in progress'))
     + statCard(tr('Completed'), `${pct}%`, `${s.done_period} ${tr('of')} ${den} ${rlab}`)
     + statCard(tr('Work time'), fmtWork(s.work_seconds_period), rlab)
     + statCard(tr('Streak'), `${cur} ${tr('d')}`, `${tr('max')} ${mx} ${tr('d')}`)
     + statCard(tr('Task cycle'), cyc, `${tr('from created to done')} (${rlab})`)
-    + '</div>';
+    + '</div></div>';
 
   const rangeCtl = `<div class="dash-top"><div class="dash-range">${RANGE_BTN
     .map(([v, lab]) => `<button class="dr-btn${v === d.range ? ' active' : ''}" data-range="${v}">${tr(lab)}</button>`)
@@ -63,11 +75,14 @@ export async function renderDashboard() {
     ? `${ic('trend', 13)} ${tr('Tasks closed:')} ${d.fun.done_total}. ${tr('Busiest around')} ${d.fun.peak_hour}:00.`
     : `${ic('trend', 13)} ${tr('Tasks closed:')} ${d.fun.done_total}.`;
 
+  const usage = getSetting('showUsage') !== false ? dashPanel(tr('Claude usage'), usagePanel(d.usage, usageFmt), phRange) : '';
+
   dash.innerHTML = `<div class="dash-wrap">
     ${rangeCtl}
     ${dashPanel(tr('Waiting for you'), waitingHTML(d.waiting))}
     ${cards}
     ${queue}
+    ${usage}
     <div class="dash-2col">
       ${dashPanel(tr('Activity by day'), `${calendarHTML(d.heat_days, d.range_since)}<div class="heat-note">${rlab}</div>`, HEAT_LEGEND)}
       ${dashPanel(tr('When work happens'), timeHeatHTML(d.heat_time), phRange)}
@@ -85,6 +100,7 @@ export async function renderDashboard() {
   dash.querySelectorAll('.wr-dot').forEach((el) => {
     el.onclick = (e) => { e.stopPropagation(); openStatusPicker(el, el.dataset.pick, el.dataset.cur); };
   });
+  dash.querySelectorAll('.wait-sec').forEach((el) => { el.ontoggle = () => setWaitFolded(el.dataset.sec, !el.open); });
   dash.querySelectorAll('.qs-item').forEach((el) => { el.onclick = () => selectProject(ALL); });
 }
 

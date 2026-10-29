@@ -65,7 +65,8 @@ CREATE TABLE IF NOT EXISTS task_events (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id     INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   status      TEXT NOT NULL,
-  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  session_id  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_events_task ON task_events(task_id);
 CREATE INDEX IF NOT EXISTS idx_events_created ON task_events(created_at);
@@ -85,6 +86,69 @@ CREATE TABLE IF NOT EXISTS task_attachments (
   created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_attach_task ON task_attachments(task_id);
+CREATE TABLE IF NOT EXISTS task_sessions (
+  task_id     INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  session_id  TEXT NOT NULL,
+  host_session TEXT,
+  transcript  TEXT,
+  first_seen  TEXT NOT NULL DEFAULT (datetime('now')),
+  last_seen   TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (task_id, session_id)
+);
+CREATE INDEX IF NOT EXISTS idx_task_sessions_session ON task_sessions(session_id);
+CREATE TABLE IF NOT EXISTS board_sessions (
+  session_id  TEXT PRIMARY KEY,
+  launched_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS task_launches (
+  event_id  INTEGER PRIMARY KEY REFERENCES task_events(id) ON DELETE CASCADE,
+  via       TEXT NOT NULL  -- board | terminal | desktop
+);
+CREATE TABLE IF NOT EXISTS typed_moves (
+  event_id  INTEGER PRIMARY KEY REFERENCES task_events(id) ON DELETE CASCADE,
+  kind      TEXT NOT NULL  -- typed | typed-undone | settled
+);
+CREATE TABLE IF NOT EXISTS typed_backs (
+  task_id    INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL,
+  event_id   INTEGER NOT NULL,
+  at_ms      INTEGER NOT NULL,
+  seconds    INTEGER NOT NULL DEFAULT 0,
+  truncated  INTEGER NOT NULL DEFAULT 0,
+  print      TEXT,
+  printed    INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS task_moves (
+  project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  task_no     INTEGER NOT NULL,
+  task_id     INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  moved_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (project_id, task_no)
+);
+CREATE TABLE IF NOT EXISTS task_usage (
+  task_id     INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  session_id  TEXT NOT NULL,
+  day         TEXT NOT NULL,
+  model       TEXT NOT NULL,
+  fast        INTEGER NOT NULL DEFAULT 0,
+  answers     INTEGER NOT NULL DEFAULT 0,
+  partial     INTEGER NOT NULL DEFAULT 0,
+  input       INTEGER NOT NULL DEFAULT 0,
+  output      INTEGER NOT NULL DEFAULT 0,
+  cache_read  INTEGER NOT NULL DEFAULT 0,
+  cache_5m    INTEGER NOT NULL DEFAULT 0,
+  cache_1h    INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (task_id, session_id, day, model, fast)
+);
+CREATE INDEX IF NOT EXISTS idx_task_usage_day ON task_usage(day);
+CREATE INDEX IF NOT EXISTS idx_task_usage_session ON task_usage(session_id);
+CREATE TABLE IF NOT EXISTS claude_usage_reads (
+  session_id  TEXT PRIMARY KEY,
+  transcript  TEXT NOT NULL,
+  state       TEXT NOT NULL,
+  last        TEXT NOT NULL DEFAULT '{}',
+  updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
 CREATE TABLE IF NOT EXISTS task_checklist (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id     INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -133,3 +197,19 @@ CREATE TABLE IF NOT EXISTS sync_queue (
   created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_queue_next ON sync_queue(next_attempt_at);
+CREATE TABLE IF NOT EXISTS automations (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  kind        TEXT NOT NULL DEFAULT 'finished-check',
+  delay_s     INTEGER NOT NULL,
+  state       TEXT NOT NULL DEFAULT 'armed',
+  seen_work   INTEGER NOT NULL DEFAULT 0,
+  ready_at    INTEGER,
+  words       TEXT NOT NULL,
+  launch      TEXT NOT NULL DEFAULT '{}',
+  created_at  INTEGER NOT NULL,
+  ended_at    INTEGER,
+  task_id     INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+  error       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_automations_state ON automations(state);

@@ -1,8 +1,9 @@
 
 import { buildSelect, selVal } from './board.js';
 import { $, DASH, api, esc, ic, seg, state, tr } from './core.js';
-import { currentProject, overlayLayer, renderSidebar, renderTopbar, selectProject, styledAlert, styledConfirm } from './sidebar.js';
+import { confirmDiscard, currentProject, overlayLayer, popLayer, pushLayer, renderSidebar, renderTopbar, selectProject, styledAlert, styledConfirm } from './sidebar.js';
 import { copyText, refresh } from './sse.js';
+import { changedFields, refusalLine } from './unsaved.js';
 
 function parsePm2Services(raw) {
   if (!raw) return [];
@@ -27,12 +28,52 @@ export function closeProjectSettings() {
 
 const FIELDS = { path: 'ps-path', server: 'ps-server', server_path: 'ps-spath', domain: 'ps-domain' };
 
+let psSnap = null;
+function projectValues(p) {
+  const pm2 = parsePm2Services(p.pm2_services);
+  const values = {
+    name: (p.name || '').trim(), description: (p.description || '').trim(), category: p.category || 'Other',
+    pinned: p.pinned ? 1 : 0, deploy_skill: (p.deploy_skill || '').trim() || null,
+    pm2_services: pm2.length ? JSON.stringify(pm2) : null,
+  };
+  for (const field of Object.keys(FIELDS)) values[field] = (p[field] || '').trim() || null;
+  return values;
+}
+function readProjectForm() {
+  let category = $('ps-category').dataset.value;
+  if (category === '__new__') category = $('ps-category-new').value.trim();
+  const pm2 = $('ps-pm2').value.split(',').map((x) => x.trim()).filter(Boolean);
+  const values = {
+    name: $('ps-name').value.trim(), description: $('ps-desc').value.trim(), category,
+    pinned: $('ps-pinned').checked ? 1 : 0, deploy_skill: (selVal($('ps-skill')) || '').trim() || null,
+    pm2_services: pm2.length ? JSON.stringify(pm2) : null,
+  };
+  for (const [field, id] of Object.entries(FIELDS)) values[field] = $(id).value.trim() || null;
+  return values;
+}
+export function projectSettingsDirty() {
+  if (!psSnap || !$('ps-name') || $('projset').classList.contains('hidden')) return false;
+  return Object.keys(changedFields(readProjectForm(), psSnap)).length > 0;
+}
+let leaveAsking = false;
+async function askLeaveSettings() {
+  if (leaveAsking) return false;
+  leaveAsking = true;
+  try {
+    const r = await styledConfirm(tr('Save the changes of the project before leaving?'), { okLabel: tr('Save'), alt: tr("Don't save") });
+    if (r === 'alt') return true;
+    return r === true && await saveProjectSettings();
+  } finally { leaveAsking = false; }
+}
+state.leaveGuard = () => !projectSettingsDirty() || askLeaveSettings();
+
 export async function renderProjectSettings(force) {
   const host = $('projset');
   if (!host) return;
   const p = currentProject();
   if (!p) {
   host.innerHTML = `<div class="ps-wrap"><div class="muted">${tr('This project is gone')}</div></div>`;
+    psSnap = null;
     return;
   }
   if (!force && host.dataset.slug === p.slug) return;
@@ -40,7 +81,7 @@ export async function renderProjectSettings(force) {
 
   const cur = p.category || 'Other';
   const cats = [...new Set([...state.categories.map((c) => c.name), ...state.projects.map((x) => x.category || 'Other')])]
-    .sort((a, b) => a.localeCompare(b, 'ru'));
+    .sort((a, b) => tr(a).localeCompare(tr(b), 'ru'));
   if (!cats.includes(cur)) cats.unshift(cur);
 
   host.innerHTML = `<div class="ps-wrap">
@@ -127,6 +168,7 @@ export async function renderProjectSettings(force) {
   host.querySelectorAll('input').forEach((inp) => {
     inp.onkeydown = (e) => { if (e.key === 'Enter') saveProjectSettings(); };
   });
+  psSnap = projectValues(p);
   renderDocs(p);
 }
 
@@ -226,11 +268,13 @@ async function renderDocs(p) {
           save: (text, confirmPath) => api('PUT', url, { text, confirm_path: confirmPath }),
           onSaved: () => renderDocs(p),
         });
-      } catch (e) { styledAlert(e.message || tr('could not read the file')); }
+      } catch (e) { styledAlert(refusalLine('Could not read the file', e, tr)); }
     };
   });
 }
 
+let fileEditorDirty = () => false;
+export const fileEditorHasChanges = () => fileEditorDirty();
 export function openFileEditor({ title, path, text, save, onSaved }) {
   $('file-viewer')?.remove();
   const overlay = document.createElement('div');
@@ -248,12 +292,17 @@ export function openFileEditor({ title, path, text, save, onSaved }) {
       : `<pre class="fv-body">${esc(text)}</pre>`}
   </div>`;
   document.body.appendChild(overlay);
-  const close = overlayLayer(overlay);
+  let saved = text;
+  const dirty = () => Boolean(save) && overlay.isConnected && $('fv-text').value !== saved;
+  const close = overlayLayer(overlay, {
+    confirmClose: () => !dirty() || confirmDiscard(),
+    onClose: () => { fileEditorDirty = () => false; },
+  });
   overlay.querySelector('.fv-close').onclick = close;
   if (!save) return;
+  fileEditorDirty = dirty;
   const ta = $('fv-text');
   ta.value = text;
-  let saved = text;
   const note = (msg) => { $('fv-note').textContent = msg; };
   const sync = () => { $('fv-save').disabled = ta.value === saved; };
   ta.oninput = () => { sync(); note(ta.value === saved ? '' : tr('changed — not written to the file yet')); };
@@ -266,12 +315,13 @@ export function openFileEditor({ title, path, text, save, onSaved }) {
       saved = ta.value;
       note(r?.backup_name ? `${tr('saved ✓ · the previous version is kept as')} ${r.backup_name}` : tr('saved ✓'));
       onSaved?.();
-    } catch (e) { note(e.message || tr('not saved')); sync(); }
+    } catch (e) { note(refusalLine('did not save', e, tr)); sync(); }
   };
 }
 
 let catDocHandler = null;
 function closeCatList() {
+  popLayer('ps-category');
   $('ps-category')?.classList.remove('open');
   if (catDocHandler) { document.removeEventListener('click', catDocHandler); catDocHandler = null; }
 }
@@ -279,10 +329,10 @@ function buildCatSelect(cur, cats) {
   const box = $('ps-category');
   box.dataset.value = cur;
   const items = [...cats, '__new__'];
-  const label = (v) => (v === '__new__' ? tr('New section…') : v);
+  const label = (v) => (v === '__new__' ? tr('New section…') : tr(v));
   box.innerHTML = `<button type="button" class="pp-sel-btn"><span class="pp-sel-val">${esc(label(cur))}</span><span class="pp-sel-chev">▾</span></button>`
     + `<div class="pp-sel-list">${items.map((v) =>
-        `<div class="pp-sel-opt${v === cur ? ' active' : ''}" data-v="${esc(v)}">${v === '__new__' ? `${ic('plus', 12)} ${esc(tr('New section…'))}` : esc(v)}</div>`).join('')}</div>`;
+        `<div class="pp-sel-opt${v === cur ? ' active' : ''}" data-v="${esc(v)}">${v === '__new__' ? `${ic('plus', 12)} ${esc(tr('New section…'))}` : esc(label(v))}</div>`).join('')}</div>`;
   box.onclick = (e) => {
     const opt = e.target.closest('.pp-sel-opt');
     if (opt) {
@@ -298,6 +348,7 @@ function buildCatSelect(cur, cats) {
     if (!e.target.closest('.pp-sel-btn')) return;
     if (box.classList.contains('open')) { closeCatList(); return; }
     box.classList.add('open');
+    pushLayer('ps-category', closeCatList);
     catDocHandler = (ev) => { if (!box.contains(ev.target)) closeCatList(); };
     setTimeout(() => document.addEventListener('click', catDocHandler), 0);
   };
@@ -305,34 +356,19 @@ function buildCatSelect(cur, cats) {
 
 async function saveProjectSettings() {
   const p = currentProject();
-  if (!p) return;
-  const body = {};
-  const name = $('ps-name').value.trim();
-  const description = $('ps-desc').value.trim();
-  if (name && name !== p.name) body.name = name;
-  if (description !== (p.description || '')) body.description = description;
-  let category = $('ps-category').dataset.value;
-  if (category === '__new__') category = $('ps-category-new').value.trim();
-  if (category && category !== (p.category || 'Other')) body.category = category;
-  const pinned = $('ps-pinned').checked ? 1 : 0;
-  if (pinned !== (p.pinned ? 1 : 0)) body.pinned = pinned;
-  for (const [field, id] of Object.entries(FIELDS)) {
-    const v = $(id).value.trim() || null;
-    if (v !== (p[field] || null)) body[field] = v;
-  }
-  const skill = (selVal($('ps-skill')) || '').trim() || null;
-  if (skill !== (p.deploy_skill || null)) body.deploy_skill = skill;
-  const pm2 = $('ps-pm2').value.split(',').map((s) => s.trim()).filter(Boolean);
-  const pm2Str = pm2.length ? JSON.stringify(pm2) : null;
-  if (pm2Str !== (p.pm2_services || null)) body.pm2_services = pm2Str;
-  if (!Object.keys(body).length) { flashSaved(tr('nothing to save')); return; }
+  if (!p || !psSnap) return;
+  const body = changedFields(readProjectForm(), psSnap);
+  if (!body.name) delete body.name;
+  if (!body.category) delete body.category;
+  if (!Object.keys(body).length) { flashSaved(tr('nothing to save')); return true; }
   try { await api('PATCH', `/api/projects/${seg(p.slug)}`, body); }
-  catch (e) { flashSaved(e.message || tr('not saved')); return; }
+  catch (e) { flashSaved(refusalLine('did not save', e, tr)); return false; }
   await refresh();
   renderSidebar();
   renderTopbar();
   await renderProjectSettings(true);
   flashSaved(tr('saved ✓'));
+  return true;
 }
 function flashSaved(text) {
   const el = $('ps-saved');

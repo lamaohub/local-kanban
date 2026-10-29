@@ -1,15 +1,16 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
 
-let app, tmp, changelogSection, repoSlug, pkg;
+let app, tmp, changelogSection, repoSlug, pkg, system;
 const realFetch = globalThis.fetch;
 const realPath = process.env.PATH;
 const realGhBin = process.env.KB_GH_BIN;
-const get = async (url) => (await app.inject({ method: 'GET', url })).json();
+const get = async (url, on = app) => (await on.inject({ method: 'GET', url })).json();
+const fresh = async () => { const a = Fastify(); await a.register(system.default); await a.ready(); return a; };
 const noGh = () => {
   globalThis.fetch = async () => { throw new Error('offline'); };
   process.env.PATH = '/nonexistent';
@@ -22,7 +23,7 @@ before(async () => {
   await import('../src/db.js');
   const { ghState } = await import('../src/sync/worker.js');
   ghState.available = false; ghState.lastCheck = Date.now() + 1e9;
-  const system = await import('../src/routes/system.js');
+  system = await import('../src/routes/system.js');
   ({ changelogSection, repoSlug } = system);
   pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   app = Fastify();
@@ -100,7 +101,7 @@ test('the release page answers for the version that is not installed yet', async
 
 test('no release page, no network, no body — the block still says something true', async () => {
   noGh();
-  const offline = await get('/api/whats-new?remote=1&refresh=1');
+  const offline = await get('/api/whats-new?remote=1&refresh=1', await fresh());
   assert.equal(offline.source, 'changelog', 'a dead network must not leave the block empty');
   assert.equal(offline.version, pkg.version);
   // the label alone proves nothing: an answer that says "changelog" and carries no notes renders
@@ -108,7 +109,7 @@ test('no release page, no network, no body — the block still says something tr
   assert.ok(offline.notes && offline.notes.length > 10, 'the fallback is labelled right but came back empty');
 
   globalThis.fetch = async () => ({ ok: true, json: async () => ({ tag_name: 'v99.0.0', body: '   ' }) });
-  const blank = await get('/api/whats-new?remote=1&refresh=1');
+  const blank = await get('/api/whats-new?remote=1&refresh=1', await fresh());
   assert.equal(blank.source, 'changelog', 'a release created without notes is not notes');
   assert.ok(blank.notes && blank.notes.length > 10, 'a release without notes fell back to an empty block');
 });
@@ -127,4 +128,58 @@ test('the release page is filled from the same section the release script demand
   assert.match(src, /const releaseNotes = notesOf\(changelogText\)/, 'the notes are no longer taken from Unreleased');
   assert.match(src, /writeFileSync\(notesFile, `\$\{releaseNotes\}/, 'the release page is filled from something else than those notes');
   assert.match(src, /'release', verb, `v\$\{version\}`/, 'the release page is not created at all');
+});
+
+test('refresh=1 goes to GitHub at most once in 15 seconds', async () => {
+  let asked = 0;
+  globalThis.fetch = async () => {
+    asked += 1;
+    return { ok: true, json: async () => ({ tag_name: 'v99.0.0', body: `- release ${asked}`, html_url: 'https://github.com/octocat/hello-world/releases/tag/v99.0.0' }) };
+  };
+  const board = await fresh();
+  const answers = [];
+  for (let i = 0; i < 5; i++) answers.push(await get('/api/whats-new?remote=1&refresh=1', board));
+  assert.equal(asked, 1, `five presses of "Check" made ${asked} trips to GitHub`);
+  assert.ok(answers.every((a) => a.source === 'github' && a.notes === '- release 1'), 'a throttled press must still answer — from the cache');
+  await board.close();
+});
+
+const slow = (answer) => async () => { await new Promise((r) => setTimeout(r, 30)); return answer(); };
+function countingGh(name) {
+  const runs = join(tmp, `${name}.runs`);
+  const bin = join(tmp, `${name}.sh`);
+  writeFileSync(bin, `#!/bin/sh\necho run >> "${runs}"\nsleep 0.1\nexit 1\n`);
+  chmodSync(bin, 0o755);
+  return { bin, count: () => (existsSync(runs) ? readFileSync(runs, 'utf8').trim().split('\n').length : 0) };
+}
+
+test('twenty requests at once on a cold cache make one trip to the release page', async () => {
+  let asked = 0;
+  globalThis.fetch = slow(() => {
+    asked += 1;
+    return { ok: true, json: async () => ({ tag_name: 'v99.0.0', body: '- one trip', html_url: 'https://github.com/octocat/hello-world/releases/tag/v99.0.0' }) };
+  });
+  const board = await fresh();
+  const answers = await Promise.all(Array.from({ length: 20 }, () => get('/api/whats-new?remote=1', board)));
+  assert.equal(asked, 1, `20 requests at once made ${asked} trips to GitHub`);
+  assert.ok(answers.every((a) => a.source === 'github' && a.notes === '- one trip'), 'a request that waited for the trip got another answer');
+  await get('/api/whats-new?remote=1', board);
+  assert.equal(asked, 1, 'once the trip is back, the next request does not come from the cache');
+  // and the trip does end: two hours later the cache is stale, and the next request goes out again
+  const realNow = Date.now;
+  Date.now = () => realNow() + 2 * 3_600_000;
+  try { await get('/api/whats-new?remote=1', board); } finally { Date.now = realNow; }
+  assert.equal(asked, 2, 'the first trip is handed out forever: the board never asks GitHub again');
+  await board.close();
+});
+
+test('twenty requests at once with the anonymous request refused run gh once', async () => {
+  globalThis.fetch = async () => { throw new Error('offline'); };
+  const gh = countingGh('gh-news');
+  process.env.KB_GH_BIN = gh.bin;
+  const board = await fresh();
+  const answers = await Promise.all(Array.from({ length: 20 }, () => get('/api/whats-new?remote=1&refresh=1', board)));
+  assert.equal(gh.count(), 1, `20 requests at once ran gh under the owner's token ${gh.count()} times`);
+  assert.ok(answers.every((a) => a.source === 'changelog' && a.notes && a.notes.length > 10), 'the requests that waited did not get the own notes');
+  await board.close();
 });

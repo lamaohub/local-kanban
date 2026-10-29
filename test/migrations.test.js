@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, readdirSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, readdirSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,10 +9,10 @@ import Database from 'better-sqlite3';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-function migrateDir(dir) {
+function migrateDir(dir, env = {}) {
   const res = spawnSync(process.execPath, ['--input-type=module', '-e', "import './src/db.js';"], {
     cwd: ROOT,
-    env: { ...process.env, KB_DATA_DIR: dir, KB_GH_OWNER: '', KB_GH_REPO: '' },
+    env: { ...process.env, KB_DATA_DIR: dir, KB_GH_OWNER: '', KB_GH_REPO: '', ...env },
     encoding: 'utf8',
   });
   assert.equal(res.status, 0, `starting db.js failed:\n${res.stderr}`);
@@ -188,4 +188,127 @@ test('drift detector: a fresh install\'s schema matches the migrated one', (t) =
     shape(fresh),
     'schema.sql and MIGRATIONS have diverged: a column or index was added to schema.sql — add a MIGRATIONS step',
   );
+});
+
+test('pre-migrate rotation keeps the five newest — the one just taken always among them', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'kb-mig-rot-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  migrateDir(dir);
+  const db = new Database(join(dir, 'kanban.db'));
+  const from = db.pragma('user_version', { simple: true }) - 1;
+  db.pragma(`user_version = ${from}`);
+  db.close();
+  const pre = join(dir, 'backups', 'pre-migrate');
+  mkdirSync(pre, { recursive: true });
+  const older = [1, 2, 3, 4, 5].map((n) => `kanban-v${from + 1}-2026-01-0${n}-00-00-00.db`);
+  for (const f of older) writeFileSync(join(pre, f), 'x');
+  writeFileSync(join(pre, 'notes.db'), 'not a snapshot');
+
+  migrateDir(dir);
+  const left = readdirSync(pre).filter((f) => f.startsWith('kanban-v'));
+  assert.ok(left.some((f) => f.startsWith(`kanban-v${from}-`)), `the snapshot just taken was rotated away: ${left.join(', ')}`);
+  assert.equal(left.length, 5, `expected the five newest, got ${left.length}`);
+  assert.ok(!left.includes(older[0]), 'the oldest snapshot should be the one to go');
+  assert.ok(existsSync(join(pre, 'notes.db')), 'the rotation removed a file that is not a snapshot');
+});
+
+test('the pre-migrate snapshot just taken survives even when the clock went back', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'kb-mig-clock-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  migrateDir(dir);
+  const db = new Database(join(dir, 'kanban.db'));
+  const from = db.pragma('user_version', { simple: true }) - 1;
+  db.pragma(`user_version = ${from}`);
+  db.close();
+  const pre = join(dir, 'backups', 'pre-migrate');
+  mkdirSync(pre, { recursive: true });
+  for (const n of [1, 2, 3, 4, 5]) writeFileSync(join(pre, `kanban-v${from}-2099-01-0${n}-00-00-00.db`), 'x');
+  migrateDir(dir);
+  const left = readdirSync(pre).filter((f) => f.startsWith('kanban-v') && !f.includes('-2099-'));
+  assert.equal(left.length, 1, `the snapshot just taken was rotated away (left: ${readdirSync(pre).join(', ')})`);
+});
+
+test('pre-migrate rotation orders by time, not by name: version 10 is newer than version 9', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'kb-mig-order-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  process.env.KB_DATA_DIR = dir;
+  const { preMigrateToDrop } = await import('../src/db.js');
+  const names = ['kanban-v5-2026-08-01-10-00-00.db', 'kanban-v6-2026-08-20-10-00-00.db', 'kanban-v7-2026-09-10-10-00-00.db',
+    'kanban-v8-2026-09-30-10-00-00.db', 'kanban-v9-2026-10-20-10-00-00.db', 'kanban-v10-2026-11-15-10-00-00.db', 'stray.db'];
+  assert.deepEqual(preMigrateToDrop(names), ['kanban-v5-2026-08-01-10-00-00.db']);
+});
+
+const stepBack = (dir) => {
+  const db = new Database(join(dir, 'kanban.db'));
+  const from = db.pragma('user_version', { simple: true }) - 1;
+  db.pragma(`user_version = ${from}`); // one step back: the last migration step is idempotent
+  db.close();
+  return from;
+};
+const zoneOffset = (TZ) => {
+  const saved = process.env.TZ;
+  process.env.TZ = TZ;
+  try {
+    const off = -new Date().getTimezoneOffset();
+    return `${off < 0 ? '-' : '+'}${String(Math.floor(Math.abs(off) / 60)).padStart(2, '0')}${String(Math.abs(off) % 60).padStart(2, '0')}`;
+  } finally { if (saved === undefined) delete process.env.TZ; else process.env.TZ = saved; }
+};
+const utcName = (from, ms) => `kanban-v${from}-${new Date(ms).toISOString().slice(0, 19).replace(/[T:]/g, '-')}.db`; // how names were made before
+
+test('the snapshot before a migration is named by the local clock and its offset, in any time zone', async (t) => {
+  const { stampTime } = await import('../src/stamp.js');
+  for (const TZ of ['Asia/Bangkok', 'America/Los_Angeles']) {
+    const dir = mkdtempSync(join(tmpdir(), 'kb-mig-zone-'));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    migrateDir(dir);
+    const from = stepBack(dir);
+    const t0 = Math.floor(Date.now() / 1000) * 1000;
+    migrateDir(dir, { TZ });
+    const t1 = Date.now();
+    const [name, ...more] = readdirSync(join(dir, 'backups', 'pre-migrate')).filter((f) => f.endsWith('.db'));
+    assert.equal(more.length, 0);
+    const m = new RegExp(String.raw`^kanban-v${from}-(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}([+-]\d{4}))\.db$`).exec(name);
+    assert.ok(m, `${TZ}: the name is not the local time with its offset: ${name}`);
+    assert.equal(m[2], zoneOffset(TZ), `${TZ}: the offset in the name is not the zone's: ${name}`);
+    const when = stampTime(m[1]);
+    assert.ok(when >= t0 && when <= t1, `${TZ}: the name does not say when the snapshot was taken (UTC digits?): ${name}`);
+  }
+});
+
+test('pre-migrate rotation orders UTC names and local ones by the moment they stand for', async (t) => {
+  const own = mkdtempSync(join(tmpdir(), 'kb-mig-mixorder-'));
+  t.after(() => rmSync(own, { recursive: true, force: true }));
+  process.env.KB_DATA_DIR = own; // db.js opens a database on import: a folder of its own, unless a test above loaded it
+  const { preMigrateToDrop } = await import('../src/db.js');
+  // six snapshots, oldest first: by their text the order would be 3, 2, 4, 5, 1, 6
+  const names = [
+    'kanban-v7-2026-01-02_10-00-00+0700.db', // 03:00 UTC
+    'kanban-v7-2026-01-02-05-00-00.db', //      05:00 UTC, a name made before the offset came in
+    'kanban-v7-2026-01-01_22-00-00-0800.db', // 06:00 UTC the next day
+    'kanban-v7-2026-01-02-07-00-00.db', //      07:00 UTC
+    'kanban-v7-2026-01-02_00-00-00-0800.db', // 08:00 UTC
+    'kanban-v7-2026-01-02_16-00-00+0700.db', // 09:00 UTC
+  ];
+  assert.deepEqual(preMigrateToDrop(names, 2), names.slice(0, 4));
+  // the hour that repeats when summer time ends: the first 01:30 is the older one
+  assert.deepEqual(preMigrateToDrop(['kanban-v8-2026-11-01_01-30-00-0800.db', 'kanban-v8-2026-11-01_01-30-00-0700.db'], 1),
+    ['kanban-v8-2026-11-01_01-30-00-0700.db']);
+
+  // and in a real data folder: the five snapshots of the last five hours were made by the board before the
+  // update, under UTC names; west of Greenwich their digits read LATER than the local name of the new one
+  for (const TZ of ['Asia/Bangkok', 'America/Los_Angeles']) {
+    const dir = mkdtempSync(join(tmpdir(), 'kb-mig-mixed-'));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    migrateDir(dir);
+    const from = stepBack(dir);
+    const pre = join(dir, 'backups', 'pre-migrate');
+    mkdirSync(pre, { recursive: true });
+    const old = [5, 4, 3, 2, 1].map((h) => utcName(from, Date.now() - h * 3_600_000));
+    for (const f of old) writeFileSync(join(pre, f), 'x');
+    migrateDir(dir, { TZ });
+    const left = readdirSync(pre);
+    assert.equal(left.length, 5, `${TZ}: expected the five newest, got ${left.join(', ')}`);
+    assert.ok(!left.includes(old[0]), `${TZ}: the snapshot of five hours ago should be the one to go: ${left.join(', ')}`);
+    assert.ok(left.some((f) => !old.includes(f)), `${TZ}: the snapshot just taken was rotated away`);
+  }
 });
