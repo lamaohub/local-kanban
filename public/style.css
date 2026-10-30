@@ -1591,6 +1591,8 @@ html[data-design="v3"] .now-col.col-full { /* v3: .panel rounds and frames it ot
 .chat-run:hover { color: var(--text); }
 .chat-run-t { min-width: 0; overflow-wrap: anywhere; } /* wraps: cut with «…», a long line hid what Claude did */
 .chat-run-file { color: var(--field-text); }
+.chat-run:has(> .chat-run-times) > .chat-run-t { flex: none; max-width: calc(100% - 20px); } /* the times give way first: a pixel taken off the words wrapped them */
+.chat-run-times { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11.5px; opacity: .8; font-variant-numeric: tabular-nums; }
 .chat-run-time { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .chat-run > svg { flex: none; transform: rotate(-90deg); transition: transform .15s ease; }
 .chat-run.open > svg { transform: none; }
@@ -1637,12 +1639,15 @@ html[data-design="v3"] .now-col.col-full { /* v3: .panel rounds and frames it ot
 /* a narrow column: the words give way with an ellipsis, the dot never does (a squeezed dot went out of sight) */
 .chat-working .chat-pulse { flex: none; }
 .chat-working-t { flex: 0 1000 auto; min-width: min(7.5em, 40%); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.chat-working-now { flex: 1 1 auto; min-width: 4em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--field-text); }
+.chat-working-m { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.chat-working-now { flex: 1 100 auto; min-width: 4em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--field-text); }
 .chat-live { display: flex; flex-direction: column; gap: 6px; }
 .chat-live:empty { display: none; }
 .chat-going { display: flex; flex-direction: column; gap: 2px; max-height: 30vh; overflow-y: auto; }
-.chat-pulse { position: relative; width: 7px; height: 7px; border-radius: 50%; background: var(--doing); }
-.chat-pulse::after { content: ''; position: absolute; inset: 0; border-radius: 50%; background: var(--doing); animation: chat-pulse 1.4s ease-out infinite; }
+.chat-pulse { position: relative; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+.chat-pulse::after { content: ''; position: absolute; inset: 0; border-radius: 50%; background: var(--ok); animation: chat-pulse 1.4s ease-out infinite; }
+.chat-working.stalled .chat-pulse, .chat-working.stalled .chat-pulse::after { background: var(--doing); }
+.chat-working.stalled .chat-pulse::after { animation: none; }
 @keyframes chat-pulse { from { transform: scale(1); opacity: .6; } to { transform: scale(2.6); opacity: 0; } }
 .chat-empty { padding: 14px 4px; font-size: 12.5px; }
 .chat-earlier { align-self: center; }

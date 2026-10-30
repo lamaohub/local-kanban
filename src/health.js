@@ -66,16 +66,18 @@ async function measure(path, kind, seen, out, { from = null, hop = 0 } = {}) {
   }
 }
 
-async function rulesIn(dir, seen, out) {
+/** The rules of `dir` that load at the start; with `scoped` (the project's folder), those with `paths:` go there. */
+async function rulesIn(dir, seen, out, scoped = null) {
   let entries;
   try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
   for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     const p = join(dir, e.name);
-    if (e.isDirectory()) { await rulesIn(p, seen, out); continue; }
+    if (e.isDirectory()) { await rulesIn(p, seen, out, scoped); continue; }
     if (!e.name.endsWith('.md')) continue;
     const got = await readMemory(p);
-    if (!got || ruleIsScoped(got.text)) continue;
-    await measure(p, 'rule', seen, out);
+    if (!got) continue;
+    if (!ruleIsScoped(got.text)) await measure(p, 'rule', seen, out);
+    else if (scoped) scoped.list.push({ path: relative(scoped.top, p), kind: 'scoped', chars: got.text.length, lines: lineCount(got.text) });
   }
 }
 
@@ -154,13 +156,14 @@ export async function projectHealth(dir, skip = new Set()) {
     for (const f of files.slice(before)) if (f.kind === 'main') f.name = relative(top, expandPath(f.path));
     await measure(join(d, 'CLAUDE.local.md'), 'local', seen, files);
   }
-  await rulesIn(join(top, '.claude', 'rules'), seen, files);
+  const scoped = { top, list: [] };
+  await rulesIn(join(top, '.claude', 'rules'), seen, files, scoped);
   await memoryOf(top, files);
   const main = files.find((f) => f.kind === 'main') || null;
   return {
     main: main && { path: main.name, chars: main.chars, lines: main.lines },
     files, chars: sum(files, 'chars'), lines: sum(files, 'lines'),
-    nested: await nestedOf(top, seen),
+    nested: [...await nestedOf(top, seen), ...scoped.list].sort((a, b) => b.chars - a.chars),
   };
 }
 

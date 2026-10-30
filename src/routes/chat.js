@@ -1,6 +1,6 @@
 
 import { resolveTask, taskAttachmentPaths } from './tasks.js';
-import { REPLY_MAX, claudeAtPrompt, phantomScreen, phantomSend, taskTerminal } from '../phantom.js';
+import { CHAT_COLS, REPLY_MAX, claudeAtPrompt, paceOnScreen, phantomResize, phantomScreen, phantomSend, taskTerminal, watched } from '../phantom.js';
 import { SESSION_ID_RE, taskSessions, transcriptNow } from '../claude-sessions.js';
 import { PICTURE_MAX, PICTURE_TYPES, SHOT_RE, TURNS_DEFAULT, TURNS_MAX, chatHash, chatPicture, chatShot, pictureKindOf, saidCommand, transcriptChat, watchChat } from '../chat-feed.js';
 import { createReadStream } from 'node:fs';
@@ -128,8 +128,11 @@ export default async function chatRoutes(app) {
     if (!working) chat.waiting = [];
     const body = { session: s.session_id, sessions: list, ...chat, queue: queued(s.session_id), send, state, working, own, ...(question ? { question } : {}), ...(choice ? { choice } : {}), ...(ended ? { ended } : {}) };
     const v = chatHash(body);
-    if (seen === v) return { same: true, v };
-    return { ...body, v };
+    const pace = state === 'busy' ? paceOnScreen((await phantomScreen(s.session_id, 0)) ?? '') : null;
+    if (state === 'busy' && CHAT_COLS > (term.cols ?? 0) + 2 && !watched(s.session_id)) await phantomResize(s.session_id, CHAT_COLS);
+    const live = pace ? { pace } : {};
+    if (seen === v) return { same: true, v, ...live };
+    return { ...body, ...live, v };
   });
 
   /** The type of a picture by its first bytes (PNG, JPEG, GIF, WebP), null for anything else. */

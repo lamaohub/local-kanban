@@ -26,3 +26,4 @@ bun.lockb
 
 # local notes, not part of the public project
 CLAUDE.md
+.claude/rules/

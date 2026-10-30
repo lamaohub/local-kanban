@@ -21,6 +21,7 @@ const IDLE = 'Ready.\n\n──────────────────�
 const BUSY = '* Working… (esc to interrupt)\n\n────────────────────────────────\n❯ \n────────────────────────────────\n  esc to interrupt\n';
 const QUESTION = ' Do you want to make this edit to a.js?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel · Tab to amend\n';
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+const ASK_FRESH_MS = 3000; // of src/phantom.js
 let panePid = null;
 // what Claude shows, and what Claude Code's registry says of it (the board reads the registry first, as for a real one)
 async function show(screen, status = 'idle') {
@@ -87,6 +88,7 @@ process.stdin.on('data', (s) => {
   await pause(600);
   app = Fastify();
   await app.register((await import('../src/routes/chat.js')).default);
+  await app.register((await import('../src/routes/terminal.js')).default);
   await app.ready();
 });
 
@@ -252,4 +254,33 @@ test('a picture goes with words typed at once and with words sent «now»: its p
     const at = t.indexOf(`<P>${path}</P>`);
     assert.ok(at >= 0 && at < t.indexOf(`see it ${status}`), `${now ? '«now»' : 'typed at once'}: the picture did not go first on its own: ${t}`);
   }
+});
+
+test('the words of the spinner come with an unchanged chat too', { skip }, async () => {
+  const look = (seen = '') => app.inject({ method: 'GET', url: `/api/tasks/CT-1/chat${seen && `?seen=${seen}`}` }).then((r) => r.json());
+  execFileSync(TMUX, ['-L', SOCKET, 'resize-window', '-t', `=kb-${NEW}:`, '-x', '45']); // where a session of the board starts
+  await show('✻ Flambéing… (38s · ↓ 3.2k tokens)\n\n────────────────────────────────\n❯ \n────────────────────────────────\n  esc to interrupt\n', 'busy');
+  const first = await look();
+  assert.equal(first.state, 'busy');
+  assert.deepEqual(first.pace, { tokens: 3200 });
+  await show('✻ Flambéing… (44s · ↓ 3.9k tokens)\n\n────────────────────────────────\n❯ \n────────────────────────────────\n  esc to interrupt\n', 'busy');
+  const next = await look(first.v);
+  assert.equal(next.same, true);
+  assert.deepEqual(next.pace, { tokens: 3900 });
+  // Claude Code drops the tokens from a line that does not fit: a chat at work widens the window, a terminal on a screen stays
+  const width = () => Number(execFileSync(TMUX, ['-L', SOCKET, 'display-message', '-p', '-t', `=kb-${NEW}:`, '#{window_width}']).toString().trim());
+  assert.equal(width(), 72);
+  assert.equal((await app.inject({ method: 'GET', url: '/api/tasks/CT-1/terminal?cols=46' })).statusCode, 200);
+  assert.equal(width(), 46);
+  await look();
+  assert.equal(width(), 46, 'the chat took the window from a terminal somebody looks at');
+  assert.equal((await app.inject({ method: 'GET', url: '/api/tasks/CT-1/terminal?cols=120' })).statusCode, 200);
+  await pause(ASK_FRESH_MS + 100); // the ask of 46 is over
+  assert.equal((await app.inject({ method: 'GET', url: '/api/tasks/CT-1/terminal?cols=120' })).statusCode, 200);
+  assert.equal(width(), 120);
+  await look();
+  assert.equal((await app.inject({ method: 'GET', url: '/api/tasks/CT-1/terminal?cols=120' })).statusCode, 200);
+  assert.equal(width(), 120, 'a chat beside a wide terminal took turns with it, and Claude Code printed the conversation anew each time');
+  await show(IDLE, 'idle');
+  assert.equal((await look()).pace, undefined, 'a Claude at its prompt has no spinner');
 });

@@ -449,7 +449,10 @@ export function noteLook(sid) { looked.set(sid, Date.now()); }
 const lookedLately = (sid) => Date.now() - (looked.get(sid) ?? -Infinity) < lookHold;
 
 export const ASK_FRESH_MS = 3000;
+export const CHAT_COLS = 72;
 const asked = new Map(); // sid → Map(width → ms of its last ask)
+/** Whether a terminal of `sid` is on a screen: a viewer asked for its width just now. */
+export const watched = (sid, now = Date.now()) => [...(asked.get(sid)?.values() ?? [])].some((at) => now - at <= ASK_FRESH_MS);
 /** The width to lay the window of `sid` out to, now that a viewer asked for `cols`. */
 export function widthFor(sid, cols, now = Date.now()) {
   let widths = asked.get(sid);
@@ -576,6 +579,29 @@ export function turnOverOnScreen(screen) {
   if (!/^\s{2,}\S/.test(last)) return false; // only an indented line continues the one above it
   return TURN_OVER.test(`${above.at(-2) ?? ''} ${last.trim()}`.replace(/\s+/g, ' '));
 }
+const SPINNER = /^\s*[·✢✳✶✻✽*]\s.*…\s*\((?:\d+h ?)?(?:\d+m ?)?\d+s(?: · ([^)]*))?/;
+const SPINNER_LINES = 14;
+const SPINNER_TOKENS = /[↓↑]\s*([\d.]+)\s*([km]?)\s*tokens?/i;
+/** What the spinner says: {tokens?, thinking?, compacting?} — null when there is none on the screen. */
+export function paceOnScreen(screen) {
+  const lines = shownLines(screen);
+  const above = abovePromptBox(lines, 8);
+  if (above.length === lines.length) return null;
+  for (let i = above.length - 1; i >= Math.max(0, above.length - SPINNER_LINES); i--) {
+    const joined = `${above[i]} ${(above[i + 1] ?? '').trim()}`;
+    const m = SPINNER.exec(joined);
+    if (!m) continue;
+    const said = m[1] ?? '';
+    const n = SPINNER_TOKENS.exec(said);
+    return {
+      ...(n ? { tokens: Math.round(Number(n[1]) * { '': 1, k: 1e3, m: 1e6 }[n[2].toLowerCase()]) } : {}),
+      ...(/\bth(?:inking|ought)\b/.test(said) ? { thinking: true } : {}),
+      ...(/compacting/i.test(joined) ? { compacting: true } : {}),
+    };
+  }
+  return null;
+}
+
 const LIMIT_HIT = /\b(?:usage|5-hour|weekly|session|opus|sonnet|plan) limit reached|\bhit your (?:[\w-]+ )?limit/i;
 // "resets 12:50am", "resets at 3pm", "resets Oct 9 at 10am", "resets Oct 9, 10am"
 const LIMIT_RESETS = /resets?(?: at)? ((?:[a-z]{3,9} \d{1,2},? (?:at )?)?\d{1,2}(?::\d{2})?\s?(?:am|pm)?)/i;

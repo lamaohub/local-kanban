@@ -15,6 +15,7 @@ before(async () => {
   mkdirSync(skillsDir, { recursive: true });
   process.env.HOME = home;
   process.env.KB_DATA_DIR = join(tmp, 'data');
+  process.env.KB_SKILLS_EXTRA = '';
   delete process.env.KB_CLAUDE_DIR;
   delete process.env.CLAUDE_CONFIG_DIR;
 

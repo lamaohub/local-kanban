@@ -40,9 +40,20 @@ function selfPkg() {
 }
 
 export function isNewer(candidate, current) {
-  const nums = (v) => String(v).split('-')[0].split('.').map((n) => parseInt(n, 10) || 0);
-  const [a, b] = [nums(candidate), nums(current)];
-  for (let i = 0; i < 3; i++) if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0);
+  const parse = (v) => {
+    const [core, ...pre] = String(v).split('-');
+    return { nums: core.split('.').map((n) => parseInt(n, 10) || 0), pre: pre.length ? pre.join('-').split('.') : null };
+  };
+  const [a, b] = [parse(candidate), parse(current)];
+  for (let i = 0; i < 3; i++) if ((a.nums[i] || 0) !== (b.nums[i] || 0)) return (a.nums[i] || 0) > (b.nums[i] || 0);
+  if (!a.pre || !b.pre) return !a.pre && !!b.pre;
+  for (let i = 0; i < Math.max(a.pre.length, b.pre.length); i++) {
+    const [x, y] = [a.pre[i], b.pre[i]];
+    if (x === y) continue;
+    if (x === undefined || y === undefined) return y === undefined;
+    if (/^\d+$/.test(x) && /^\d+$/.test(y)) return Number(x) > Number(y);
+    return x > y;
+  }
   return false;
 }
 

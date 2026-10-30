@@ -43,6 +43,14 @@ test('versions are compared as numbers, not as text', () => {
   assert.equal(isNewer('1.6.3', '1.6.3'), false, 'the same version is not an update');
   assert.equal(isNewer('1.6.2', '1.6.3'), false, 'an older version is never offered');
   assert.equal(isNewer('1.7.0-rc.1', '1.7.0'), false, 'a prerelease of the version you have is not an update');
+  assert.equal(isNewer('2.0.0-beta.1', '1.16.0'), true, 'the beta is offered to a board on 1.x');
+  assert.equal(isNewer('2.0.0', '2.0.0-beta.1'), true, 'the release is an update for its own beta');
+  assert.equal(isNewer('2.0.0-beta.2', '2.0.0-beta.1'), true);
+  assert.equal(isNewer('2.0.0-beta.10', '2.0.0-beta.9'), true, 'the last field of a prerelease is a number, not text');
+  assert.equal(isNewer('2.0.0-beta.1', '2.0.0-beta.1'), false);
+  assert.equal(isNewer('2.0.0-beta.1', '2.0.0-beta.2'), false);
+  assert.equal(isNewer('2.0.0-rc.1', '2.0.0-beta.3'), true);
+  assert.equal(isNewer('2.0.0-beta.1.1', '2.0.0-beta.1'), true);
 });
 
 test('the registry answer becomes the same shape the board already renders', async () => {

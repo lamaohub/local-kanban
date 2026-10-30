@@ -80,10 +80,11 @@ test('the changelog is edited under Unreleased, not inside a version that alread
   assert.equal(heads.filter((h) => h === 'Unreleased').length, 1, 'there is exactly one [Unreleased] section');
   const versions = heads.slice(1);
   assert.ok(versions.length, 'the changelog has no version sections at all');
-  const odd = versions.find((v) => !/^\d+\.\d+\.\d+$/.test(v));
+  const odd = versions.find((v) => !/^\d+\.\d+\.\d+(-[a-z]+\.\d+)?$/.test(v));
   assert.ok(!odd, `every section below Unreleased is a version, but there is [${odd}]`);
-  const num = (v) => v.split('.').map(Number);
-  const cmp = (a, b) => { const [x, y] = [num(a), num(b)]; for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; };
+  // the number of a prerelease comes last, and a release (Infinity) stands above its own betas
+  const num = (v) => { const [core, pre] = v.split('-'); return [...core.split('.').map(Number), pre ? Number(pre.split('.')[1]) : Infinity]; };
+  const cmp = (a, b) => { const [x, y] = [num(a), num(b)]; for (let i = 0; i < 4; i++) if (x[i] !== y[i]) return x[i] > y[i] ? 1 : -1; return 0; };
   assert.equal(versions[0], pkg.version,
     `the newest changelog section is ${versions[0]} but the package is ${pkg.version} — version sections are written by releasing, not by hand`);
   for (let i = 1; i < versions.length; i++) {

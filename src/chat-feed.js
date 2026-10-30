@@ -376,14 +376,26 @@ export async function saidCommand(path, code) {
   return null;
 }
 
+const WROTE_MIN_MS = 3000;
+const WROTE_MAX_MS = 30 * 60_000;
 /** The turns of a chat from its items, oldest first: [{at, user, images?, items, ms, open, compact?}]. A turn begins
     with the person's words (or a compacted conversation); `ms` — how long Claude worked, from Claude Code's own line;
     `open` — no such line yet: Claude is on it, or it was stopped. Steps get their outcome: `ms`, `error`, and the answer
-    to a question of Claude's. */
+    to a question of Claude's; `wrote` — how long Claude took to write the step. */
 export function chatTurns(items) {
   const calls = new Map();
   const byTask = new Map(); // id of background work → its call
-  for (const it of items) if (it.kind === 'tool') { calls.set(it.id, it); if (it.bg) it.running = true; }
+  let before = null;
+  for (const it of items) {
+    if (it.kind === 'tool') {
+      calls.set(it.id, it);
+      if (it.bg) it.running = true;
+      // Claude thinking and writing it. Moments are not told (a second step of one answer), a pause of hours is no work
+      const took = before === null ? 0 : it.at - before;
+      if (took >= WROTE_MIN_MS && took <= WROTE_MAX_MS) it.wrote = took;
+    }
+    before = it.at;
+  }
   for (const it of items) {
     const call = (it.kind === 'result' || it.kind === 'notified') && calls.get(it.id);
     if (!call) continue;

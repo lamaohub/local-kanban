@@ -1,14 +1,99 @@
-# local-kanban
+<h1 align="center">
+  <a href="https://www.npmjs.com/package/local-kanban"><img src="public/icon-192.png" alt="local-kanban" width="72" valign="middle" /></a> local-kanban
+  <br>
+  The kanban board Claude Code works from
+</h1>
 
-[![tests](https://github.com/lamaohub/local-kanban/actions/workflows/test.yml/badge.svg)](https://github.com/lamaohub/local-kanban/actions/workflows/test.yml)
+<p align="center">
+  <a href="https://www.npmjs.com/package/local-kanban"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/npm/local-kanban.svg?variant=secondary&mode=dark" /><img src="https://shieldcn.dev/npm/local-kanban.svg?variant=secondary&mode=light" alt="Version on npm" /></picture></a>
+  <a href="https://github.com/lamaohub/local-kanban/releases/latest"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/github/release/lamaohub/local-kanban.svg?variant=secondary&mode=dark" /><img src="https://shieldcn.dev/github/release/lamaohub/local-kanban.svg?variant=secondary&mode=light" alt="Latest release" /></picture></a>
+  <a href="LICENSE"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/github/license/lamaohub/local-kanban.svg?variant=secondary&mode=dark" /><img src="https://shieldcn.dev/github/license/lamaohub/local-kanban.svg?variant=secondary&mode=light" alt="License" /></picture></a>
+  <a href="#requirements"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/platforms-macOS%20%C2%B7%20Linux.svg?variant=secondary&mode=dark" /><img src="https://shieldcn.dev/badge/platforms-macOS%20%C2%B7%20Linux.svg?variant=secondary&mode=light" alt="Runs on macOS and Linux" /></picture></a>
+</p>
 
-A local kanban board built for working **in tandem with Claude Code**: the human plans and accepts tasks, Claude takes them from the queue, does the work and reports back — all through a token-efficient CLI called `kb`. Optionally mirrors everything to GitHub (issues + Projects v2).
+<h3 align="center"><a href="#install"><ins>Install</ins></a> &nbsp;·&nbsp; <a href="#how-you-use-it">How it works</a> &nbsp;·&nbsp; <a href="CHANGELOG.md">What's new</a> &nbsp;·&nbsp; <a href="README.ru.md">Русская версия</a></h3>
 
-Русская версия — [README.ru.md](README.ru.md).
+<p align="center">
+  <img width="960" src="https://raw.githubusercontent.com/lamaohub/local-kanban/main/docs/readme/board.gif" alt="Claude moves cards across the board on its own: To do, Prep, Doing, Deploying, Review" />
+</p>
 
-![Board](docs/screenshot-board.png)
+You plan and accept the work, Claude takes it from the queue, does it and reports back. Everything lives in one SQLite file on your machine and is driven by `kb`, a CLI that costs Claude few tokens. GitHub is an optional mirror, and nothing leaves your computer until you turn it on.
 
-![Dashboard](docs/screenshot-dashboard.png)
+> [!NOTE]
+> **2.0 is in beta, and it is what `npm install -g local-kanban` gives you.** It has been in daily use on real projects. Your board updates in place and keeps its data; to stay on the last 1.x, run `npm install -g local-kanban@1.16.0`. Found something broken? [Open an issue](https://github.com/lamaohub/local-kanban/issues).
+
+## Quick start
+
+```bash
+npm install -g local-kanban
+local-kanban            # setup wizard: Enter-Enter-Enter is enough
+local-kanban start      # board at http://localhost:3100
+```
+
+Needs Node.js 22 or newer on macOS or Linux. Details are under [Install](#install).
+
+## Features
+
+<h3 align="center">▶️ Press play, Claude starts working</h3>
+
+<p align="center">One button on <b>To do</b> hands the column to Claude Code, right inside the board: no window opens and no prompt is pasted. Claude takes each task, moves its card as it goes, commits, deploys if the project has a deploy skill, and stops at <b>Review</b>. Done is always&nbsp;your&nbsp;word.</p>
+
+<p align="center"><img src="https://raw.githubusercontent.com/lamaohub/local-kanban/main/docs/readme/claude-now.png" alt="Three Claude sessions working side by side in Claude now, each with its chat" width="100%" /></p>
+
+<br/>
+<h3 align="center">💬 Talk to Claude from&nbsp;the&nbsp;card</h3>
+
+<p align="center">Every task keeps its own chat: what Claude said, its steps folded, the files it changed, and how long it has been silent. Answer its questions and permissions there, send pictures, queue your next words while it works, or switch to its&nbsp;terminal.</p>
+
+<p align="center"><img src="https://raw.githubusercontent.com/lamaohub/local-kanban/main/docs/readme/card-chat.png" alt="A task card with the chat of its Claude: the steps, the changed files and a field to answer in" width="100%" /></p>
+
+<br/>
+<h3 align="center">🔎 A fresh Claude checks&nbsp;the&nbsp;work</h3>
+
+<p align="center">Let <b>Review</b> pile up, then press one button. <b>Claude review</b> makes a check task and starts a Claude that did not write the code: it tests every task, tries to break it, moves what survives to Done and leaves a report. <b>Automations</b> can start it the moment a&nbsp;project&nbsp;goes&nbsp;quiet.</p>
+
+<p align="center"><img src="https://raw.githubusercontent.com/lamaohub/local-kanban/main/docs/readme/claude-review.png" alt="Claude review lists the tasks waiting in Review by project, with a Check in Claude button" width="88%" /></p>
+
+<br/>
+<h3 align="center">📊 A dashboard that&nbsp;tells&nbsp;the&nbsp;truth</h3>
+
+<p align="center">Work time counts only while Claude actually works, and stops when its session closes. See what waits for you, streaks, cycle time, when work happens and what Claude&nbsp;cost&nbsp;you.</p>
+
+<p align="center"><img src="https://raw.githubusercontent.com/lamaohub/local-kanban/main/docs/readme/dashboard.png" alt="The dashboard: tasks waiting for you, week totals and activity charts" width="88%" /></p>
+
+<br/>
+<h3 align="center">📱 Your board on&nbsp;your&nbsp;phone</h3>
+
+<p align="center"><b>Settings → Wi-Fi</b> shows a QR code. Scan it and the board, the chats and Claude are in your hand, over your own network, with no account and no cloud. Install it as an app, or switch&nbsp;the&nbsp;door&nbsp;off&nbsp;again.</p>
+
+<p align="center"><img src="https://raw.githubusercontent.com/lamaohub/local-kanban/main/docs/readme/phone.png" alt="The board and a task chat on a phone" width="70%" /></p>
+
+<br/>
+<h3 align="center">🩺 Keep Claude's instructions&nbsp;healthy</h3>
+
+<p align="center">Switch on <b>Settings → Health</b> and the board measures every CLAUDE.md against the norms of Claude Code and shows which projects load more than Claude will follow, and what to&nbsp;move&nbsp;into&nbsp;rules.</p>
+
+<p align="center"><img src="https://raw.githubusercontent.com/lamaohub/local-kanban/main/docs/readme/health.png" alt="Health lists each project with the size of its CLAUDE.md and the norm it breaks" width="88%" /></p>
+
+<br/>
+<h3 align="center">🔌 Connected in&nbsp;one&nbsp;click</h3>
+
+<p align="center"><b>Settings → Claude Code</b> shows what the board needs and writes it after showing you exactly what will change: the status line for your rate limits, the hook for answers from the card, the skill that teaches Claude&nbsp;the&nbsp;workflow.</p>
+
+<p align="center"><img src="https://raw.githubusercontent.com/lamaohub/local-kanban/main/docs/readme/setup.png" alt="Settings for Claude Code: what shows on the board, how Claude starts and what it may do" width="88%" /></p>
+
+<br/>
+### Also in the box
+
+- **Rate limits in the sidebar**: the 5-hour and weekly limits of your subscription, and what each task spent in tokens.
+- **GitHub mirror**: every task an issue, every project a GitHub Project, one way and in the background. Off until you set it.
+- **Backups**: a daily copy, a copy before every migration, and any of them opens as a second board next to the live one.
+- **Manual tasks**: the `noclaude` label keeps your own work out of Claude's metrics, and Claude never takes it.
+- **Linked tasks, subtasks, checklists, pictures in comments, search, hotkeys**, all readable by Claude through `kb`.
+- **English and Russian**, following your system language.
+- **An HTTP API and an event stream** for your own bots and stats: [docs/API.md](docs/API.md).
+
+---
 
 ## How you use it
 
@@ -232,7 +317,7 @@ Your data is never touched by updates: `data/` is gitignored and schema migratio
 
 **Rollback:** stop the server, restore the latest file from `data/backups/` (daily) or `data/backups/pre-migrate/` over `data/kanban.db`, then `git checkout <previous tag>` and start again.
 
-Releases live in `main` (stable, tagged); day-to-day development happens in `dev`.
+Releases live in `main` (tagged); day-to-day development happens in `dev`. A beta goes out the same way as a release, so `latest` and the update button bring it too. To go back: `npm install -g local-kanban@1.16.0`.
 
 ## Removing the board
 

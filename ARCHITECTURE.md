@@ -71,7 +71,7 @@ These are deliberate and predate most of the features. Changes that break them n
 | `src/phantom.js` | Claude inside the board: a background tmux session per launch, its screen, typing into it |
 | `src/routes/terminal.js` | the card's Terminal tab: the screen, answers and keys, stopping |
 | `src/routes/horizons.js` | time-horizon goals |
-| `src/health.js`, `src/routes/health.js` | "Health": how big the instructions Claude Code reads in each project are (CLAUDE.md up the folders, imports, rules, auto memory) against the norms of its docs and its own warnings |
+| `src/health.js`, `src/routes/health.js` | "Health": how big the instructions Claude Code reads in each project are (CLAUDE.md up the folders, imports, rules, auto memory) against the norms of its docs and its own warnings; what loads only on demand — the CLAUDE.md of subfolders and the rules with `paths:` — apart |
 | `src/sync/github.js` | every `gh` invocation, the label palette, Projects v2 plumbing |
 | `src/sync/worker.js` | drains the sync queue in the background |
 | `src/backup.js`, `src/restore.js` | scheduled snapshots; opening a backup as a second board |

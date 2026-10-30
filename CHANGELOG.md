@@ -8,6 +8,30 @@ version it goes out as and opens an empty one again. Released sections are histo
 
 ## [Unreleased]
 
+## [2.0.0-beta.1]
+
+**2.0 beta.** The board stopped being a list of tasks next to Claude and became the place you work with it: Claude starts
+inside the board, you talk to it in the card, watch every session side by side, and a fresh Claude checks the work. A
+beta goes to everyone, like a release: `npm install -g local-kanban` and the update button both bring it, and your
+data stays. To stay on the last 1.x, run `npm install -g local-kanban@1.16.0`.
+
+### Changed
+
+- **The README shows the board as it is now**, in the dark theme, with Claude moving cards in the first picture.
+- **Update checks understand betas.** A board on a beta is offered the next beta and the release it leads to; before,
+  both looked like the version it already had.
+
+- **The chat says what Claude is doing while nothing lands in the transcript.** A long script takes a minute or two to
+  write, and all that time the chat said only "Claude is working…". The light is green now and tells how long the
+  transcript has been silent and, for a Claude inside the board, whether it is thinking or writing and how many tokens
+  it wrote. A counter that stood still for a minute with nothing to wait on turns the light yellow: "no answer for 1 min".
+- **Steps tell writing from running.** A step and a folded run of steps say how long Claude took to write them and how
+  long they ran: "wrote for 1 min 31 s · ran for 19 s". Before, only the second number was shown, and a session of
+  minutes looked like commands of seconds.
+- **Health lists the rules with `paths:` too.** The rules of a project's `.claude/rules` that Claude Code loads only
+  when it works with their files are listed with the CLAUDE.md files of subfolders, with their size: past the
+  per-file limit Claude Code reads only the start of such a file.
+
 ## [1.16.0]
 
 ### Added

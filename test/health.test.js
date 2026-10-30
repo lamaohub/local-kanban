@@ -41,7 +41,8 @@ test('a project is measured as a session started in its folder reads it', async 
   assert.deepEqual(p.files.map((f) => f.kind), ['parent', 'main', 'import', 'local', 'rule', 'memory']);
   assert.deepEqual(p.main, { path: 'CLAUDE.md', chars: 1276, lines: 252 });
   assert.equal(p.files.find((f) => f.kind === 'memory').lines, 200, 'only the first 200 lines of the auto memory load');
-  assert.deepEqual(p.nested.map((f) => f.path), ['src/CLAUDE.md'], 'a subfolder\'s CLAUDE.md is apart; node_modules is not walked');
+  assert.deepEqual(p.nested.map((f) => [f.kind, f.path]), [['scoped', '.claude/rules/scoped.md'], ['nested', 'src/CLAUDE.md']],
+    'a subfolder\'s CLAUDE.md and a rule with paths: are apart, the bigger first; node_modules is not walked');
   assert.equal(p.chars, p.files.reduce((n, f) => n + f.chars, 0));
 });
 

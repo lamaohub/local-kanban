@@ -131,7 +131,8 @@ test('a command Claude wrote runs in a Terminal window, in the project folder', 
     const typed = (code, lang) => {
       const spec = launch.commandSpec({ code, folder: at, lang }, 'darwin');
       const line = unquote(/do script (".*")$/s.exec(spec.args[1])[1]);
-      return spawnSync('/bin/zsh', ['-f', '-i'], { input: `${line}\n`, encoding: 'utf8', cwd: at, env: { PATH: '/usr/bin:/bin', HOME: at }, timeout: 10000 });
+      // alone never ended it and a release started from a terminal stood here for good. Its own session has no terminal
+      return spawnSync('/bin/zsh', ['-f', '-i'], { input: `${line}\n`, encoding: 'utf8', cwd: at, env: { PATH: '/usr/bin:/bin', HOME: at }, timeout: 10000, killSignal: 'SIGKILL', detached: true });
     };
     for (const code of ['rm -f nothing # old log', '# the first line, a comment\nprintf ok > made', '# needs $(touch ran)\ntrue']) {
       const r = typed(code, 'bash');

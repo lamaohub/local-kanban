@@ -1,6 +1,6 @@
 
 import { api, esc, ic, seg, tr } from './core.js';
-import { SHORT_MONTHS, copyText, resumeOnBoard } from './sse.js';
+import { SHORT_MONTHS, copyText, resumeOnBoard, usageFmt } from './sse.js';
 import { matchKey, plural, setClaudeView } from './settings.js';
 import { refusalLine } from './unsaved.js';
 import { drawerIsFull, openDrawerFull, openLightbox, setDrawerFull, uploadAttachment } from './drawer.js';
@@ -10,6 +10,8 @@ import { buildSelect } from './board.js';
 import { SHELL_LANGS, chatText } from './chat-md.js';
 import { askBlock, isSending, plainLabel, questionAsk, renderAsks } from './asks.js';
 import { intoField, leftoverWords } from './ask-rules.js';
+import { paceStep, paceWords, stalled } from './pace-rules.js';
+import { tokensPhrase } from './usage-rules.js';
 
 const TURNS_STEP = 15;
 const STEP_KIND = {
@@ -81,7 +83,7 @@ function clockOf(iso) {
 }
 
 function stepRow(it, working = false) {
-  const tail = it.running ? '' : [dur(it.ms), it.error ? '' : (it.ms !== undefined ? '✓' : '')].filter(Boolean).join(' ');
+  const tail = it.running ? '' : [it.wrote ? timesWords(it.wrote, it.ms) : dur(it.ms), it.error ? '' : (it.ms !== undefined ? '✓' : '')].filter(Boolean).join(' ');
   const steps = it.helper ? `<span class="chat-step-n">${it.helper.steps} ${esc(plural(it.helper.steps, 'step', 'steps'))}</span>` : '';
   const since = it.running ? clockOf(it.at) : '';
   const bg = it.running ? `<span class="chat-bg">${working ? '<span class="chat-pulse"></span>' : ''}${esc(since ? `${tr('in the background since')} ${since}` : tr('in the background'))}</span>` : '';
@@ -89,7 +91,7 @@ function stepRow(it, working = false) {
     : `<span class="chat-step-t">${esc(it.text)}</span>`;
   return `<div class="chat-step${it.error ? ' err' : ''}${it.running ? ' running' : ''}" title="${esc(it.text)}"><span class="chat-step-k">${esc(tr(STEP_KIND[it.tool] || 'Tool'))}</span>`
     + what
-    + `<span class="chat-step-d">${steps}${bg}${it.error ? `<span class="chat-x" title="${esc(tr('failed'))}">✗</span>` : ''}${esc(tail)}</span></div>`
+    + `<span class="chat-step-d"${it.wrote ? ` title="${esc(tr(TIMES_TITLE))}"` : ''}>${steps}${bg}${it.error ? `<span class="chat-x" title="${esc(tr('failed'))}">✗</span>` : ''}${esc(tail)}</span></div>`
     + (it.helper?.now ? `<div class="chat-answer chat-now">↳ ${esc(tr(STEP_KIND[it.helper.now.tool] || 'Tool'))} · ${esc(it.helper.now.text)}</div>` : '')
     + (it.answer ? `<div class="chat-answer">↳ ${esc(it.answer)}</div>` : '');
 }
@@ -174,6 +176,9 @@ export function sinceWords(iso, now = Date.now()) {
   if (s < 60) return `${s} ${tr('s')}`;
   return s < 3600 ? `${Math.floor(s / 60)} ${tr('min')} ${s % 60} ${tr('s')}` : `${Math.floor(s / 3600)} ${tr('h')} ${Math.floor(s / 60) % 60} ${tr('min')}`;
 }
+const TIMES_TITLE = 'How long Claude thought and wrote this, and how long it ran';
+const RUN_TIMES_MIN_MS = 10000; // a run written in moments says nothing of it: the line stays short
+const timesWords = (wrote, ran) => [`${tr('wrote for')} ${sinceWords(0, wrote)}`, ran >= 1000 ? `${tr('ran for')} ${sinceWords(0, ran)}` : ''].filter(Boolean).join(' · ');
 const baseName = (f) => String(f).slice(String(f).lastIndexOf('/') + 1);
 function runHTML(steps, id, open, { working, now = null, pic = null }) {
   const failed = steps.filter((s) => s.error).length;
@@ -191,7 +196,10 @@ function runHTML(steps, id, open, { working, now = null, pic = null }) {
   // a picture Claude read shows at the line's end, as in the app, and opens whole on a click (not the fold: `data-pic`)
   const seen = pic && steps.findLast((s) => s.pic);
   const thumb = seen ? `<img class="chat-run-pic" data-pic="${esc(seen.pic)}" src="${esc(pic(seen.pic))}" alt="" title="${esc(tr('Open the picture'))}" loading="lazy" decoding="async">` : '';
-  return `<button type="button" class="chat-run${open ? ' open' : ''}${now ? ' now' : ''}" data-fold="${esc(id)}" aria-expanded="${open}">${head}`
+  const wrote = steps.reduce((x, s) => x + (s.wrote || 0), 0);
+  const ran = steps.reduce((x, s) => x + (s.running ? 0 : s.ms || 0), 0);
+  const times = !now && wrote >= RUN_TIMES_MIN_MS ? `<span class="chat-run-times" title="${esc(tr(TIMES_TITLE))}">${esc(timesWords(wrote, ran))}</span>` : '';
+  return `<button type="button" class="chat-run${open ? ' open' : ''}${now ? ' now' : ''}" data-fold="${esc(id)}" aria-expanded="${open}">${head}${times}`
     + `${failed ? `<span class="chat-x">✗ ${failed}</span>` : ''}${ic('chevron', 11)}${thumb}</button>`
     + (open ? `<div class="chat-unfold chat-runbox" data-of="${esc(id)}">${steps.map((s) => stepRow(s, working)).join('')}</div>` : '');
 }
@@ -311,24 +319,38 @@ const AWAY_LOOK_MS = 5000; // a transcript not written yet (a Claude just starte
 const LIT_LOOK_MS = 5000;
 const SENT_LOOK_MS = 1500;
 
-export function workingLine(d) {
+/** A step of the turn going on with no answer yet, or a helper at work: what Claude waits on — it writes nothing then. */
+const stepInHand = (d) => {
+  const turn = d.turns?.at(-1);
+  return Boolean(turn?.open && turn.items.some((it) => it.kind === 'tool' && it.ms === undefined && !it.running)) || running(d.turns).helpers > 0;
+};
+/** The moment the last line of a turn tells of: the transcript is silent from there on. 0 when there is none. */
+function lastMoment(turn) {
+  const moments = [new Date(turn.at).getTime(), ...turn.items.map((it) => new Date(it.at).getTime() + (it.ms || 0))];
+  return Math.max(...moments.filter(Number.isFinite), 0);
+}
+
+export function workingLine(d, stuckSince = 0) {
   if (!(d.working || (d.send && d.state === 'busy'))) return '';
   const { helpers, commands } = running(d.turns);
   const turn = d.turns?.at(-1);
   const turnOn = Boolean(turn?.open);
   // the card's head) — it waits for the person; «Claude works» there had the owner ask it, and it said nothing ran
   const left = !turnOn && d.turns?.length && !helpers && commands && d.own === false;
-  const words = tr(turnOn || !d.turns?.length ? 'Claude is working…' : left ? 'Waits for you · commands in the background' : 'Claude works in the background…')
+  const atWork = d.pace && !stuckSince ? paceWords(d.pace, stepInHand(d)) : 'Claude is working…';
+  const words = tr(turnOn || !d.turns?.length ? atWork : left ? 'Waits for you · commands in the background' : 'Claude works in the background…')
     + (helpers ? ` · ${tr('helpers at work:')} ${helpers}` : '');
   // a step with no answer yet, not one handed to the background — the one Claude waits on now
   const now = turnOn ? turn.items.at(-1) : null;
   const step = now?.kind === 'tool' && now.ms === undefined && !now.running
     ? `<span class="chat-working-now" title="${esc(now.text)}">${esc(tr(STEP_KIND[now.tool] || 'Tool'))} · ${esc(now.text)}</span>` : '';
-  return `<div class="chat-working"><span class="chat-pulse"></span><span class="chat-working-t">${esc(words)}</span>${step}</div>`;
+  const since = stuckSince || (turnOn ? lastMoment(turn) : 0);
+  const meter = since ? `<span class="chat-working-m">${stuckSince ? `${esc(tr('no answer for'))} ` : ''}<span class="chat-run-time" data-since="${esc(new Date(since).toISOString())}"></span><span class="chat-working-n"></span></span>` : '';
+  return `<div class="chat-working${stuckSince ? ' stalled' : ''}"><span class="chat-pulse"></span><span class="chat-working-t">${esc(words)}</span>${meter}${step}</div>`;
 }
 
-export function liveHTML(d) {
-  const lit = workingLine(d);
+export function liveHTML(d, stuckSince = 0) {
+  const lit = workingLine(d, stuckSince);
   if (!lit) return '';
   const going = (d.turns || []).flatMap((t) => t.items.filter((it) => it.kind === 'tool' && it.running));
   return `${going.length ? `<div class="chat-going">${going.map((it) => stepRow(it, true)).join('')}</div>` : ''}${lit}`;
@@ -552,6 +574,23 @@ export function mountChat(box, { key = null, session = null, scroller = null, fu
     };
   };
 
+  function liveNow(d) {
+    if (!d.pace) { c.paceMark = null; return liveHTML(d); }
+    const at = Date.now();
+    c.paceMark = paceStep(c.paceMark, JSON.stringify([d.session, d.pace, d.turns?.at(-1)?.items.length]), at);
+    return liveHTML(d, stalled(d.pace, stepInHand(d), c.paceMark, at) ? c.paceMark.at : 0);
+  }
+  function showLive(lit, d) {
+    // drawn only when it changed: the pulse would start anew on every look, five seconds apart
+    if (liveEl.dataset.html !== lit) { liveEl.dataset.html = lit; liveEl.innerHTML = lit; }
+    const count = liveEl.querySelector?.('.chat-working-n');
+    if (!count) return;
+    // a count that stopped says nothing new, and a narrow column has no room for it beside the words of a silent Claude
+    count.textContent = d.pace?.tokens && !liveEl.querySelector('.stalled') ? ` · ${tokensPhrase(d.pace.tokens, usageFmt)}` : '';
+    tickRuns();
+    if (!runClock) runClock = setInterval(tickRuns, 1000);
+  }
+
   function paint() {
     notePlace();
     const d = c.data;
@@ -590,7 +629,7 @@ export function mountChat(box, { key = null, session = null, scroller = null, fu
     const keepFrom = sc.scrollHeight - sc.scrollTop;
     const keepTop = sc.scrollTop;
     const anchor = atEnd ? null : seenTurn();
-    const lit = liveHTML(d);
+    const lit = liveNow(d);
     const sending = sentHTML(d);
     if (!d.session) {
       log.innerHTML = `<div class="chat-empty muted">${esc(tr('Claude has not worked on this task yet'))}</div>`;
@@ -609,8 +648,7 @@ export function mountChat(box, { key = null, session = null, scroller = null, fu
           pic: (id) => `/api/tasks/${seg(c.key)}/chat/picture/${seg(id)}?session=${encodeURIComponent(c.session)}` })).join('')
         + sending;
     }
-    // drawn only when it changed: the pulse would start anew on every look, five seconds apart
-    if (liveEl.dataset.html !== lit) { liveEl.dataset.html = lit; liveEl.innerHTML = lit; }
+    showLive(lit, d);
     if (!runClock && log.querySelector('.chat-run-time')) runClock = setInterval(tickRuns, 1000);
     // stopped (Esc) or ended its turn rings no event once its last line is written: the light stayed on for good
     clearTimeout(c.helperTimer);
@@ -916,6 +954,8 @@ export function mountChat(box, { key = null, session = null, scroller = null, fu
     if (key !== c.key || !mounted.has(c)) return; // another task meanwhile, or gone
     c.shownAsked = asked; // what the chat on screen was asked for: a pick that fails goes back to it
     if (r.same) {
+      c.data.pace = r.pace;
+      showLive(liveNow(c.data), c.data);
       if (workingLine(c.data)) { clearTimeout(c.helperTimer); c.helperTimer = setTimeout(refresh, LIT_LOOK_MS); }
       return;
     }

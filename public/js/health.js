@@ -28,6 +28,7 @@ function kindWord(f) {
   return tr({
     main: 'the project\'s own', parent: 'from a folder above', local: 'personal, CLAUDE.local.md', rule: 'a rule without paths',
     memory: 'auto memory — the part that loads', user: 'yours, in every project', nested: 'loads when Claude works in that folder',
+    scoped: 'a rule with paths: — loads when Claude works with its files',
   }[f.kind] || f.kind);
 }
 function fileHTML(f, norms) {

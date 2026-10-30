@@ -70,4 +70,6 @@ jobs:
       # "this operation requires a one-time password". So there is deliberately no env here, and the
       # NPM_TOKEN secret is deleted rather than kept "just in case".
       - run: npm install -g npm@latest
-      - run: npm publish --access public --provenance
+      # npm refuses a prerelease without an explicit --tag. It is `latest` for every version, so a
+      # beta reaches the same people as a release: `npm install -g local-kanban` and the update button.
+      - run: npm publish --access public --provenance --tag latest

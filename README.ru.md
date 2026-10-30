@@ -1,14 +1,99 @@
-# local-kanban
+<h1 align="center">
+  <a href="https://www.npmjs.com/package/local-kanban"><img src="public/icon-192.png" alt="local-kanban" width="72" valign="middle" /></a> local-kanban
+  <br>
+  Канбан-доска, с которой работает Claude Code
+</h1>
 
-[![tests](https://github.com/lamaohub/local-kanban/actions/workflows/test.yml/badge.svg)](https://github.com/lamaohub/local-kanban/actions/workflows/test.yml)
+<p align="center">
+  <a href="https://www.npmjs.com/package/local-kanban"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/npm/local-kanban.svg?variant=secondary&mode=dark" /><img src="https://shieldcn.dev/npm/local-kanban.svg?variant=secondary&mode=light" alt="Версия в npm" /></picture></a>
+  <a href="https://github.com/lamaohub/local-kanban/releases/latest"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/github/release/lamaohub/local-kanban.svg?variant=secondary&mode=dark" /><img src="https://shieldcn.dev/github/release/lamaohub/local-kanban.svg?variant=secondary&mode=light" alt="Последний релиз" /></picture></a>
+  <a href="LICENSE"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/github/license/lamaohub/local-kanban.svg?variant=secondary&mode=dark" /><img src="https://shieldcn.dev/github/license/lamaohub/local-kanban.svg?variant=secondary&mode=light" alt="Лицензия" /></picture></a>
+  <a href="#требования"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/platforms-macOS%20%C2%B7%20Linux.svg?variant=secondary&mode=dark" /><img src="https://shieldcn.dev/badge/platforms-macOS%20%C2%B7%20Linux.svg?variant=secondary&mode=light" alt="Работает на macOS и Linux" /></picture></a>
+</p>
 
-Локальная канбан-доска для работы **в паре с Claude Code**: человек планирует и принимает задачи, Claude берёт их из очереди, делает и отчитывается — через токен-экономный CLI `kb`. Опционально зеркалит всё в GitHub (issues + Projects v2).
+<h3 align="center"><a href="#установка"><ins>Установить</ins></a> &nbsp;·&nbsp; <a href="#как-этим-пользоваться">Как это работает</a> &nbsp;·&nbsp; <a href="CHANGELOG.md">Что нового</a> &nbsp;·&nbsp; <a href="README.md">English</a></h3>
 
-English version — [README.md](README.md).
+<p align="center">
+  <img width="960" src="https://raw.githubusercontent.com/lamaohub/local-kanban/main/docs/readme/board.gif" alt="Claude сам двигает карточки по доске: Сделать, Подготовка, Делаю, Выкатываю, Проверяю" />
+</p>
 
-![Доска](docs/screenshot-board.png)
+Вы планируете и принимаете работу, Claude берёт её из очереди, делает и отчитывается. Всё лежит в одном файле SQLite на вашем компьютере и управляется через `kb` — CLI, который тратит мало токенов Claude. GitHub — необязательное зеркало: пока вы его не включите, ничего с компьютера не уходит.
 
-![Дашборд](docs/screenshot-dashboard.png)
+> [!NOTE]
+> **2.0 в бете, и именно её ставит `npm install -g local-kanban`.** Она каждый день работает на настоящих проектах. Доска обновляется на месте и сохраняет данные; остаться на последней 1.x — `npm install -g local-kanban@1.16.0`. Что-то сломалось? [Заведите issue](https://github.com/lamaohub/local-kanban/issues).
+
+## Быстрый старт
+
+```bash
+npm install -g local-kanban
+local-kanban            # мастер настройки: хватит Enter-Enter-Enter
+local-kanban start      # доска на http://localhost:3100
+```
+
+Нужен Node.js 22 или новее на macOS или Linux. Подробности — в разделе [Установка](#установка).
+
+## Возможности
+
+<h3 align="center">▶️ Нажали play — Claude работает</h3>
+
+<p align="center">Одна кнопка на колонке <b>Сделать</b> отдаёт её Claude Code прямо внутри доски: окна не открываются, промпт вставлять не нужно. Claude берёт каждую задачу, сам двигает карточку, коммитит, выкатывает, если у проекта есть скилл деплоя, и останавливается на <b>Проверяю</b>. Готово — всегда&nbsp;ваше&nbsp;слово.</p>
+
+<p align="center"><img src="https://raw.githubusercontent.com/lamaohub/local-kanban/main/docs/readme/claude-now.png" alt="Три сессии Claude работают рядом в разделе Claude now, у каждой свой чат" width="100%" /></p>
+
+<br/>
+<h3 align="center">💬 Разговор с Claude прямо&nbsp;в&nbsp;карточке</h3>
+
+<p align="center">У каждой задачи свой чат: что сказал Claude, свёрнутые шаги, изменённые файлы и сколько он уже молчит. Там же можно ответить на вопросы и разрешения, отправить картинку, поставить следующие слова в очередь, пока он работает, или открыть&nbsp;его&nbsp;терминал.</p>
+
+<p align="center"><img src="https://raw.githubusercontent.com/lamaohub/local-kanban/main/docs/readme/card-chat.png" alt="Карточка задачи с чатом Claude: шаги, изменённые файлы и поле ответа" width="100%" /></p>
+
+<br/>
+<h3 align="center">🔎 Работу проверяет свежий&nbsp;Claude</h3>
+
+<p align="center">Дайте колонке <b>Проверяю</b> накопиться и нажмите одну кнопку. <b>Claude review</b> заводит задачу-проверку и запускает Claude, который этот код не писал: он тестирует каждую задачу, пробует её сломать, выжившее переводит в Готово и оставляет отчёт. <b>Автоматизации</b> запускают это сами, когда&nbsp;проект&nbsp;затих.</p>
+
+<p align="center"><img src="https://raw.githubusercontent.com/lamaohub/local-kanban/main/docs/readme/claude-review.png" alt="Claude review показывает задачи в проверке по проектам и кнопку Check in Claude" width="88%" /></p>
+
+<br/>
+<h3 align="center">📊 Дашборд, которому&nbsp;можно&nbsp;верить</h3>
+
+<p align="center">Время работы считается, только пока Claude действительно работает, и стоит, когда сессия закрыта. Видно, что ждёт вас, серии, цикл задачи, когда идёт работа и сколько&nbsp;стоил&nbsp;Claude.</p>
+
+<p align="center"><img src="https://raw.githubusercontent.com/lamaohub/local-kanban/main/docs/readme/dashboard.png" alt="Дашборд: что ждёт вас, итоги недели и графики активности" width="88%" /></p>
+
+<br/>
+<h3 align="center">📱 Доска у вас&nbsp;в&nbsp;телефоне</h3>
+
+<p align="center"><b>Настройки → Wi-Fi</b> показывают QR-код. Отсканируйте его, и доска, чаты и Claude у вас в руке — по вашей сети, без аккаунтов и облака. Можно поставить как приложение, а дверь&nbsp;в&nbsp;любой&nbsp;момент&nbsp;закрыть.</p>
+
+<p align="center"><img src="https://raw.githubusercontent.com/lamaohub/local-kanban/main/docs/readme/phone.png" alt="Доска и чат задачи на телефоне" width="70%" /></p>
+
+<br/>
+<h3 align="center">🩺 Здоровье инструкций&nbsp;Claude</h3>
+
+<p align="center">Включите <b>Настройки → Здоровье</b>, и доска сверит каждый CLAUDE.md с нормами Claude Code и покажет, в каких проектах инструкций больше, чем Claude выполнит, и что вынести&nbsp;в&nbsp;правила.</p>
+
+<p align="center"><img src="https://raw.githubusercontent.com/lamaohub/local-kanban/main/docs/readme/health.png" alt="Здоровье: проекты с размером CLAUDE.md и нарушенной нормой" width="88%" /></p>
+
+<br/>
+<h3 align="center">🔌 Подключение в&nbsp;один&nbsp;клик</h3>
+
+<p align="center"><b>Настройки → Claude Code</b> показывают, чего доске не хватает, и записывают это, сперва показав, что именно изменится: строку состояния для лимитов, хук для ответов из карточки, скилл с рабочим&nbsp;циклом&nbsp;для&nbsp;Claude.</p>
+
+<p align="center"><img src="https://raw.githubusercontent.com/lamaohub/local-kanban/main/docs/readme/setup.png" alt="Настройки Claude Code: что показывать на доске, как запускать Claude и что ему можно" width="88%" /></p>
+
+<br/>
+### И ещё
+
+- **Лимиты в сайдбаре**: пятичасовой и недельный лимиты подписки и расход токенов по каждой задаче.
+- **Зеркало на GitHub**: задача — issue, проект — GitHub Project, в одну сторону и в фоне. Выключено, пока не настроите.
+- **Бэкапы**: копия каждый день, копия перед каждой миграцией, и любую можно открыть второй доской рядом с живой.
+- **Ручные задачи**: метка `noclaude` не пускает вашу работу в метрики Claude, и Claude такую задачу не возьмёт.
+- **Связи, подзадачи, чек-листы, картинки в комментариях, поиск, горячие клавиши** — и всё это Claude читает через `kb`.
+- **Русский и английский** — по языку системы.
+- **HTTP API и поток событий** для своих ботов и статистики: [docs/API.md](docs/API.md).
+
+---
 
 ## Как этим пользоваться
 
@@ -216,7 +301,7 @@ npm run update   # git pull + npm install + pm2 restart (если примени
 
 **Откат:** останови сервер, восстанови свежий файл из `data/backups/` (суточные) или `data/backups/pre-migrate/` поверх `data/kanban.db`, затем `git checkout <предыдущий тег>` и запусти снова.
 
-Релизы живут в `main` (стабильное, с тегами); ежедневная разработка — в `dev`.
+Релизы живут в `main` (с тегами); ежедневная разработка — в `dev`. Бета выходит так же, как релиз, поэтому `latest` и кнопка обновления приносят и её. Вернуться назад: `npm install -g local-kanban@1.16.0`.
 
 ## Как убрать доску
 

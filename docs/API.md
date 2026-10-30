@@ -105,10 +105,10 @@ built get that one build.
 queue, send, state, model, v}` (`model` — the model of the session's newest answer, or null): the newest `turns` (15 by default, up to 200) turns of one session of the task — the one
 asked for, which must be the task's, else the newest. A turn is `{at, user, images?, shots?, items, ms, open, compact?}`: the
 person's words (`images` — how many pictures came with them, `shots` — those the board can show, `[{ref, w?, h?}]` for
-`…/chat/image/:ref`, with the picture's size when its head tells it), then Claude's `text` and its steps (`tool` items as in the work feed, with `ms` and `error`; a `Read` of a
+`…/chat/image/:ref`, with the picture's size when its head tells it), then Claude's `text` and its steps (`tool` items as in the work feed, with `ms` and `error`, and `wrote` — how long Claude took to write the step, when that is 3 s or more; a `Read` of a
 picture has `pic` — the step's id for `…/chat/picture/:toolId`; an answered `AskUserQuestion` has `answers`
 `[{h?, q, a}]` — header, question, answer), `ms` —
-how long Claude worked on it, `open` — not over yet. What a step returned is never sent. `queue` — the words waiting
+how long Claude worked on it, `open` — not over yet. What a step returned is never sent. `pace` — what Claude Code's spinner says of a Claude at work in a board terminal, `{tokens?, thinking?, compacting?}`: it is not part of `v`, and comes with a `same` answer too. `queue` — the words waiting
 for that Claude, `{id, text, images_n?, at}`; `send` — whether the chat can speak to it (only the board's own Claude of the task,
 in the session shown); `state` — `idle`, `busy`, `question` or `gone` while it can; with `question`, `question` carries
 the last lines of its screen — the question, to be answered with the keys of `POST /api/tasks/:key/terminal`. `?seen=<v>` answers `{same: true,
