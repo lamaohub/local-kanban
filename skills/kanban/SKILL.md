@@ -33,13 +33,18 @@ kb review <key> "note"        # move to review, then leave the note. A rejected 
 kb p                          # projects: slug (PREFIX) b0 t2 pp0 d1 dp0 r1 ✓5 !1  (pp = prep)
 kb ls <proj> [-s st] [-a]     # tasks (without -a, backlog/done/cancelled are hidden); 📌 = pinned
                               # by the human — it needs attention
-kb show <key>                 # details + checklist + issue + comments: the last five plus every
+kb show <key> [<key> …]       # details + checklist + issue + comments: the last five plus every
                               # human note since your last report. Marks: 🤖 yours, 👤 the
                               # human's, ⎇ a commit stat the board attached by itself (not the
                               # human speaking), ☑ the record of an answer the human gave you
                               # from the card (you already got it — nothing new to act on).
                               # "… N more comments not printed" = the rest are
                               # on the board — nothing is dropped silently.
+                              # Several keys: the cards in that order, a line of --- between them.
+                              # A wrong key refuses before anything is read; a task the board
+                              # refuses stops the command there, and stderr says
+                              # "stopped at <key>: N of M printed", the rest not read, code not 0.
+                              # "<key> is cut short" = its comments did not load: the card is partial.
 kb add <proj> "title" [-d "desc"] [-p high|med|low] [-s todo]   # goes to backlog by default!
 kb mv <key> todo|prep|doing|ready|deploy|review   # never done/cancelled: those are kb done / kb cancel
 kb done <key> · kb cancel <key> · kb pri <key> high|med|low|none
@@ -112,8 +117,8 @@ Claude takes a task as far as *review* and stops. Only the user moves anything t
 except when the user hands acceptance over with a check task (see Special cases).
 
 **When the prompt lists specific keys** (the 📋 button on the "To do" column produces them) those
-are SPECIFIC tasks, not a queue. **Read ALL of them before starting the first** — `kb show <key>` for
-every key, in one go (NOT `kb take`, which pulls ONE next task from the project's `todo`): tasks of one
+are SPECIFIC tasks, not a queue. **Read ALL of them before starting the first** — `kb show <key> <key> …`
+with every key, in one go (NOT `kb take`, which pulls ONE next task from the project's `todo`): tasks of one
 batch often answer each other — a key, a decision or a file another task needs, two tasks on one place —
 and reading them one at a time means doing the first without what the third one says. Then plan the order,
 take together what is solved together (see Special cases), and **move each to prep right away:
@@ -148,14 +153,17 @@ for each. Use `kb take X` only when asked to "work through project X" without sp
    attaches commit stats to the task on the move to `review`: it looks for a commit that really
    references the issue (`git log -1 --grep=#N`). **When sync is off** (the task has no issue
    number) stats come from the last commit made while the task was in progress, so move the task
-   to `doing` BEFORE its commits. Commit with `git -C <path>` or after `cd <path>` — the shell's
+   to `doing` BEFORE its commits. The "on main" mark of a card is stricter: it goes by the first key
+   of the subject (`TIC-3 fix`, `fix (TIC-3)`; a key further on or in the body is a mention), by
+   `owner/repo#<N>`, or by a branch `claude/<key>`, so without an issue name the key first. Commit with `git -C <path>` or after `cd <path>` — the shell's
    cwd may be outside the repository. A project not under git simply skips the commit step; that
    is normal. **Several tasks touching one file** → either one commit referencing both issues
    (`… (#A, #B)`), or the "revert the hunk → commit → restore it" trick; with 3+ interleaved
    changes, slice the full diff into per-issue patch files and apply them with `git apply`,
    committing in between.
 4. If `kb info` says "ships on the word": after the commit `kb mv <key> ready` and stop there — the deployment waits for the
-   human's word; the board refuses `deploy` from anywhere but `ready`, and `doing` → `review`. Once they say so, go on as
+   human's word; the board refuses `deploy` from anywhere but `ready`, and `doing` → `review`, also by way of `prep`, and
+   will not take `noclaude` or `check` on a task in `prep`, `doing` or `ready`. Once they say so, go on as
    below. Nothing to ship after all: `kb review` from `ready`.
    If the project has a `deploy_skill`: `kb mv <key> deploy` → run the deployment with that skill →
    step 5. Without a deploy_skill, go straight to step 5. Take the skill from `deploy_skill_path`
@@ -189,6 +197,10 @@ One line of summary at the end.
   following the real flow) and confirm the actual cause — only then fix it. A second attempt at a
   returned task often cures a plausible but wrong cause.
 - "cancel TIC-3" → `kb cancel TIC-3`.
+- **The user's words in your terminal bring the task you handed in back** from `review` to `doing` by
+  themselves, with no command from you (a note of yours moves nothing). Finished the turn those words
+  asked for → `kb review TIC-3 "…"` again. Words about something else, with nothing changed for this
+  task, and the board puts it back in `review` on its own.
 - "do TIC-3" (a specific task in any status except done) → `kb show TIC-3` (the `👤` note comes
   first; open `📎` screenshots with Read) and **`kb mv TIC-3 prep` right away**, then steps 2–6
   (`already taken` means another Claude session holds it — see above).
@@ -284,7 +296,8 @@ One line of summary at the end.
   wait two seconds and retry once. **Exit codes are distinct: `1` — the board is down (a restart
   and a retry make sense), `2` — the request was rejected (retrying is pointless, read the
   message), `3` — `kb` itself broke (stack trace under `KB_DEBUG=1`), `4` — the board answered,
-  but with a failure of its own (5xx) or with something that is not JSON. Gate on the code, not on
+  but with a failure of its own (5xx), with something that is not JSON, or it broke off in the middle
+  of the answer (what was asked may or may not have happened). Gate on the code, not on
   the message text.** Code `4` is worth reading closely: it means the board falls over on this
   request, or `KB_URL` points at something that is not the board at all.
 - The web board is for the human: http://localhost:3100 — do not open it, do not scrape it.

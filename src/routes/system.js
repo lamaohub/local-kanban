@@ -321,6 +321,7 @@ export default async function systemRoutes(app) {
   const flowView = () => ({
     ready_gate: gateOfBoard(),
     ready_n: db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE status = 'ready'").get().n,
+    own_off: db.prepare('SELECT COALESCE(name, slug) AS name FROM projects WHERE archived = 0 AND ready_gate = 0 ORDER BY position, name').all().map((p) => p.name), // their own word beats the switch
     left_n: db.prepare("SELECT COUNT(*) AS n FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.status = 'ready' AND COALESCE(p.ready_gate, ?) = 0").get(gateOfBoard() ? 1 : 0).n,
   });
   app.get('/api/flow', flowView);
@@ -332,7 +333,7 @@ export default async function systemRoutes(app) {
     return flowView();
   });
 
-  app.get('/api/about', async () => {
+  app.get('/api/about', async (req) => {
     const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
     const stat = (p) => { try { return statSync(p); } catch { return null; } };
     const commit = await new Promise((resolve) => {
@@ -343,9 +344,9 @@ export default async function systemRoutes(app) {
     return {
       commit,
       app_mtime: appMtime ? new Date(appMtime).toISOString() : null,
-      db_path: dbPath,
+      db_path: isGuest(req) ? undefined : dbPath, // where the board lives on disk: nothing of a guest's page asks for it
       // the file they replace goes among THIS board's backups, not into the data folder of their own process
-      data_dir: DATA_DIR,
+      data_dir: isGuest(req) ? undefined : DATA_DIR,
       db_size: stat(dbPath)?.size ?? 0,
       uptime: Math.floor(process.uptime()),
       tasks: db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n,

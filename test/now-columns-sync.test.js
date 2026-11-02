@@ -6,6 +6,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { wholeAnswer } from '../public/js/term-delta.js';
+import { createScreens } from '../src/term-screens.js';
 
 const source = (file) => readFileSync(new URL(`../public/js/${file}`, import.meta.url), 'utf8');
 const strip = (file) => source(file).replace(/^import [\s\S]*?;$/gm, '').replace(/^export /gm, '');
@@ -78,7 +80,7 @@ function columnsModule({ view = 'terminal' } = {}) {
   const noop = () => {};
   const ctx = {
     world,
-    setTimeout: () => 0, clearTimeout: noop, // no looks at the terminals: nothing runs on its own
+    setTimeout: () => 0, clearTimeout: noop, URLSearchParams, // no looks at the terminals: nothing runs on its own
     document: { createElement: () => node(world), hidden: false, getSelection: () => null },
     localStore: { getItem: (k) => world.store.get(k) ?? null, setItem: (k, v) => world.store.set(k, String(v)) },
     getComputedStyle: () => ({}),
@@ -90,11 +92,11 @@ function columnsModule({ view = 'terminal' } = {}) {
     TERM_ACTIVITY: {}, TERM_KEYS: [], cardTermSession: () => null, growTermInput: noop, openTerminalOf: noop, rolledBy: () => 0,
     sayRefused: noop, setTermHint: noop, takeTermHint: () => false, wireTermImages: noop, styledAlert: noop,
     styledConfirm: async () => true, refusalLine: () => '', refusalText: () => ({}), wireTermCopy: noop,
-    holdUntil: () => 0, reprinted: () => true,
+    holdUntil: () => 0, reprinted: () => true, wholeAnswer,
     IMAGE_ACCEPT: 'image/png',
   };
   vm.runInNewContext(`${strip('now-terms.js')}
-this.syncColumns = syncColumns; this.repaintColumnViews = repaintColumnViews; this.cols = cols;`, ctx);
+this.syncColumns = syncColumns; this.repaintColumnViews = repaintColumnViews; this.cols = cols; this.look = look;`, ctx);
   // every column has a chat list to scroll (in the browser it is drawn by mountChat inside .now-col-chat)
   const sync = (box, runs) => {
     ctx.syncColumns(box, runs, {
@@ -219,4 +221,50 @@ test('one setting shows the board\'s Claude as a chat or a terminal, at once; a 
   // the setting's own control repaints the columns (Settings → Claude Code)
   assert.match(source('settings.js'), /buildSelect\(\$\('sel-chatView'\),[^\n]*onChange: \(v\) => setClaudeView\(v\)/, 'the setting\'s control does not go through setClaudeView');
   assert.match(source('settings.js'), /export function setClaudeView\(v\) \{[^}]*repaintWorkTabs\(\);[^}]*repaintColumnViews\(\);/, 'a change of the setting leaves the columns as they were');
+});
+
+function terminalColumn(screen) {
+  const m = columnsModule();
+  m.sync(m.box, [run('s', [task('S-1', 'doing', true)], true)]);
+  const c = colOf(m.ctx, 's');
+  const screens = createScreens();
+  const box = { term: { session: 's', dead: false, cols: 45, activity: 'busy', screen, wraps: [] }, tamper: null, asked: [], kinds: [] };
+  m.ctx.api = async (method, path) => {
+    const q = new URL(path, 'http://x').searchParams;
+    box.asked.push({ seen: q.get('seen'), delta: q.get('delta') });
+    const r = screens.answer(box.term, { seen: q.get('seen') ?? undefined, delta: q.get('delta') === '1' });
+    box.kinds.push(r.same ? 'same' : r.delta ? 'delta' : 'whole');
+    return box.tamper ? box.tamper(r) : r;
+  };
+  return { ...m, c, box, look: () => m.ctx.look(c), shown: () => c.el.querySelector('.now-col-screen').textContent };
+}
+const longScreen = (status) => `${Array.from({ length: 300 }, (_, i) => `line ${i} of the conversation`).join('\n')}\nstatus ${status}`;
+
+test('a column builds the screen of the server out of what changed, look after look', async () => {
+  const k = terminalColumn(longScreen(0));
+  await k.look();
+  assert.equal(k.shown(), longScreen(0));
+  k.box.term = { ...k.box.term, screen: longScreen(1) };
+  await k.look();
+  assert.equal(k.shown(), longScreen(1), 'a delta emptied the column');
+  k.box.term = { ...k.box.term, screen: longScreen(2) };
+  await k.look();
+  assert.equal(k.shown(), longScreen(2), 'the second delta was applied to the first screen');
+  await k.look();
+  assert.deepEqual(k.box.kinds, ['whole', 'delta', 'delta', 'same']);
+  assert.ok(k.box.asked[1].seen && k.box.asked[1].delta === '1', 'the column does not ask for what changed');
+});
+
+test('a delta made against another screen is not drawn in a column, and the next look gets the whole screen', async () => {
+  const k = terminalColumn(longScreen(0));
+  await k.look();
+  k.box.term = { ...k.box.term, screen: longScreen(1) };
+  k.box.tamper = (r) => ({ ...r, delta: { ...r.delta, was: r.delta.was + 1 } });
+  await k.look();
+  assert.equal(k.shown(), longScreen(0), 'a screen built on the wrong base was drawn');
+  k.box.tamper = null;
+  await k.look();
+  assert.equal(k.box.asked[2].seen, null, 'the column asks against the screen it could not use, and gets the same delta for good');
+  assert.equal(k.box.kinds[2], 'whole');
+  assert.equal(k.shown(), longScreen(1));
 });

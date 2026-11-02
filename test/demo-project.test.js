@@ -24,6 +24,19 @@ before(async () => {
 
 after(async () => { await app?.close(); if (tmp) rmSync(tmp, { recursive: true, force: true }); });
 
+test('the demo shows Ready to ship only with the switch on', async () => {
+  const { setGateOfBoard } = await import('../src/ready-gate.js');
+  const statuses = async () => {
+    assert.equal((await app.inject({ method: 'POST', url: '/api/projects/demo', payload: { lang: 'en' } })).statusCode, 201);
+    const s = db.prepare("SELECT t.status FROM tasks t JOIN projects p ON p.id = t.project_id WHERE p.slug = 'demo'").all().map((r) => r.status);
+    assert.equal((await app.inject({ method: 'DELETE', url: '/api/projects/demo' })).statusCode, 200);
+    return s;
+  };
+  assert.ok(!(await statuses()).includes('ready'), 'switched off, the status does not show');
+  setGateOfBoard(true);
+  try { assert.ok((await statuses()).includes('ready'), 'the example says nothing of the column the board has'); } finally { setGateOfBoard(false); }
+});
+
 test('deleting the demo project closes the issues of its tasks and drops their pending ops', async () => {
   assert.equal((await app.inject({ method: 'POST', url: '/api/projects/demo', payload: { lang: 'en' } })).statusCode, 201);
   const ids = db.prepare("SELECT t.id FROM tasks t JOIN projects p ON p.id = t.project_id WHERE p.slug = 'demo' ORDER BY t.id").all().map((r) => r.id);

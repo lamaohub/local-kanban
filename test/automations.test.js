@@ -477,7 +477,7 @@ test('CK-927: the switch, one session a look, a note in the card, and what waits
   for (const [t, s] of [[a, sid(1)], [b, sid(2)]]) db.prepare("INSERT INTO task_sessions (task_id, session_id, first_seen, last_seen) VALUES (?, ?, '2026-10-31 10:00:00', '2026-10-31 10:00:01')").run(t.id, s);
   const runs = [{ session: sid(2), claude: 'gone', tasks: [{ key: b.key, status: 'doing' }] }, { session: sid(1), claude: 'gone', board: true, ended: { lost: true }, tasks: [{ key: a.key, status: 'doing' }] }];
   const told = [];
-  r.setResumeDeps({ runs: async () => ({ runs }), turn: async () => ({ open: true, items: [{ kind: 'tool', tool: 'Bash' }] }), folder: async () => folder, say: async (t, s, text) => { told.push([t.key, s, text]); } });
+  r.setResumeDeps({ runs: async () => ({ runs }), turn: async () => ({ open: true, items: [{ kind: 'tool', tool: 'Bash' }] }), folder: async () => folder, fieldEmpty: async () => true, say: async (t, s, text) => { told.push([t.key, s, text]); } });
   r.resetResume();
   const notes = (x) => db.prepare("SELECT COUNT(*) AS n FROM task_comments WHERE task_id = ? AND author = 'board'").get(x.id).n;
   const look = (now, ctx) => r.tickResume(app, now, ctx);
@@ -546,7 +546,7 @@ test('CK-934: a restart of the board loses no words, and a limit line that stays
   await move(a.key, 'doing');
   const sid = 'cccccccc-9000-4000-8000-cccccccccccc';
   const told = [];
-  const quiet = { turn: async () => ({ open: true, items: [] }), say: async (t, s, text) => { told.push([t.key, s, text]); } };
+  const quiet = { turn: async () => ({ open: true, items: [] }), fieldEmpty: async () => true, say: async (t, s, text) => { told.push([t.key, s, text]); } };
   const runs = [{ session: sid, claude: 'limit', board: true, resets: '3pm', tasks: [{ key: a.key, status: 'doing' }] }];
   r.setResumeDeps({ ...quiet, runs: async () => ({ runs }) });
   r.resetResume();
@@ -571,6 +571,225 @@ test('CK-934: a restart of the board loses no words, and a limit line that stays
   await inject('PUT', '/api/automations/extras', { resume: false });
   again.resetResume();
   r.resetResume();
+});
+
+/* What a look does with a kept record, by the board's own words. `resumeCase` brings a session back through the look itself,
+   so the record is the one the board writes. */
+const STOPPED = 'automations.resume.stopped';
+const keptNow = () => JSON.parse(db.prepare('SELECT value FROM kv WHERE key = ?').get(STOPPED)?.value || '{}');
+const boardNotes = (id) => db.prepare("SELECT COUNT(*) AS n FROM task_comments WHERE task_id = ? AND author = 'board'").get(id).n;
+const statusOf = (key) => db.prepare("SELECT t.status FROM tasks t JOIN projects p ON p.id = t.project_id WHERE p.prefix || '-' || t.task_no = ?").get(key).status;
+let resumeCases = 0;
+async function resumeCase() {
+  const r = await import('../src/auto-resume.js');
+  const slug = project();
+  const task = await add(slug, 'cut');
+  await move(task.key, 'doing');
+  resumeCases += 1;
+  const sid = `dddddddd-${String(resumeCases).padStart(4, '0')}-4000-8000-dddddddddddd`;
+  db.prepare("INSERT INTO task_sessions (task_id, session_id, first_seen, last_seen) VALUES (?, ?, '2026-10-31 10:00:00', '2026-10-31 10:00:01')").run(task.id, sid);
+  const run = { session: sid, claude: 'gone', board: true, ended: { lost: true }, tasks: [{ key: task.key, status: 'doing' }] };
+  const told = [];
+  const deps = { runs: async () => ({ runs: [run] }), turn: async () => ({ open: true, items: [{ kind: 'tool', tool: 'Bash' }] }), folder: async () => folder,
+    fieldEmpty: async () => true, say: async (t, s, text) => { told.push(text); } };
+  // through `deps`, so a test changes one in the middle: the module keeps a copy of what it is given
+  const relay = Object.fromEntries(Object.keys(deps).map((k) => [k, (...a) => deps[k](...a)]));
+  r.setResumeDeps(relay);
+  r.resetResume();
+  await inject('PUT', '/api/automations/extras', { resume: true, launch: { permission: 'auto' } });
+  return { r, slug, task, sid, run, told, deps, up: (m) => { m.setResumeDeps(relay); run.claude = 'idle'; } };
+}
+const resumeOff = async (...mods) => {
+  await inject('PUT', '/api/automations/extras', { resume: false });
+  for (const m of mods) m.resetResume();
+};
+const T0 = 7e12;
+
+test('a restart right after `--resume` keeps the words: the record is written before the start', async () => {
+  const c = await resumeCase();
+  let again = null;
+  const restarted = { inject: async () => { again = await import('../src/auto-resume.js?restart=start'); return { statusCode: 200 }; } };
+  await c.r.tickResume(restarted, T0);
+  assert.equal(keptNow()[c.sid]?.why, 'resume', 'the record is not in the database');
+  c.up(again);
+  await again.tickResume(app, T0 + 2 * MIN);
+  assert.equal(c.told.length, 1, 'the words were lost with a restart right after the start');
+  assert.equal(boardNotes(c.task.id), 1);
+  await resumeOff(again, c.r);
+});
+
+test('a start refused or failed leaves no record behind', async () => {
+  const c = await resumeCase();
+  await c.r.tickResume({ inject: async () => ({ statusCode: 409, body: '{}' }) }, T0);
+  assert.equal(keptNow()[c.sid], undefined, 'a refused start stayed kept');
+  await c.r.tickResume({ inject: async () => { throw new Error('no answer'); } }, T0 + 2 * MIN);
+  assert.equal(keptNow()[c.sid], undefined, 'a failed start stayed kept');
+  c.run.claude = 'idle';
+  await c.r.tickResume(app, T0 + 4 * MIN);
+  assert.equal(c.told.length, 0, 'words went to a Claude the board never brought back');
+  await resumeOff(c.r);
+});
+
+test('a limit record is in the database: the line gone after a restart, the words still go', async () => {
+  const c = await resumeCase();
+  Object.assign(c.run, { claude: 'limit', resets: '3pm', ended: undefined });
+  const at = new Date(2026, 10, 2, 10, 0).getTime();
+  await c.r.tickResume(app, at, { limited: true });
+  assert.equal(keptNow()[c.sid]?.why, 'limit', 'the record of the limit is not in the database');
+  const again = await import('../src/auto-resume.js?restart=limit');
+  c.up(again);
+  await again.tickResume(app, at + 6 * 3600_000);
+  assert.equal(c.told.length, 1, 'the words were lost with the restart');
+  await resumeOff(again, c.r);
+});
+
+test('a limit line first seen after its moment names that moment, in the look itself', async () => {
+  const c = await resumeCase();
+  Object.assign(c.run, { claude: 'limit', resets: '3pm', ended: undefined });
+  const seen = new Date(2026, 10, 2, 15, 30).getTime();
+  await c.r.tickResume(app, seen, { limited: true });
+  await c.r.tickResume(app, seen + 2 * MIN);
+  assert.equal(c.told.length, 1, 'a moment gone by was read as the same hour tomorrow');
+  await resumeOff(c.r);
+});
+
+test('a limit line that names no moment holds the words', async () => {
+  for (const resets of [undefined, 'soon']) {
+    const c = await resumeCase();
+    Object.assign(c.run, { claude: 'limit', resets, ended: undefined });
+    await c.r.tickResume(app, T0, { limited: true });
+    await c.r.tickResume(app, T0 + 24 * 3600_000);
+    assert.equal(c.told.length, 0, `a line saying ${resets} was taken for a moment gone by`);
+    assert.equal(keptNow()[c.sid]?.why, 'limit');
+    await resumeOff(c.r);
+  }
+});
+
+test('a person who took the session up meanwhile keeps it: no words, no record', async () => {
+  const c = await resumeCase();
+  await c.r.tickResume(app, T0);
+  c.run.claude = 'idle';
+  c.deps.turn = async () => ({ open: true, items: [{ kind: 'text', at: new Date(T0 + 1000).toISOString() }] });
+  await c.r.tickResume(app, T0 + 2 * MIN);
+  assert.equal(c.told.length, 0, 'the board typed after the person');
+  assert.equal(keptNow()[c.sid], undefined, 'the record stayed');
+  await resumeOff(c.r);
+  const old = await resumeCase();
+  await old.r.tickResume(app, T0);
+  old.run.claude = 'idle';
+  old.deps.turn = async () => ({ open: true, items: [{ kind: 'text', at: new Date(T0 - 1000).toISOString() }] });
+  await old.r.tickResume(app, T0 + 2 * MIN);
+  assert.equal(old.told.length, 1, 'a word from before the record held the board');
+  await resumeOff(old.r);
+});
+
+test('a session gone from the runs is forgotten past its wait, not before', async () => {
+  const c = await resumeCase();
+  await c.r.tickResume(app, T0);
+  c.deps.runs = async () => ({ runs: [] });
+  await c.r.tickResume(app, T0 + 9 * MIN);
+  assert.equal(keptNow()[c.sid]?.why, 'resume', 'forgotten inside its wait');
+  await c.r.tickResume(app, T0 + 11 * MIN);
+  assert.equal(keptNow()[c.sid], undefined, 'a session with nobody to tell stays kept for good');
+  await resumeOff(c.r);
+});
+
+test('what is typed in the field is not sent with the words of the board: they wait, then go, or give up', async () => {
+  const c = await resumeCase();
+  await c.r.tickResume(app, T0);
+  c.run.claude = 'idle';
+  let field = false;
+  c.deps.fieldEmpty = async () => field;
+  await c.r.tickResume(app, T0 + 2 * MIN);
+  assert.equal(c.told.length, 0, 'the words of the board went out with what is in the field');
+  assert.equal(keptNow()[c.sid]?.why, 'resume', 'the record did not wait');
+  field = null; // tmux did not answer
+  await c.r.tickResume(app, T0 + 4 * MIN);
+  assert.equal(c.told.length, 0, 'typed with the field unknown');
+  field = true;
+  await c.r.tickResume(app, T0 + 6 * MIN);
+  assert.equal(c.told.length, 1, 'the words did not go once the field was empty');
+  await resumeOff(c.r);
+  // the words typed before a kill and never sent: they are in the field, the next board does not type them again
+  const kept = await resumeCase();
+  await kept.r.tickResume(app, T0);
+  kept.run.claude = 'idle';
+  kept.deps.fieldEmpty = async () => false;
+  await kept.r.tickResume(app, T0 + 2 * MIN);
+  await kept.r.tickResume(app, T0 + 11 * MIN);
+  assert.equal(kept.told.length, 0);
+  assert.equal(keptNow()[kept.sid], undefined, 'a field that stays full keeps the record past its wait');
+  await resumeOff(kept.r);
+});
+
+test('a limit record, hours old by the reset, gets its full wait over a full field', async () => {
+  const c = await resumeCase();
+  Object.assign(c.run, { claude: 'limit', resets: '3pm', ended: undefined });
+  const at = new Date(2026, 10, 2, 10, 0).getTime();
+  await c.r.tickResume(app, at, { limited: true });
+  c.run.claude = 'idle';
+  c.deps.fieldEmpty = async () => false;
+  const late = new Date(2026, 10, 2, 16, 0).getTime();
+  await c.r.tickResume(app, late);
+  assert.equal(keptNow()[c.sid]?.why, 'limit', 'the wait counted from the moment of the limit');
+  await c.r.tickResume(app, late + 5 * MIN);
+  assert.equal(keptNow()[c.sid]?.why, 'limit', 'gave up inside its wait');
+  c.deps.fieldEmpty = async () => true;
+  await c.r.tickResume(app, late + 7 * MIN);
+  assert.equal(c.told.length, 1);
+  await resumeOff(c.r);
+  const full = await resumeCase();
+  Object.assign(full.run, { claude: 'limit', resets: '3pm', ended: undefined });
+  await full.r.tickResume(app, at, { limited: true });
+  full.run.claude = 'idle';
+  full.deps.fieldEmpty = async () => false;
+  await full.r.tickResume(app, late);
+  await full.r.tickResume(app, late + 11 * MIN);
+  assert.equal(keptNow()[full.sid], undefined, 'a full field holds a limit record for good');
+  await resumeOff(full.r);
+});
+
+test('words of a resume are for the minutes after it, not for a day later', async () => {
+  const c = await resumeCase();
+  await c.r.tickResume(app, T0);
+  c.run.claude = 'idle';
+  await c.r.tickResume(app, T0 + 26 * 3600_000);
+  assert.equal(c.told.length, 0, 'the words went 26 hours after the start');
+  assert.equal(keptNow()[c.sid], undefined, 'the record stayed');
+  assert.equal(boardNotes(c.task.id), 0);
+  await resumeOff(c.r);
+});
+
+test('a task that left work meanwhile is not moved back by the words', async () => {
+  for (const status of ['review', 'ready', 'todo']) {
+    const c = await resumeCase();
+    await c.r.tickResume(app, T0);
+    db.prepare('UPDATE tasks SET status = ? WHERE id = ?').run(status, c.task.id);
+    c.run.claude = 'idle';
+    await c.r.tickResume(app, T0 + 2 * MIN);
+    assert.equal(c.told.length, 0, `words typed to a task in ${status}`);
+    assert.equal(statusOf(c.task.key), status);
+    assert.equal(keptNow()[c.sid], undefined);
+    await resumeOff(c.r);
+  }
+});
+
+test('words that did not reach Claude are no «went on»: the record stays, the card is silent', async () => {
+  for (const answer of [{ err: new Error('tmux'), text: 'no pane' }, { refused: 'no-box' }]) {
+    const c = await resumeCase();
+    await c.r.tickResume(app, T0);
+    c.run.claude = 'idle';
+    let reply = answer;
+    c.deps.say = async (t, s, text) => { if (reply) return reply; c.told.push(text); return { ok: true }; };
+    await c.r.tickResume(app, T0 + 2 * MIN);
+    assert.equal(boardNotes(c.task.id), 0, 'the card says the board went on, and nothing was said');
+    assert.equal(keptNow()[c.sid]?.why, 'resume', 'the record was dropped with the words');
+    reply = null;
+    await c.r.tickResume(app, T0 + 4 * MIN);
+    assert.equal(c.told.length, 1, 'the words were not tried again');
+    assert.equal(boardNotes(c.task.id), 1);
+    await resumeOff(c.r);
+  }
 });
 
 test('CK-934: the moment a limit line names', async () => {

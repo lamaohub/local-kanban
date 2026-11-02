@@ -2,7 +2,7 @@ import { $, LANG, api, esc, ic, liftCurtain, smoothReload, state, tr } from './c
 import { setupView } from './claude-setup-rules.js';
 import { launchPick } from './launch-rules.js';
 import { renderLimits } from './limits.js';
-import { CONTACT_NAME, CONTACT_URL, FEATURES, STEP_HEADS, VIEW_CHOICES, accessLines, launchChoices, onboardingSteps, scanLines } from './onboarding-rules.js';
+import { CONTACT_NAME, CONTACT_URL, FEATURES, STEP_HEADS, VIEW_CHOICES, accessLines, featuresFor, launchChoices, onboardingSteps, scanLines } from './onboarding-rules.js';
 import { sceneAccept, sceneAccess, sceneDemo, sceneNow, sceneScan, sceneSync, sceneTake, sceneView, sceneWatch, sceneWay } from './onboarding-scenes.js';
 import { appInstallView, appStepsHTML, applyCompact, getSetting, notifyPerm, notifyTestState, pickedSetting, promptInstall, sendTestNotification, setClaudeView, setSetting, syncLangToServer } from './settings.js';
 import { manualSetupHTML, selectProject, setupPromptBlockHTML, wireSetupPrompt } from './sidebar.js';
@@ -123,7 +123,7 @@ export function openOnboarding({ updated = state.projects.length > 0 } = {}) {
         <button type="button" class="${LANG === 'ru' ? 'on' : ''}" data-lang="ru">${LANG_NAMES.ru}</button>
         <button type="button" class="${LANG === 'en' ? 'on' : ''}" data-lang="en">${LANG_NAMES.en}</button>
       </div></div>`
-      + `<div class="onb-list" id="onb-feats">${FEATURES.map((f, i) => `<button type="button" class="onb-item" data-i="${i}">`
+      + `<div class="onb-list" id="onb-feats">${featuresFor(state.projects.some((p) => p.ship_gate)).map((f, i) => `<button type="button" class="onb-item" data-i="${i}">`
       + `<span class="onb-ic">${ic(f.icon, 15)}</span><span class="onb-item-t"><b>${esc(tr(f.title))}</b><small>${esc(typeset(tr(f.note)))}</small></span>`
       + `<span class="onb-chev">${ic('chevron', 12)}</span></button>`).join('')}</div>`
       + `<div class="muted onb-contact">${tr('Questions about anything — write to me on Telegram:')} <a href="${CONTACT_URL}" target="_blank" rel="noopener noreferrer">${CONTACT_NAME}</a></div>`;

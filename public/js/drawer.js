@@ -1,14 +1,14 @@
 
 import { wholeAnswer } from './term-delta.js';
 import { WORKING, buildSelect, canMoveTo, clearSelection, closeOpenSelect, colSort, labelChip, moveBlocked, revealCard, scheduleDrawLinks, selVal, selectTasks, selectedIds, setScrollToNewCardId, taskIsNoclaude } from './board.js';
-import { $, ALL, statusesFor, LABEL_COLORS, LABEL_SELECTABLE, PRI_LEVELS, TITLE_LABEL_WORDS, api, apiBlob, dropUnsaved, esc, ghSyncOn, ic, noteUnsaved, seg, state, tr } from './core.js';
+import { $, ALL, statusesFor, LABEL_COLORS, LABEL_SELECTABLE, PRI_LEVELS, TITLE_LABEL_WORDS, api, apiBlob, dropUnsaved, esc, ghSyncOn, ic, noteUnsaved, retryUnsaved, seg, state, tr } from './core.js';
 import { columnComparator, DEFAULT_SORT } from './order.js';
 import { mountChat } from './chat.js';
 import { getSetting, openSettingsModal, plural, setClaudeView } from './settings.js';
 import { onPhone } from './phone-rules.js';
 import { NARROW, closeTopLayer, currentProject, layersOpen, overlayLayer, popLayer, pushLayer, selectProject, styledAlert, styledConfirm, watchLayers } from './sidebar.js';
 import { SHORT_MONTHS, askUsageNow, autoGrow, claudeInfoHTML, copyText, onClaudeInfo, launchInClaude, openSessionInClaude, refresh, relTime, renderTimeline, resumeOnBoard, taskPromptText } from './sse.js';
-import { canRetry, changedFields, createTurns, createUnsentComments, createUnsentEdits, imageTooLarge, pullExternal, refusalLine, refusalText, resendDelay } from './unsaved.js';
+import { canRetry, changedFields, createCommentKeys, createTurns, createUnsentComments, createUnsentEdits, imageTooLarge, pullExternal, refusalLine, refusalText, refusedFields, resendDelay } from './unsaved.js';
 import { renderAsks } from './asks.js';
 import { stillOpen } from './review-rules.js';
 import { wireTermCopy } from './term-copy.js';
@@ -246,6 +246,7 @@ function drawComments(key, cs) {
   box.innerHTML = (cs || []).map(commentHTML).join('');
   commentsShown = { of: cs ? key : null, whole: Boolean(cs), ids: new Set((cs || []).map((c) => c.id)), max: Math.max(0, ...(cs || []).map((c) => c.id)) };
   wireComments(box);
+  for (const c of cs || []) commentOnServer(key, c);
   paintUnsent(key);
 }
 function commentHTML(c) {
@@ -275,6 +276,7 @@ function commentsFailed(key, e) {
 /** A comment of task `key` is known to be on the server — its event came, or the answer to the person's own.
     `c` — the comment, when it is known (a deleted one is not); `n` — how many the task holds now, when known. */
 export function commentArrived(key, c, n) {
+  commentOnServer(key, c);
   if (key !== state.drawerKey) return;
   const s = commentsShown;
   if (c && s.of === key && s.whole && !commentsRead) {
@@ -323,7 +325,15 @@ setInterval(refreshCommentTimes, 30000);
 document.addEventListener('visibilitychange', refreshCommentTimes);
 
 const unsentComments = createUnsentComments();
+export const commentKeys = createCommentKeys();
+export const unsentToken = (key, body) => unsentComments.tokenOf(key, body);
+/** The server said the key is of a deleted comment: an entry under it would swallow new words of the same text. */
+export function dropUnsentByToken(key, token) {
+  const c = unsentComments.byToken(key, token);
+  if (c) dropUnsentComment(key, c.id);
+}
 export function queueComment(key, body, token) {
+  if (commentKeys.written(key, body)) return; // its event came first: only the answer was lost, nothing waits
   const c = unsentComments.add(key, body, token);
   noteUnsaved(c.again ? null : () => resendComment(key, c.id), `comment:${key}:${c.id}`);
   paintUnsent(key);
@@ -341,7 +351,13 @@ async function resendComment(key, id) {
   }
   unsentComments.done(key, id);
   paintUnsent(key);
-  commentArrived(key, sent);
+  if (!sent?.deleted) commentArrived(key, sent); // deleted since it was written: delivered, and nothing to add to the list
+}
+function commentOnServer(key, c) {
+  if (!c?.client_key) return;
+  commentKeys.heard(c.client_key);
+  const waiting = unsentComments.byToken(key, c.client_key);
+  if (waiting) dropUnsentComment(key, waiting.id);
 }
 function paintUnsent(key) {
   if (key !== state.drawerKey) return;
@@ -2229,7 +2245,9 @@ async function doReturn(reason) {
   const key = state.drawerKey;
   try {
     if (reason) {
-      await api('POST', `/api/tasks/${seg(key)}/comments`, { body: `${tr('Send back')}: ${reason}`, author: 'me' });
+      const body = `${tr('Send back')}: ${reason}`;
+      await api('POST', `/api/tasks/${seg(key)}/comments`, { body, author: 'me', client_key: commentKeys.of(key, body) });
+      commentKeys.done(key, body);
       const input = $('return-pop')?.querySelector('.return-pop-input');
       if (input) input.value = '';
     }
@@ -2436,7 +2454,10 @@ export async function doAutosave() {
     return await doAutosaveOnce();
   } catch (e) {
     if (e?.offline) return undefined;
-    if (e?.saidInCard) return undefined;
+    if (e?.saidInCard) {
+      if (e.restQueued) await retryUnsaved(); // the rest of a refused edit does not wait for the next try
+      return undefined;
+    }
     if (e?.taskKey && refusalText(e).gone) {
       if (e.taskKey === state.drawerKey) sayRefused(e, e.taskKey);
       else refresh();
@@ -2468,6 +2489,16 @@ async function resendTaskEdit(key) {
   try {
     saved = await editInTurn(key, () => api('PATCH', `/api/tasks/${seg(key)}`, sent));
   } catch (e) {
+    const back = refusalText(e).gone ? [] : refusedFields(e, sent);
+    if (back.length) { // the rest of the edit is not refused with the field: words typed offline still get there, open card or not
+      unsentEdits.supersede(key, back);
+      if (here && state.drawerKey === key) { takeBackRefused(back, e); sayFieldRefused(key, e); }
+      else styledAlert(`${key}: ${refusalLine('The change is not saved', e, tr)}`);
+      const left = { ...dirty };
+      for (const f of back) delete left[f];
+      if (Object.keys(left).length) unsentEdits.fail(key, left);
+      return resendTaskEdit(key);
+    }
     if (!e?.offline && !(e?.status >= 500)) { unsentEdits.drop(key); queuedBase.delete(key); }
     else unsentEdits.fail(key, dirty);
     throw e;
@@ -2484,19 +2515,44 @@ async function resendTaskEdit(key) {
   unsentEdits.settle(key, fields);
   unsentEdits.settle(key, dirty);
   if (here && state.drawerKey === key && drawerSnapshot) Object.assign(drawerSnapshot, dirty);
-  if (here && state.drawerKey === key) showSaveNote(null);
+  if (here && state.drawerKey === key && refusedNote !== key) showSaveNote(null);
 }
 const unsentCreates = new Map();
 function editRefusedText(e) {
   if (e?.status >= 500) return tr('The change is not saved yet: the board answered with an error — the details are in Settings → Errors. Your next change tries again, or click “not saved” at the top.');
   return refusalLine('The change is not saved', e, tr);
 }
+/** The card lets go of what the server refused. A PATCH is all or nothing: left in the form, a refused field went out with
+    every later edit and the board refused each whole, so words typed after it never got there, without a word when the card
+    closed. Labels go back to what the server holds, and what depends on them with them. */
+function takeBackRefused(fields, e) {
+  if (!fields.length) return;
+  if (fields.includes('labels') && drawerSnapshot) {
+    // the answer says what the server holds: a label set elsewhere while this one went must not be erased by the next save
+    if (Array.isArray(e?.body?.labels)) drawerSnapshot.labels = [...e.body.labels];
+    drawerLabels = [...drawerSnapshot.labels];
+    closeLabelPicker();
+    renderDrawerLabels();
+    setDrawerLock(DrawerSync.cardLocked(drawerStatus, drawerLabels));
+    launchFollowsLabels();
+  }
+  // the picker goes back to the status the card knows; a reading of the board brings the real one (`refresh` of the refusal)
+  buildStatusSelect(drawerStatus, false, drawerLabels.includes('noclaude'));
+  if (fields.includes('status') && drawerSnapshot) drawerSnapshot.status = drawerStatus;
+}
 function createRefusedText(e) {
   if (e?.offline) return tr('The task is not created yet: there is no connection to the board. It is created by itself once the connection is back.');
   if (e?.status >= 500) return tr('The task is not created yet: the board answered with an error — the details are in Settings → Errors. Your next change tries again, or click “not saved” at the top.');
   return refusalLine('The task is not created', e, tr);
 }
+// the note stands for a field refused while the rest of its edit is on the way: saving that rest proves nothing about the field
+let refusedNote = null;
+function sayFieldRefused(key, e) {
+  showSaveNote(editRefusedText(e));
+  refusedNote = key;
+}
 function showSaveNote(text) {
+  refusedNote = null;
   const el = $('d-save-note');
   el.textContent = text || '';
   el.classList.toggle('hidden', !text);
@@ -2541,21 +2597,21 @@ async function doAutosaveOnce() {
     const withBase = () => ('description_base' in body && queuedBase.has(key) ? { ...body, description_base: queuedBase.get(key) } : body);
     try { saved = await editInTurn(key, () => api('PATCH', `/api/tasks/${seg(key)}`, withBase())); }
     catch (e) {
-      if (canRetry(e) && 'description' in body && !queuedBase.has(key)) queuedBase.set(key, body.description_base);
+      const r = refusalText(e);
+      const back = r.gone ? [] : refusedFields(e, patch); // the field the refusal is about; the rest of the edit is not refused with it
+      const rest = { ...patch };
+      for (const f of back) delete rest[f];
+      const restQueued = back.length > 0 && Object.keys(rest).length > 0;
+      if ((canRetry(e) || restQueued) && 'description' in body && !queuedBase.has(key)) queuedBase.set(key, body.description_base);
       if (canRetry(e)) queueTaskEdit(key, patch);
       // says it); the card moved on to another task while the request went: a refusal is said with the task's key
-      const r = refusalText(e);
       if (!e?.offline && !r.gone) {
-        // a refused move of the status: the picker goes back to the status the card knows — left on the refused one, it
-        // went out with every later edit, and the board refused each whole; the reading below brings the real status
-        if (!canRetry(e) && 'status' in patch && key === state.drawerKey) {
-          buildStatusSelect(drawerStatus, false, drawerLabels.includes('noclaude'));
-          if (drawerSnapshot) drawerSnapshot.status = drawerStatus;
-        }
-        if (key === state.drawerKey) showSaveNote(editRefusedText(e));
+        if (key === state.drawerKey) takeBackRefused(back, e);
+        if (restQueued) queueTaskEdit(key, rest); // as data: the card may close before it is sent
+        if (key === state.drawerKey) { if (back.length) sayFieldRefused(key, e); else showSaveNote(editRefusedText(e)); }
         else if (!canRetry(e)) styledAlert(`${key}: ${refusalLine('The change is not saved', e, tr)}`);
         if (r.refresh) refresh(); // the card showed an old column: the board and the card are read again
-        Object.assign(e, { saidInCard: true });
+        Object.assign(e, { saidInCard: true, restQueued });
       }
       throw Object.assign(e, { taskKey: key });
     } finally {

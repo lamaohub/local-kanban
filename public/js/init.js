@@ -3,7 +3,7 @@ import { commentToken } from './unsaved.js';
 import { clearSelection, closeOpenSelect, initMarquee, multiAction, renderBoard, scheduleDrawLinks, selectedIds } from './board.js';
 import { chaosPending } from './chaos.js';
 import { $, ALL, AUTO, HEALTH, CALENDAR, CHAOS, DASH, DONE, HORIZON, NOW, REVIEW, SETTINGS, api, hasUnsaved, ic, liftCurtain, loadLabelPalette, seg, setDoorClosed, state, tr } from './core.js';
-import { addChecklistItem, applyCommentDraft, applyKeepDrawer, applyTitleLabelShortcut, closeDrawer, commentDrafts, deleteTask, doAutosave, initTerminal, kbMoveCard, kbMoveCursor, launchOpenTask, onDrawerPaste, openDrawer, uploadCommentImage, wirePicturePick, wireTaskPicture, openDrawerMenu, openDrawerNew, openOpenTaskSession, openReturnPop, showOwnComment, pendingAttachments, pullDrawerFresh, queueComment, commentArrived, sayRefused, scheduleAutosave, setKbCursor, wireCardBack, descTyped, descConflictPending } from './drawer.js';
+import { addChecklistItem, applyCommentDraft, applyKeepDrawer, applyTitleLabelShortcut, closeDrawer, commentDrafts, deleteTask, doAutosave, dropUnsentByToken, initTerminal, kbMoveCard, kbMoveCursor, launchOpenTask, onDrawerPaste, openDrawer, uploadCommentImage, wirePicturePick, wireTaskPicture, openDrawerMenu, openDrawerNew, openOpenTaskSession, openReturnPop, showOwnComment, pendingAttachments, pullDrawerFresh, queueComment, commentArrived, commentKeys, unsentToken, sayRefused, scheduleAutosave, setKbCursor, wireCardBack, descTyped, descConflictPending } from './drawer.js';
 import { closeProjectSettings, fileEditorHasChanges, openProjectSettings, projectSettingsDirty } from './project.js';
 import { applyCompact, applyTheme, customBinding, getSetting, listenForInstall, matchKey, skillDirty, syncLangToServer } from './settings.js';
 import { closeTopLayer, loadTasks, switchProject } from './sidebar.js';
@@ -61,23 +61,27 @@ $('project-menu').onclick = () => openProjectSettings();
 // but not for longer than COMMENT_HOLD_MS — a request that never answers must not lock the field of the task for good
 const commentSending = new Map();
 const COMMENT_HOLD_MS = 15000;
-const commentTokens = new Map();
 $('c-send').onclick = async () => {
   const body = $('c-input').value.trim();
   const key = state.drawerKey;
   if (!body || !key || Date.now() - (commentSending.get(key) ?? -Infinity) < COMMENT_HOLD_MS) return;
   const at = Date.now();
   commentSending.set(key, at);
-  const sending = `${key}\n${body}`;
-  const token = commentTokens.get(sending) ?? commentToken();
-  commentTokens.set(sending, token);
+  let token = commentKeys.of(key, body, unsentToken(key, body));
+  const post = () => api('POST', `/api/tasks/${seg(key)}/comments`, { body, author: 'me', client_key: token });
   let sent = null;
-  try { sent = await api('POST', `/api/tasks/${seg(key)}/comments`, { body, author: 'me', client_key: token }); }
-  catch (e) {
+  try {
+    sent = await post();
+    if (sent?.deleted) { // the person deleted it and pressed now: these are new words, and no entry waits under the old key
+      dropUnsentByToken(key, token);
+      token = commentToken();
+      sent = await post();
+    }
+  } catch (e) {
     if (!e?.offline) { sayRefused(e, key); return; }
     queueComment(key, body, token);
   } finally { if (commentSending.get(key) === at) commentSending.delete(key); }
-  commentTokens.delete(sending);
+  commentKeys.done(key, body);
   // typed on while it went: what is left after the sent text is a comment of its own — it stays, the sent text goes
   const rest = (text) => { const t = text.trimStart(); return t.startsWith(body) ? t.slice(body.length).trimStart() : text; };
   const draft = rest(commentDrafts.get(key) || '');

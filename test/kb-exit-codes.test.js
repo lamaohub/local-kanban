@@ -13,6 +13,11 @@ let reply = { status: 200, body: '{}', type: 'application/json' };
 
 before(async () => {
   server = createServer((req, res) => {
+    if (reply.brokenOff) { // a board that goes down in the middle of its answer: fewer bytes than it promised
+      res.writeHead(reply.status, { 'Content-Type': reply.type, 'Content-Length': reply.body.length + 100 });
+      res.write(reply.body, () => res.destroy());
+      return;
+    }
     res.writeHead(reply.status, { 'Content-Type': reply.type });
     res.end(reply.body);
   });
@@ -47,6 +52,15 @@ test('a 200 that is not JSON is a failure, not a silent success', async () => {
   assert.equal(r.code, 4);
   assert.doesNotMatch(r.stdout, /undefined/, 'kb printed "undefined undefined" instead of an explanation');
   assert.match(r.stderr, /KB_URL/, 'the message does not hint at the most likely cause: the wrong port');
+});
+
+test('an answer broken off in the middle is the code of a board failing, not of kb breaking', async () => {
+  reply = { status: 200, body: '{"id":7,"key":"DM-', type: 'application/json', brokenOff: true };
+  const r = await run(['show', 'DM-1']);
+  reply = { status: 200, body: '{}', type: 'application/json' };
+  assert.equal(r.code, 4, r.stderr);
+  assert.match(r.stderr, /kb: the board answered 200 and broke off in the middle/);
+  assert.ok(!r.stderr.includes('internal error'), r.stderr);
 });
 
 test('an unreachable board is still code 1', async () => {

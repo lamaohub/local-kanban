@@ -42,17 +42,21 @@ function knownHosts(port) {
   return hostsCache.set;
 }
 /* What stays the owner's even with the link: the computer the board runs on — Claude Code's settings.json, skills and
-   project files on disk, ssh and git with the owner's keys, the board's update, a dialog on the owner's screen, a backup
-   opened as a board, the GitHub mirror, the door itself. Reading them is fine; changing — 403 to a guest. The board
-   itself (tasks, the chat and terminals of Claude, answers to its questions) is shared, as the owner asked. */
-const OWNER_ONLY = [/^\/api\/claude\/hooks/, /^\/api\/update/, /^\/api\/fs\/pick/, /^\/api\/skills/, /^\/api\/backups\/restore/,
+   project files on disk, ssh and git with the owner's keys, the board's update, a dialog on the owner's screen, the
+   GitHub mirror, the door itself. Reading them is fine; changing — 403 to a guest. Backups are not read either
+   (`OWNER_READ`): one is the whole database, `share.key` included, and the key is the door's secret. The board itself
+   (tasks, the chat and terminals of Claude, answers to its questions) is shared, as the owner asked. */
+const OWNER_READ = [/^\/api\/backups(\/|$)/];
+const OWNER_ONLY = [/^\/api\/claude\/hooks/, /^\/api\/update/, /^\/api\/fs\/pick/, /^\/api\/skills/,
   /^\/api\/projects\/(clone|server-git|ssh-check)/, /^\/api\/projects\/[^/]+\/docs/, /^\/api\/sync\/config/, /^\/api\/share/, /^\/api\/flow/,
   /^\/api\/tasks\/[^/]+\/chat\/run/]; // the chat's command opens a Terminal window on the owner's screen
-export const ownerOnly = (method, path) => method !== 'GET' && method !== 'HEAD' && OWNER_ONLY.some((r) => r.test(path));
+export const ownerOnly = (method, path) => OWNER_READ.some((r) => r.test(path))
+  || (method !== 'GET' && method !== 'HEAD' && OWNER_ONLY.some((r) => r.test(path)));
+const NOT_A_GUEST = 'this stays with the owner of the board';
 export const routedPath = (pathname) => { try { return decodeURIComponent(pathname); } catch { return null; } };
 export async function guestGuard(req, reply) {
   if (isGuest(req) && ownerOnly(req.method, req.routeOptions?.url || '')) {
-    return reply.code(403).send({ error: 'only the owner of the board changes the computer it runs on', reason: 'guest' });
+    return reply.code(403).send({ error: NOT_A_GUEST, reason: 'guest' });
   }
 }
 
@@ -101,7 +105,11 @@ function doorPath(to) {
 const escAttr = (s) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 // asked for without cookies, and a home-screen app is made of them; they hold nothing of the board
 const FREE_PATH = /^\/(manifest\.webmanifest|favicon\.(svg|ico)|favicon-\d+\.png|icon-(maskable-)?\d+\.png)$/;
-const KEY_BODY_MAX = 256;
+// The form carries the address back along with the key, and a form writes a character of it in up to three. An address
+// longer than `TO_MAX` is not kept (half of one is another address): the right key leads to the board's start instead.
+export const TO_MAX = 512;
+const KEY_BODY_MAX = 3 * TO_MAX + 256;
+const keptPath = (to) => { const p = doorPath(to); return p.length > TO_MAX ? '/' : p; };
 
 let server = null;
 let starting = null;
@@ -132,7 +140,6 @@ const PAGE_TEXT = {
     ask: 'Scan the QR code, or type the key: both are in Settings → Wi-Fi on the owner\'s computer. This device remembers it.',
     wrong: 'That is not the key. It may have been changed — check it in Settings → Wi-Fi.',
     enter: 'Enter',
-    open: 'Open the board',
   },
   ru: {
     title: 'Доска по Wi-Fi',
@@ -140,11 +147,10 @@ const PAGE_TEXT = {
     ask: 'Наведи камеру на QR-код или введи ключ: и то и другое — в «Настройках → Wi-Fi» на компьютере владельца. Это устройство его запомнит.',
     wrong: 'Это не тот ключ. Возможно, его сменили — сверь в «Настройках → Wi-Fi».',
     enter: 'Войти',
-    open: 'Открыть доску',
   },
 };
 const pageText = () => PAGE_TEXT[uiLang() === 'en' ? 'en' : 'ru'];
-function page(res, status, body, extraHead = '', headers = {}) {
+function page(res, status, body) {
   const t = pageText();
   res.writeHead(status, {
     'content-type': 'text/html; charset=utf-8',
@@ -152,9 +158,8 @@ function page(res, status, body, extraHead = '', headers = {}) {
     'referrer-policy': 'same-origin', // `no-referrer` sends the page's form with `Origin: null`, and the door refuses it
     'x-content-type-options': 'nosniff',
     'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'",
-    ...headers,
   });
-  res.end(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${extraHead}`
+  res.end(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">`
     + `<title>${t.title}</title><style>body{font:15px/1.5 -apple-system,system-ui,sans-serif;max-width:420px;margin:18vh auto;padding:0 16px;color:#222;background:#fafafa}`
     + 'form{display:flex;gap:8px;margin-top:16px}input{flex:1;min-width:0;box-sizing:border-box;font:16px ui-monospace,Menlo,monospace;padding:10px 12px;border:1px solid #bbb;border-radius:8px;background:transparent;color:inherit}'
     + 'button{font:inherit;padding:10px 16px;border:0;border-radius:8px;background:#e8704e;color:#fff}.no{color:#c0392b}'
@@ -171,16 +176,20 @@ function refuse(req, res, status, error, reason = 'share') {
 
 function askKey(res, wrong = false, to = '/') {
   const t = pageText();
-  page(res, 401, `${wrong ? `<p class="no">${t.wrong}</p>` : ''}<p>${t.ask}</p><form method="post" action="${KEY_PATH}"><input type="hidden" name="to" value="${escAttr(doorPath(to))}">`
+  page(res, 401, `${wrong ? `<p class="no">${t.wrong}</p>` : ''}<p>${t.ask}</p><form method="post" action="${KEY_PATH}"><input type="hidden" name="to" value="${escAttr(keptPath(to))}">`
     + '<input name="k" required autofocus autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX" aria-label="Key">'
     + `<button type="submit">${t.enter}</button></form>`);
 }
-/** The key was right: the browser gets its pass and goes on to the board by itself (`to` — a path of this door). */
+/** The key was right: the browser gets its pass and goes on to the board (`to` — a path of this door). By a redirect,
+    with no page of its own: a page at the address with the key stays the board's `document.referrer`, and a script of
+    the board reads there what HttpOnly hides. The entry of that address leaves the history with it. */
 function letIn(res, port, to) {
-  const at = escAttr(doorPath(to));
-  page(res, 200, `<p><a href="${at}">${pageText().open}</a></p>`, `<meta http-equiv="refresh" content="0;url=${at}">`, {
+  res.writeHead(303, {
+    location: doorPath(to),
+    'cache-control': 'no-store',
     'set-cookie': `${cookieName(port)}=${passOf(shareKey())}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${COOKIE_MAX_AGE_S}`,
   });
+  res.end();
 }
 function takeKeyForm(req, res, port) {
   let body = '';
@@ -263,7 +272,7 @@ function handle(req, res) {
     if (path.startsWith('/api/')) return refuse(req, res, 401, 'the key of the board is needed');
     return askKey(res, false, req.method === 'GET' ? req.url : '/');
   }
-  if (ownerOnly(req.method, path)) return refuse(req, res, 403, 'only the owner of the board changes the computer it runs on', 'guest');
+  if (ownerOnly(req.method, path)) return refuse(req, res, 403, NOT_A_GUEST, 'guest');
 
   const headers = { ...req.headers };
   for (const h of [...HOP, 'cookie', 'referer', GUEST_HEADER]) delete headers[h];

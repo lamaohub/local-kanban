@@ -5,7 +5,7 @@ import { emit } from './bus.js';
 import { leadCheck } from './review-check.js';
 import { pendingAsks } from './claude-asks.js';
 import { currentLimits } from './claude-limits.js';
-import { currentLive, currentQuestions } from './claude-live.js';
+import { currentLive, currentQuestions, screensKnown } from './claude-live.js';
 import { CHECK_LABEL, atWork, checkDescription, holdsCheck } from '../public/js/review-rules.js';
 import { PERMISSION_MODES } from './phantom.js';
 import { EFFORT_LEVELS } from './launch.js';
@@ -228,6 +228,12 @@ const stillArmed = (id) => db.prepare('SELECT state FROM automations WHERE id = 
    `app.inject` sends by default (`localhost:80`) — the live board refused every rule that way, the test without the guard
    did not show it. */
 const own = { host: `127.0.0.1:${PORT}` };
+/** Why a start was refused, as the page reads it (`failWord`): `<reason>: <the server's words>`. A Claude already at the
+    tasks says so by `running`, with no `reason`. */
+const refusal = (res, body) => {
+  const reason = body?.reason || (body?.running ? 'running' : null);
+  return reason ? `${reason}: ${body.error}` : body?.error || `Claude did not start (${res.statusCode})`;
+};
 
 /** Make the check and start Claude on it, as ▶ of Review does — through the board's own routes. → whether Claude started. */
 async function fire(app, rule, slug, batch, now) {
@@ -260,7 +266,7 @@ async function fire(app, rule, slug, batch, now) {
   }
   if (res.statusCode >= 300) {
     // as on the page: the check stays in To do, ▶ on its card starts it once the cause is fixed
-    failed(rule, { task_id: taskId, error: body?.reason ? `${body.reason}: ${body.error}` : body?.error || `Claude did not start (${res.statusCode})` }, now);
+    failed(rule, { task_id: taskId, error: refusal(res, body) }, now);
     return false;
   }
   if (rule.repeat) waitAgain(rule, taskId, now, true); else end(rule.id, 'fired', { task_id: taskId }, now);
@@ -328,9 +334,8 @@ async function fixReturned(app, rule, slug, since, now) {
     payload: { mode: 'board', text: [words.run, `${words.doTask} ${keys.join(', ')}`].join('\n'), project: slug, keys, makeRoom: ADOPT_TOKEN, ...JSON.parse(rule.launch || '{}') } });
   keep();
   if (res.statusCode >= 300) { // no round is spent on a start that did not happen: it is tried again in a while
-    const body = res.json();
     fixWait.set(rule.id, now + FIX_RETRY_MS);
-    db.prepare('UPDATE automations SET error = ? WHERE id = ?').run(body?.reason ? `${body.reason}: ${body.error}` : body?.error || `Claude did not start (${res.statusCode})`, rule.id);
+    db.prepare('UPDATE automations SET error = ? WHERE id = ?').run(refusal(res, res.json()), rule.id);
     return false;
   }
   for (const t of go) rounds[t.id] = { n: (rounds[t.id]?.n || 0) + 1, at: now };
@@ -347,7 +352,7 @@ export async function awaySummary(since, runs) {
     FROM tasks t JOIN projects p ON p.id = t.project_id
     WHERE p.archived = 0 AND t.labels NOT LIKE '%"noclaude"%' AND t.labels NOT LIKE '%"check"%' AND ${where}
     ORDER BY t.updated_at DESC`).all(after);
-  const moved = (s) => `t.status = '${s}' AND (SELECT e.created_at FROM task_events e WHERE e.task_id = t.id ORDER BY e.id DESC LIMIT 1) >= ?`;
+  const moved = (...s) => `t.status IN ('${s.join("','")}') AND (SELECT e.created_at FROM task_events e WHERE e.task_id = t.id ORDER BY e.id DESC LIMIT 1) >= ?`;
   const stuck = (runs || []).filter((r) => r.claude === 'gone' && r.session).flatMap((r) => (r.tasks || []).filter((t) => ['prep', 'doing', 'deploy'].includes(t.status)).map((t) => t.key));
   const named = stuck.length ? db.prepare(`SELECT (p.prefix || '-' || t.task_no) AS key, t.title, COALESCE(p.name, p.slug) AS project
     FROM tasks t JOIN projects p ON p.id = t.project_id WHERE p.archived = 0 AND (p.prefix || '-' || t.task_no) IN (SELECT value FROM json_each(?))
@@ -355,7 +360,7 @@ export async function awaySummary(since, runs) {
       AND EXISTS (SELECT 1 FROM task_sessions s WHERE s.task_id = t.id AND s.last_seen >= ?)`).all(JSON.stringify(stuck), after) : [];
   const cut = (list) => ({ n: list.length, tasks: list.slice(0, SUMMARY_ROWS) });
   return {
-    handed: cut(rows(moved('review'))),
+    handed: cut(rows(moved('ready', 'review'))),
     accepted: cut(rows(moved('done'))),
     returned: cut(rows(`t.status IN ('todo','prep','doing') AND (SELECT e.created_at FROM task_events e WHERE e.task_id = t.id ORDER BY e.id DESC LIMIT 1) >= ?
       AND (SELECT e.status FROM task_events e WHERE e.task_id = t.id ORDER BY e.id DESC LIMIT 1 OFFSET 1) = 'review'`)),
@@ -407,8 +412,7 @@ async function startBatch(app, rule, slug, keys, text, now, extra = {}) {
   if (free.length) res = await go(free);
   if (res.statusCode < 300) { waitAgain(rule, rule.task_id, now, true); return true; }
   fixWait.set(rule.id, now + FIX_RETRY_MS);
-  const body = res.json();
-  waitAgain(rule, rule.task_id, now, false, body?.reason ? `${body.reason}: ${body.error}` : body?.error || `Claude did not start (${res.statusCode})`);
+  waitAgain(rule, rule.task_id, now, false, refusal(res, res.json()));
   return false;
 }
 async function tickQueue(app, rule, ctx, now) {
@@ -466,8 +470,11 @@ async function tickSchedule(app, rule, ctx, now, running) {
     Fastify instance (its routes make and start the check). */
 export async function tickAutomations(app, now = Date.now()) {
   if (automationsOn()) {
-    await tickResume(app, now, { waiting: new Set([...currentQuestions().map((q) => q.id), ...pendingAsks().map((a) => a.task_id)]), limited: limitedNow(now) })
-      .catch((e) => logError('server', 'automations', `resume: ${e.message}`, e.stack));
+    // not before the first look at the screens: a restarted board would take «not read yet» for «no question, no limit line»
+    if (screensKnown()) {
+      await tickResume(app, now, { waiting: new Set([...currentQuestions().map((q) => q.id), ...pendingAsks().map((a) => a.task_id)]), limited: limitedNow(now) })
+        .catch((e) => logError('server', 'automations', `resume: ${e.message}`, e.stack));
+    }
     await tickHealth(app, now).catch((e) => logError('server', 'automations', `health: ${e.message}`, e.stack));
   }
   // a project archived under a rule takes it off — skipped for good, it stood «waiting» in the sidebar forever (review)

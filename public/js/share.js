@@ -5,6 +5,8 @@ import { moreHTML } from './settings.js';
 import { styledConfirm } from './sidebar.js';
 
 let shareOn = false;
+let guest = false;
+export const guestHere = () => guest;
 const buttonTitle = () => tr(shareOn ? 'The board is open to Wi-Fi' : 'Open the board to Wi-Fi');
 export function shareButtonHTML() {
   return `<button type="button" class="btn-icon proj-share${shareOn ? ' on' : ''}" title="${esc(buttonTitle())}" aria-label="${esc(buttonTitle())}">${ic('wifi', 14)}</button>`;
@@ -12,6 +14,7 @@ export function shareButtonHTML() {
 
 export function applyShare(data) {
   shareOn = !!data?.on;
+  guest ||= !!data?.guest; // the event `share.updated` says only `on`
   document.querySelectorAll('.proj-share').forEach((b) => {
     b.classList.toggle('on', shareOn);
     b.title = buttonTitle();
@@ -41,6 +44,7 @@ function refusedHTML(list) {
 const POLL_MS = 3000; // «connected now» while the section is open
 let poll = null; // one at a time: leaving the section and coming back within POLL_MS would start a second
 const row = (lab, hint, side = '') => `<div class="set-row"><span class="set-lab">${lab}<small>${hint}</small></span>${side}</div>`;
+export const guestBackupsHTML = () => row(tr('You are a guest here'), tr('backups stay with the owner of the board: a backup holds its key'));
 
 export async function renderShareSection(body) {
   body.innerHTML = `<div class="sm-h">Wi-Fi</div><div id="share-box" class="share-box">…</div>`;

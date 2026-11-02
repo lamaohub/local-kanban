@@ -54,6 +54,15 @@ test('the move goes first, the note after it', async () => {
   assert.equal(r.stderr, '');
 });
 
+test('a saved note is the end of kb note: nothing is read after it that could fail and ask for a second one', async () => {
+  seen = [];
+  answer = (req) => (req.method === 'POST' ? { status: 201, body: comment } : { status: 500, body: { error: 'internal error' } });
+  const r = await run(['note', 'DM-7', 'halfway']);
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(r.stdout.trim(), 'DM-7 📝');
+  assert.deepEqual(seen, ['POST /api/tasks/DM-7/comments']);
+});
+
 test('a note that did not save after the move says so and how to add it', async () => {
   seen = [];
   answer = (req) => (req.method === 'PATCH' ? { status: 200, body: task } : { status: 500, body: { error: 'internal error' } });

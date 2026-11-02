@@ -95,6 +95,8 @@ export default async function dashboardRoutes(app) {
       FROM tasks t JOIN projects p ON p.id = t.project_id AND p.archived = 0`;
     const review = db.prepare(`${waitSel} WHERE t.status = 'review' ORDER BY t.priority DESC, t.updated_at DESC LIMIT 40`).all()
       .map((t) => ({ key: t.key, title: t.title, project: t.project, priority: t.priority }));
+    const ready = db.prepare(`${waitSel} WHERE t.status = 'ready' ORDER BY t.priority DESC, t.updated_at DESC LIMIT 40`).all()
+      .map((t) => ({ key: t.key, title: t.title, project: t.project, priority: t.priority }));
     const blocked = db.prepare(`${waitSel} WHERE t.blocked = 1 AND t.status NOT IN ('done','cancelled') ORDER BY t.updated_at DESC LIMIT 40`).all()
       .map((t) => ({ key: t.key, title: t.title, project: t.project, reason: t.reason }));
     const stale = db.prepare(`${waitSel} WHERE t.status IN ('doing','deploy') AND t.updated_at <= datetime('now','-2 hours') ORDER BY t.updated_at ASC LIMIT 40`).all()
@@ -163,7 +165,7 @@ export default async function dashboardRoutes(app) {
       range,
       summary: { done_period: period.n, active, work_seconds_period: period.sec, cycle_hours_period: period.cyc, done_total: doneTotal, manual_period: manualPeriod, manual_total: manualTotal },
       queue: { todo_ready: todoReady, backlog },
-      waiting: { review, blocked, stale },
+      waiting: { ready, review, blocked, stale },
       planning,
       heat_days: heatDays,
       heat_time: heatTime,

@@ -1,6 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
@@ -109,11 +109,14 @@ test('the master switch off stops resume and health too, not only the rules', as
   let looked = 0;
   r.setResumeDeps({ runs: async () => { looked += 1; return { runs: [] }; } });
   r.resetResume();
+  await (await import('../src/claude-live.js')).refreshLive(undefined, async () => ({ live: [], questions: [] })); // a first look is over: only the switch holds it
   await inject('PUT', '/api/automations/extras', { resume: true, launch: { permission: 'auto' } });
   auto.setAutomationsOn(false);
   await auto.tickAutomations(app, Date.now() + 1e9);
   assert.equal(looked, 0, 'the board went on with work while the automations were off');
   auto.setAutomationsOn(true);
+  await auto.tickAutomations(app, Date.now() + 2e9);
+  assert.equal(looked, 1, 'the look never went: the switch above proves nothing');
   await inject('PUT', '/api/automations/extras', { resume: false });
 });
 
@@ -204,6 +207,54 @@ test('CK-939: a refused batch counts down to its next try, not 0:00 for five min
   assert.equal(r.phase, 'ready');
   assert.equal(r.due_at, t0 + 1000 + 5 * 60_000);
   await dropAll(slug);
+});
+
+test('a refused batch sends no start until its pause is over, and the error goes with the next one', async () => {
+  const slug = project();
+  await add(slug, 'next');
+  const id = (await arm(slug, { ...QUEUE, repeat: true })).json().id;
+  const t0 = Date.now();
+  await auto.tickAutomations(app, t0); // ready
+  db.prepare('UPDATE projects SET path = NULL WHERE slug = ?').run(slug);
+  hooks.launches.length = 0;
+  await auto.tickAutomations(app, t0 + 1000); // the start is refused
+  assert.equal(hooks.launches.length, 1);
+  await auto.tickAutomations(app, t0 + 2000); // ready again: its own pause of 0 min is over at the next look
+  await auto.tickAutomations(app, t0 + 3000);
+  await auto.tickAutomations(app, t0 + 1000 + 5 * 60_000 - 1);
+  assert.equal(hooks.launches.length, 1, 'a start was tried in the middle of the pause');
+  db.prepare('UPDATE projects SET path = ? WHERE slug = ?').run(folder, slug);
+  await auto.tickAutomations(app, t0 + 1000 + 5 * 60_000 + 1);
+  assert.equal(hooks.launches.length, 2, 'the pause never ended');
+  assert.equal(rule(id).error, null, 'the error outlived a start that went');
+  await dropAll(slug);
+});
+
+test('a batch held by a Claude already at it says so in words the page knows', async () => {
+  const slug = project();
+  const t = await add(slug, 'next');
+  const id = (await arm(slug, { ...QUEUE, repeat: true })).json().id;
+  const t0 = Date.now();
+  await auto.tickAutomations(app, t0); // ready
+  const busy = { inject: async (o) => (o.url !== '/api/launch' ? app.inject(o) : { statusCode: 409, json: () => ({ error: `Claude of the board already works on ${t.key}`, running: [t.key] }) }) };
+  await auto.tickAutomations(busy, t0 + 1000);
+  assert.match(rule(id).error, /^running: /, 'the refusal lost what it was');
+  const { failWord } = await import('../public/js/review-rules.js');
+  const word = failWord(rule(id).error);
+  assert.ok(word, 'the page shows the raw English line on a Russian board');
+  await dropAll(slug);
+});
+
+test('every refusal of a start the page words has its translation', async () => {
+  const { failWord } = await import('../public/js/review-rules.js');
+  const core = readFileSync(new URL('../public/js/core.js', import.meta.url), 'utf8');
+  for (const reason of ['no-folder', 'no-tmux', 'no-claude', 'too-long', 'check-open', 'manual', 'running', 'tmux-slow']) {
+    const word = failWord(`${reason}: the English of the server`);
+    assert.ok(word, `${reason} has no words`);
+    assert.ok(core.includes(`'${word}':`) || core.includes(`"${word}":`), `«${word}» is not in the dictionary`);
+  }
+  assert.equal(failWord('Claude did not start (500)'), null, 'a line that is no refusal stays as it is');
+  assert.equal(failWord(null), null);
 });
 
 test('a queue taken off by the look of another rule starts nothing', async () => {

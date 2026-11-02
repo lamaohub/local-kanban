@@ -355,7 +355,7 @@ export function initGlyphs({ enabled } = {}) {
     pulse(e.clientX, e.clientY);
   }, { capture: true, passive: true });
   document.addEventListener('visibilitychange', syncGlyphs);
-  const active = () => { activeAt = performance.now(); if (!frame) syncGlyphs(); };
+  const active = () => { activeAt = performance.now(); if (!frame && running()) syncGlyphs(); };
   for (const ev of ['pointermove', 'pointerdown', 'keydown', 'wheel', 'touchstart']) document.addEventListener(ev, active, { capture: true, passive: true });
   matchMedia('(prefers-reduced-motion: reduce)').addEventListener?.('change', syncGlyphs);
   syncGlyphs();

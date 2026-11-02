@@ -60,6 +60,19 @@ export function createUnsentEdits() {
     (4xx: the task is gone, the change does not pass the checks) is not cured by sending it again. */
 export const canRetry = (e) => Boolean(e?.offline) || e?.status >= 500;
 
+/** The fields of a sent edit a refusal is about: a PATCH is all or nothing, so the rest of the edit came back with them. The
+    answer names the field; one that does not, on an edit that moves the status, is about the move. A move sent with a refused
+    label goes with it: it was allowed by that label, and alone it would lock the card in a column nobody moved it to. Pure. */
+export function refusedFields(e, sent) {
+  if (!e?.status || canRetry(e)) return [];
+  const named = e.body?.field;
+  if (named) {
+    if (!(named in sent)) return [];
+    return named === 'labels' && 'status' in sent ? ['labels', 'status'] : [named];
+  }
+  return 'status' in sent ? ['status'] : [];
+}
+
 export const RESEND_MS = 3000;
 export const RESEND_MAX_MS = 60000;
 /** How long to wait before the next try, `n` — how many tries in a row already failed. */
@@ -125,6 +138,10 @@ export function createUnsentComments() {
       const c = (byKey.get(key) || []).find((x) => x.id === id);
       return c ? { ...c } : null;
     },
+    /** the key this text waits under: pressed again, it is that comment (undefined — it does not wait) */
+    tokenOf: (key, body) => (byKey.get(key) || []).find((c) => c.body === body)?.token,
+    /** the entry a comment of the server answers to, by the key it was written under */
+    byToken: (key, token) => (byKey.get(key) || []).find((c) => c.token === token) ?? null,
     /** delivered, or taken back by the person */
     done(key, id) {
       const list = (byKey.get(key) || []).filter((c) => c.id !== id);
@@ -132,6 +149,26 @@ export function createUnsentComments() {
       else byKey.delete(key);
     },
     get size() { let n = 0; for (const l of byKey.values()) n += l.length; return n; },
+  };
+}
+
+/** The keys of the sends with no answer yet, by task and text. A press past the hold, or a second press after a lost answer,
+    is that same comment under that same key; an answer ends it, and the same words after it are a new comment. The server's
+    event may beat the failure of the send it belongs to: `heard` remembers that, and `written` says the comment needs no
+    queue, only its answer was lost. */
+export function createCommentKeys() {
+  const out = new Map();
+  const at = (task, text) => `${task}\n${text}`;
+  return {
+    /** `waiting` — the key this text already waits under in the queue of resends */
+    of(task, text, waiting) {
+      const s = out.get(at(task, text)) ?? { token: waiting ?? commentToken(), heard: false };
+      out.set(at(task, text), s);
+      return s.token;
+    },
+    heard(token) { for (const s of out.values()) if (s.token === token) s.heard = true; },
+    written: (task, text) => Boolean(out.get(at(task, text))?.heard),
+    done(task, text) { out.delete(at(task, text)); },
   };
 }
 
@@ -147,6 +184,10 @@ const said = (text, reason, flags) => ({ text, reason, gone: false, refresh: fal
 const TASK_GONE = said('This task no longer exists — it was deleted.', 'the task no longer exists — it was deleted', { gone: true, refresh: true });
 const CLAUDE_GONE = said('Claude of the board no longer runs on this task — nothing was sent.', 'Claude of the board no longer runs on this task', { claudeGone: true });
 const REFUSED = said('Not saved: the board did not accept it.', 'the board did not accept it');
+// the Wi-Fi door no longer knows this device. The page does not reload over words typed (`setDoorClosed` in core.js), so
+// the way to the door's form is said here
+const DOOR_CLOSED = said('Not saved: this device no longer has the key of the board, it may have been changed. Copy what you typed, then reload the page and enter the key.',
+  'this device no longer has the key of the board, it may have been changed — copy what you typed, then reload the page and enter the key');
 const KNOWN = [
   [/^the project has no folder on this computer — set it in the project$/, 'the project has no folder on this computer'],
   [/^the file is no longer there$/, 'the file is no longer on this computer'],
@@ -192,11 +233,14 @@ const KNOWN = [
   [/^no terminal to open on this computer/, 'there is no terminal to open on this computer — copy the command instead'],
   [/^the project has no folder on this computer — the command would run/, 'the project has no folder on this computer — set it in the project, or copy the command'],
   [/^the terminal did not open/, 'the terminal did not open — copy the command instead; the details are in Settings → Errors'],
+  [/^a guest starts Claude inside the board only$/, 'a guest starts Claude only inside the board'],
+  [/^unknown labels: /, 'this board has no such label'],
 ];
 export function refusalText(e) {
   const status = e?.status;
   const msg = String(e?.message || '');
   if (e?.offline) return said('No connection to the board — try again', 'no connection to the board — try again');
+  if (status === 401 && e?.body?.reason === 'share') return { ...DOOR_CLOSED };
   const known = status && KNOWN.find(([re]) => re.test(msg));
   if (known) return said(REFUSED.text, known[1], known[2]);
   if (status === 404) {
@@ -208,6 +252,12 @@ export function refusalText(e) {
   }
   if (status === 409 && /^Claude has exited in this terminal/.test(msg)) return { ...CLAUDE_GONE };
   if (status === 409 && e?.body?.reason === 'starting') return said(REFUSED.text, 'Claude is already being started on these tasks');
+  // a project that ships on the word: the text says what holds, and names no road out of work
+  if (status === 409 && e?.body?.reason === 'ready-first') {
+    if (e.body.field === 'labels') return said('Not saved: noclaude and check are not put on a task in work — this project ships on your word.', 'noclaude and check are not put on a task in work — this project ships on your word');
+    return said('Not saved: the task goes to Ready to ship first — this project ships on your word.', 'the task goes to Ready to ship first — this project ships on your word', { refresh: true });
+  }
+  if (status === 403 && e?.body?.reason === 'guest') return said('Not saved: only the owner of the board can do this.', 'only the owner of the board can do this');
   if (status === 409 && /^the Claude app is not installed/.test(msg)) {
     return said(REFUSED.text, 'the Claude app is not installed on this computer — pick Terminal or Copy in Settings');
   }

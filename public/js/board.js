@@ -15,7 +15,8 @@ import { autoSlot } from './automations.js';
 import { paintAttention } from './attention.js';
 import { refusalLine } from './unsaved.js';
 import { localStore } from './store.js';
-import { SHIP_TITLES, SHIP_WORDS, notOnMain, showsShip } from './shipped-rules.js';
+import { SHIP_TITLES, SHIP_WORDS, notOnMain, shipAsker, showsShip } from './shipped-rules.js';
+import { boardColumns } from './ready-rules.js';
 
 function matchesSearch(t) {
   return inSearch(t, { search: state.search, applied: state.searchApplied, hits: state.searchHits });
@@ -99,22 +100,17 @@ const SHIP_KEY = 'kb.ui.reviewNotMain';
 const SHIP_EVERY_MS = 30000;
 const shipFilter = () => localStore.getItem(SHIP_KEY) === '1';
 function setShipFilter(on) { try { localStore.setItem(SHIP_KEY, on ? '1' : '0'); } catch { /* the storage is off: the filter stays as it was */ } }
-let shipAsked = { slug: null, at: 0, flying: false };
-function askShipped() {
-  const now = Date.now();
-  if (shipAsked.flying || !state.tasks.some((t) => showsShip(t.status))) return;
-  if (shipAsked.slug === state.slug && now - shipAsked.at < SHIP_EVERY_MS) return;
-  shipAsked = { slug: state.slug, at: now, flying: true };
-  const asked = state.slug;
-  api('GET', `/api/shipped${asked === ALL ? '' : `?project=${encodeURIComponent(asked)}`}`, undefined, { quiet: true })
-    .then((r) => {
-      if (asked !== state.slug || JSON.stringify(r.tasks) === JSON.stringify(state.shipped)) return;
-      state.shipped = r.tasks;
-      renderBoard();
-    })
-    .catch(() => { /* the card says nothing: it is a hint, not a state of the task */ })
-    .finally(() => { shipAsked.flying = false; });
-}
+const askShipped = shipAsker({
+  every: SHIP_EVERY_MS,
+  board: () => state.slug,
+  wanted: () => state.tasks.some((t) => showsShip(t.status)),
+  ask: (slug) => api('GET', `/api/shipped${slug === ALL ? '' : `?project=${encodeURIComponent(slug)}`}`, undefined, { quiet: true }),
+  apply: (r) => {
+    if (JSON.stringify(r.tasks) === JSON.stringify(state.shipped)) return;
+    state.shipped = r.tasks;
+    renderBoard();
+  },
+});
 const gateHere = () => (state.slug === ALL ? state.projects.some((p) => p.ship_gate) : Boolean(state.projects.find((p) => p.slug === state.slug)?.ship_gate));
 function columnHead(key, tasks, mode, labels) {
   const head = document.createElement('div');
@@ -216,9 +212,7 @@ export function renderBoard() {
   const sameBoard = prevRenderSlug === state.slug;
   const animate = prevCardIds.size > 0 && sameBoard;
   const labels = Object.fromEntries(ALL_STATUSES);
-  const columns = ALL_STATUSES.map(([k]) => k)
-    .filter((k) => (k !== 'cancelled' || state.tasks.some((t) => t.status === 'cancelled'))
-      && (k !== 'ready' || readyInUse(state.slug) || state.tasks.some((t) => t.status === 'ready')));
+  const columns = boardColumns(ALL_STATUSES.map(([k]) => k), state.tasks, readyInUse(state.slug));
   const plan = columns.map((key) => {
     const mode = colSort(key);
     const hidden = key === 'review' && shipFilter() ? (t) => !notOnMain(t, state.shipped) : () => false;

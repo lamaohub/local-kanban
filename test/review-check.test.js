@@ -43,6 +43,7 @@ after(async () => {
 test('the page and the server agree on what a check is and when it is still open', () => {
   assert.equal(check.CHECK_LABEL, PAGE_LABEL);
   assert.deepEqual(check.OPEN_CHECK, PAGE_OPEN);
+  assert.ok(check.OPEN_CHECK.includes('ready'), 'a check standing in Ready to ship lets a second one start');
 });
 
 test('the check label is in the palette, so it syncs, but is not offered to put by hand', async () => {

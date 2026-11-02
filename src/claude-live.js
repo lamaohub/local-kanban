@@ -216,7 +216,9 @@ let boardLive = new Set();
 let workProjects = [];
 let questionsNow = [];
 let lastLook = { live: [], questions: [], background: [], over: [], limited: [] };
+let screensRead = false;
 
+export const screensKnown = () => screensRead;
 /** The last computed states — for the dashboard, which answers synchronously from its cache. */
 export const currentLive = () => current;
 export const currentBackground = () => background;
@@ -243,6 +245,7 @@ async function activeProjects(isAlive, alive, bg, ov) {
     the background) differ from the last ones. `look` — what the board's terminals show (boardLook). */
 export async function refreshLive(isAlive = alive, look = boardLook) {
   let seen = await look();
+  const read = !seen.failed;
   if (seen.failed) seen = lastLook; else lastLook = seen;
   const alive = new Set(seen.live || []);
   const hits = new Map((seen.limited || []).map((x) => [x.sid, { resets: x.resets }]));
@@ -267,6 +270,7 @@ export async function refreshLive(isAlive = alive, look = boardLook) {
   limitMissed = missed;
   overMissed = ovMissed;
   boardLive = alive;
+  if (read) screensRead = true;
   if (json === currentJson) return false;
   current = next;
   currentJson = json;

@@ -144,6 +144,13 @@ test('the background ends — the run waits for you in Claude now; two hours at 
   // a Claude the registry calls waiting — the same
   put('waiting', Date.now() - 60_000);
   assert.deepEqual(sessions((await now.nowRuns(alive)).runs).find((r) => r[0] === BG), [BG, 'waiting']);
+  const ready = (status) => db.prepare("UPDATE tasks SET status = ? WHERE task_no = 1 AND project_id = (SELECT id FROM projects WHERE prefix = 'BG')").run(status);
+  ready('ready');
+  try {
+    const run = (await now.nowRuns(alive)).runs.find((r) => r.session === BG);
+    assert.equal(run?.claude, 'waiting', 'a Claude waiting for the word is gone from Claude now');
+    assert.equal(run.submitted_n, run.tasks_n, 'a task in the column is not counted as handed in');
+  } finally { ready('review'); }
   // its tasks all accepted: done, whatever its Claude does
   const move = (status) => app.inject({ method: 'PATCH', url: '/api/tasks/BG-1', payload: { status } });
   put('idle', Date.now() - 60_000);

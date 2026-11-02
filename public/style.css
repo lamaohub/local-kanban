@@ -2574,16 +2574,17 @@ html[data-design="v3"] .rv-group.rv-live::after { border-radius: 12px; }
   .topbar-left { flex: 1 1 auto; }
   .topbar h1 { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   #week-stats { display: none; }
-  #side-open, #project-menu, .drawer-head-actions .btn-icon, .col-sort, .col-add, .col-copy, .sound-badge, .dr-btn, .wait-sec-h { position: relative; }
+  #side-open, #project-menu, .drawer-head-actions .btn-icon, .col-sort, .col-add, .col-copy, .col-check, .sound-badge, .dr-btn, .wait-sec-h { position: relative; }
   #side-open::after, #project-menu::after, .drawer-head-actions .btn-icon::after { content: ''; position: absolute; inset: -12px -6px; }
-  .col-sort::after, .col-add::after, .col-copy::after { content: ''; position: absolute; inset: -11px -6px; }
+  .col-sort::after, .col-add::after, .col-copy::after, .col-check::after { content: ''; position: absolute; inset: -11px -6px; }
   .sound-badge::after { content: ''; position: absolute; inset: -11px -4px; }
   .topbar-right { margin-left: 10px; } /* the taps of ⋯ and of «sound off» overlapped: ⋯ kept 30 of its 40 points */
   .dr-btn::after { content: ''; position: absolute; inset: -9px -1px; }
   .wait-sec-h::after { content: ''; position: absolute; inset: -10px -8px; }
   .attach-chip { position: relative; }
   .attach-chip::after { content: ''; position: absolute; inset: -11px -3px; }
-  .drawer-head-actions, .col-head { gap: 12px; }
+  .drawer-head-actions { gap: 12px; }
+  .col-head .btn-icon + .btn-icon { margin-left: 5px; } /* only the buttons apart: three of them and a title fill a column of 230 */
 }
 html[data-design="v3"] .drawer:not(.drawer-ghost) > .drawer-head {
   position: sticky; top: -16px; z-index: 7; box-sizing: border-box; min-height: 44px;

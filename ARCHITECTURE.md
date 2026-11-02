@@ -42,7 +42,7 @@ These are deliberate and predate most of the features. Changes that break them n
 | `src/db.js` | opens the DB, runs migrations, exposes `db` and small kv/queue helpers |
 | `src/schema.sql` | DDL for a fresh install, replayed on every start (`CREATE TABLE IF NOT EXISTS`) |
 | `src/origin-guard.js` | rejects cross-origin and unexpected `Host` requests |
-| `src/share.js` + `src/qr.js` | Settings → Wi-Fi: an opt-in door that admits the private network by a key (in the QR link or typed by hand on the door's page, so a browser that lost its pass is asked, not locked out; the browser keeps an HMAC of the key; plain HTTP: it keeps people out, it does not encrypt the traffic; another site may only open the board as a page) and passes requests on to the loopback board; what stays the owner's (the computer's settings, windows on its screen) is refused to a guest twice — at the door by the decoded path and on the board by the route its router matched (`guestGuard`); the link's QR code |
+| `src/share.js` + `src/qr.js` | Settings → Wi-Fi: an opt-in door that admits the private network by a key (in the QR link or typed by hand on the door's page, so a browser that lost its pass is asked, not locked out; the browser keeps an HMAC of the key; plain HTTP: it keeps people out, it does not encrypt the traffic; another site may only open the board as a page) and passes requests on to the loopback board; what stays the owner's (the computer's settings, windows on its screen, backups, which hold the key and are not even read) is refused to a guest twice — at the door by the decoded path and on the board by the route its router matched (`guestGuard`); the link's QR code |
 | `src/bus.js` | in-process event bus + SSE connection ceiling |
 | `src/routes/tasks.js` | tasks, comments, checklists, attachments, links |
 | `src/routes/projects.js` | project registry, folders, categories, service status |
@@ -70,6 +70,7 @@ These are deliberate and predate most of the features. Changes that break them n
 | `src/launch.js` | starting Claude from the board: the app link, the terminal command, their quoting |
 | `src/phantom.js` | Claude inside the board: a background tmux session per launch, its screen, typing into it |
 | `src/routes/terminal.js` | the card's Terminal tab: the screen, answers and keys, stopping |
+| `src/term-screens.js` | the screens answered lately and what a look gets: same, what changed, or the whole screen |
 | `src/routes/horizons.js` | time-horizon goals |
 | `src/health.js`, `src/routes/health.js` | "Health": how big the instructions Claude Code reads in each project are (CLAUDE.md up the folders, imports, rules, auto memory) against the norms of its docs and its own warnings; what loads only on demand — the CLAUDE.md of subfolders and the rules with `paths:` — apart |
 | `src/sync/github.js` | every `gh` invocation, the label palette, Projects v2 plumbing |
@@ -126,7 +127,7 @@ backlog → todo → prep → doing → [ready →] deploy → review → done  
 
 The statuses model an agent's working loop, not a generic board. `ready` is off by default: with the
 switch of Settings → Statuses on (a project may say otherwise), a finished task stops there until the person
-says to ship it, and the server refuses a move into `deploy` past it, and `doing → review`. `prep` is study-before-code;
+says to ship it, and the server refuses a move into `deploy` past it, and `doing → review`, also by way of `prep`. Off and empty, it is in no menu and no column; the server still takes a move into it, and the column shows while a task stands there. `prep` is study-before-code;
 `doing` and `deploy` are the only statuses where the work timer runs — and only while the task's Claude session is alive: a closed session stops it, a Claude back on the task starts it again (`src/work-clock.js`).
 
 Rules worth knowing before touching them:

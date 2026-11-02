@@ -199,7 +199,12 @@ test('taps of a phone: ✕ ▶ ⋯, the buttons of a column, ☰, the tabs and �
   for (const sel of ['#side-open::after', '#project-menu::after', '.drawer-head-actions .btn-icon::after', '.col-sort::after', '.sound-badge::after', '.dr-btn::after', '.wait-sec-h::after']) {
     assert.ok(block.includes(sel), `${sel} lost its wider tap`);
   }
-  assert.match(block, /\.drawer-head-actions, \.col-head \{ gap: 12px; \}/, 'the taps of neighbour icons overlap');
+  // A tap reaches 6px past a button on either side, so neighbours stand 12px apart: the gap of the row and a margin of
+  // the buttons alone, since the title beside them may not lose the room.
+  assert.match(block, /\.drawer-head-actions \{ gap: 12px; \}/, 'the taps of neighbour icons overlap');
+  const gap = Number(/\n\.col-head \{\n\s*display: flex; align-items: center; gap: (\d+)px;/.exec(css)?.[1]);
+  const margin = Number(/\.col-head \.btn-icon \+ \.btn-icon \{ margin-left: (\d+)px; \}/.exec(block)?.[1]);
+  assert.ok(gap + margin >= 12, `the taps of the buttons of a column overlap: ${gap} + ${margin}`);
 });
 
 test('CK-849: the ☰ panel, Settings, the search keep a step too — back closes them, not the page', () => {

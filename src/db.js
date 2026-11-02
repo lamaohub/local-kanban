@@ -91,6 +91,7 @@ const MIGRATIONS = [
       throw e;
     } finally { db.pragma('foreign_keys = ON'); }
   } },
+  { v: 15, name: 'comment-keys-deleted', up: () => {} },
 ];
 export const SCHEMA_VERSION = MIGRATIONS.at(-1).v;
 

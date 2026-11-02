@@ -20,6 +20,7 @@ import { latestRequest, LIST_NOTICE, listErrorDelay, listFailure, listNotice, li
 import { openSearch } from './search.js';
 import { typeset } from './typeset.js';
 import { localStore, sessionStore } from './store.js';
+import { activeTotal, waitingForWord } from './ready-rules.js';
 
 function sayProjectsFailed(e) {
   const box = $('projects');
@@ -217,7 +218,8 @@ export function renderSidebar() {
 
   const dashEl = document.createElement('div');
   dashEl.className = 'proj proj-dash' + (state.slug === DASH ? ' active' : '');
-  dashEl.innerHTML = `${navIc('chart')}<span class="proj-name">${tr('Dashboard')}</span>`;
+  const forWord = waitingForWord(state.projects);
+  dashEl.innerHTML = `${navIc('chart')}<span class="proj-name">${tr('Dashboard')}</span>${forWord ? `<span class="proj-counts" title="${forWord} ${esc(tr('tasks waiting for your word to ship'))}">${forWord}</span>` : ''}`;
   dashEl.dataset.slug = DASH;
   dashEl.onclick = () => selectProject(DASH);
   box.appendChild(dashEl);
@@ -280,7 +282,7 @@ export function renderSidebar() {
     box.appendChild(el);
   }
 
-  const totalActive = state.projects.reduce((s, p) => s + (p.c_todo || 0) + (p.c_prep || 0) + (p.c_doing || 0) + (p.c_ready || 0) + (p.c_deploy || 0) + (p.c_review || 0), 0);
+  const totalActive = activeTotal(state.projects);
   const allEl = document.createElement('div');
   allEl.className = 'proj proj-all' + (state.slug === ALL ? ' active' : '');
   allEl.innerHTML = `${navIc('grid')}<span class="proj-name">${tr('All projects')}</span>

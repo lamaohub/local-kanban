@@ -2,11 +2,11 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
-import { notOnMain, showsShip, SHIP_WORDS } from '../public/js/shipped-rules.js';
+import { notOnMain, shipAsker, showsShip, SHIP_WORDS } from '../public/js/shipped-rules.js';
 
 let app, tmp, repo, db, forgetShipped, pid, n = 0;
 const git = (...a) => execFileSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@example.invalid', ...a], { cwd: repo, encoding: 'utf8', stdio: 'pipe' }).trim();
@@ -25,6 +25,7 @@ before(async () => {
   ghState.available = false; ghState.lastCheck = Date.now() + 1e9;
   git('init', '-q', '-b', 'main');
   commit('first');
+  db.prepare("INSERT OR REPLACE INTO kv (key, value) VALUES ('gh.owner', 'lamaohub'), ('gh.repo', 'lamaohub/server-comp')").run();
   pid = db.prepare("INSERT INTO projects (slug, prefix, name, next_task_no, path) VALUES ('demo','DM','demo',100,?)").run(repo).lastInsertRowid;
   app = Fastify();
   await app.register((await import('../src/routes/projects.js')).default);
@@ -33,16 +34,21 @@ before(async () => {
 after(async () => { await app?.close(); for (const d of [tmp, repo]) if (d) rmSync(d, { recursive: true, force: true }); });
 
 test('by the key, by the issue, and by the commit hung on the card', async () => {
-  task(1); task(2, 'review', { issue: 77 }); const third = task(3); task(4, 'ready');
+  task(1); task(2, 'review', { issue: 77 }); task(4, 'ready');
   commit('fix the login (DM-1)');
   commit('another (lamaohub/server-comp#77)');
-  const hash = commit('a message that names no task');
-  db.prepare("INSERT INTO task_comments (task_id, author, body) VALUES (?, 'git', ?)").run(third, `${hash.slice(0, 10)} a message\n1 file changed`);
   const t = await look();
   assert.equal(t['DM-1'], 'main');
   assert.equal(t['DM-2'], 'main');
-  assert.equal(t['DM-3'], 'main');
   assert.equal(t['DM-4'], 'none', 'a task with no commit');
+});
+
+test('a commit hung on the card proves nothing: without an issue the board hangs the latest commit of the project', async () => {
+  const third = task(3);
+  commit('work of another task (DM-1)');
+  const hash = commit('a message that names no task');
+  db.prepare("INSERT INTO task_comments (task_id, author, body) VALUES (?, 'git', ?)").run(third, `${hash.slice(0, 10)} a message\n1 file changed`);
+  assert.equal((await look())['DM-3'], 'none', 'the head of the project read as the commit of the task');
 });
 
 test('a commit on a branch only is said so, and a key is not a part of a longer one', async () => {
@@ -112,6 +118,238 @@ test('the same subject with another patch is not a copy', async () => {
   assert.equal((await look())['DM-16'], 'branch', 'a subject seen on main hid unshipped work');
 });
 
+test('a copy under another subject: GitHub adds the number of the pull request', async () => {
+  task(17);
+  git('checkout', '-q', '-b', 'pr-one');
+  commit('single work (DM-17)');
+  git('checkout', '-q', 'main');
+  commit('main went on');
+  git('cherry-pick', 'pr-one');
+  git('commit', '-q', '--amend', '-m', 'single work (DM-17) (#12)');
+  assert.equal((await look())['DM-17'], 'main', 'only the same subject was compared');
+});
+
+test('squashed: a branch of another name, a new subject, and nothing left to carry', async () => {
+  task(18); task(19);
+  git('checkout', '-q', '-b', 'pr-two');
+  commit('part one (DM-18)', 'squashed-a');
+  commit('part two (DM-18)', 'squashed-b');
+  git('checkout', '-q', 'main');
+  commit('main went on');
+  git('merge', '-q', '--squash', 'pr-two');
+  git('commit', '-q', '-m', 'the whole of it (DM-18) (#13)');
+  git('checkout', '-q', '-b', 'claude/DM-19');
+  commit('no key here', 'squashed-c');
+  commit('nor here', 'squashed-d');
+  git('checkout', '-q', 'main');
+  git('merge', '-q', '--squash', 'claude/DM-19');
+  git('commit', '-q', '-m', 'all of the nineteenth (#14)');
+  const t = await look();
+  assert.equal(t['DM-18'], 'main', 'a squash read as only in a branch');
+  assert.equal(t['DM-19'], 'main', 'a squash of the branch of the task read as only in a branch');
+});
+
+test('a project in a folder with a colon: a squash is seen, and the objects stay', async () => {
+  const home = repo;
+  const parent = mkdtempSync(join(tmpdir(), 'kb-ship-'));
+  repo = join(parent, 'a:b');
+  mkdirSync(repo);
+  db.prepare('UPDATE projects SET path = ? WHERE id = ?').run(repo, pid);
+  try {
+    git('init', '-q', '-b', 'main');
+    commit('first');
+    task(90);
+    git('checkout', '-q', '-b', 'claude/DM-90');
+    commit('no key here', 'colon-a');
+    commit('nor here', 'colon-b'); // two: one commit squashed keeps its patch, and is found without the tree
+    git('checkout', '-q', 'main');
+    commit('main went on');
+    git('merge', '-q', '--squash', 'claude/DM-90');
+    git('commit', '-q', '-m', 'all of it (#15)');
+    const count = git('count-objects', '-v');
+    assert.equal((await look())['DM-90'], 'main', 'the path was split on its colon: a squash read as only in a branch');
+    assert.equal(git('count-objects', '-v'), count);
+  } finally {
+    repo = home;
+    db.prepare('UPDATE projects SET path = ? WHERE id = ?').run(repo, pid);
+    rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test('a line holds two tasks, one of them picked under another subject: each is told by its own commit', async () => {
+  task(29); task(30);
+  git('checkout', '-q', '-b', 'pr-mixed');
+  const first = commit('one thing (DM-29)', 'mixed-a');
+  commit('another (DM-30)', 'mixed-b');
+  git('checkout', '-q', 'main');
+  commit('main went on');
+  git('cherry-pick', first);
+  git('commit', '-q', '--amend', '-m', 'one thing (DM-29) (#16)');
+  const t = await look();
+  assert.equal(t['DM-29'], 'main', 'its copy on main was not seen');
+  assert.equal(t['DM-30'], 'branch');
+});
+
+test('a squash of only a part leaves the branch something to carry', async () => {
+  task(20);
+  git('checkout', '-q', '-b', 'pr-three');
+  commit('first half (DM-20)', 'half-a');
+  const left = commit('second half (DM-20)', 'half-b');
+  git('checkout', '-q', 'main');
+  git('merge', '-q', '--squash', `${left}~1`);
+  git('commit', '-q', '-m', 'only the first half (DM-20)');
+  assert.equal((await look())['DM-20'], 'branch');
+});
+
+test('a pick resolved into a text of its own stays a branch: neither patch nor tree proves it, and a subject never does', async () => {
+  task(21);
+  writeFileSync(join(repo, 'shared'), 'one\ntwo\nthree\n'); git('add', '-A'); git('commit', '-q', '-m', 'shared file');
+  git('checkout', '-q', '-b', 'pr-four');
+  writeFileSync(join(repo, 'shared'), 'one\ntwo\nTHREE\n'); git('add', '-A'); git('commit', '-q', '-m', 'edit it (DM-21)');
+  git('checkout', '-q', 'main');
+  writeFileSync(join(repo, 'shared'), 'one\nTWO\nthree\n'); git('add', '-A'); git('commit', '-q', '-m', 'the line next to it');
+  try { git('cherry-pick', 'pr-four'); assert.fail('the two edits were meant to conflict'); } catch (e) { if (!/CONFLICT|conflict/.test(String(e.stdout) + e.stderr)) throw e; }
+  writeFileSync(join(repo, 'shared'), 'one\nTWO\nTHREE\n'); git('add', '-A');
+  git('-c', 'core.editor=true', 'cherry-pick', '--continue');
+  git('commit', '-q', '--amend', '-m', 'edit it (DM-21) (#15)');
+  assert.equal((await look())['DM-21'], 'branch');
+});
+
+test('a look is a few git processes, however many commits the side holds', async () => {
+  // counted by git itself: a stand-in script on the PATH waits for the system on every new file and starves the tests beside it
+  const dir = mkdtempSync(join(tmpdir(), 'kb-git-'));
+  const calls = join(dir, 'calls');
+  task(22);
+  const copies = async (from, to) => {
+    git('checkout', '-q', 'many');
+    for (let i = from; i < to; i += 1) commit(`step ${i} (DM-22)`, `many-${i}`);
+    git('checkout', '-q', 'main');
+    commit('main went on');
+    for (let i = to - from; i >= 1; i -= 1) git('cherry-pick', `many~${i - 1}`);
+  };
+  const count = async () => {
+    writeFileSync(calls, '');
+    process.env.GIT_TRACE = calls;
+    try { assert.equal((await look())['DM-22'], 'main'); } finally { delete process.env.GIT_TRACE; }
+    return readFileSync(calls, 'utf8').split('\n').filter((l) => l.includes('trace: built-in: git ')).length;
+  };
+  git('branch', 'many');
+  await copies(0, 2);
+  const few = await count();
+  await copies(2, 14);
+  const more = await count();
+  rmSync(dir, { recursive: true, force: true });
+  assert.ok(few > 0 && more <= few + 2, `${few} git processes for 2 commits, ${more} for 14`); // a merge-tree may come or go, nothing per commit
+});
+
+test('a number is the issue only with the name of the mirror: #N in a foreign repository is its pull request', async () => {
+  const { forgetRepoBase } = await import('../src/repo-base.js');
+  task(23, 'review', { issue: 4242 }); task(24, 'review', { issue: 4243 }); const hung = task(25, 'review', { issue: 4244 });
+  commit('Merge pull request #4242 from someone/thing');
+  commit('work (LamaoHub/Server-Comp#4243)');
+  const merge = commit('Merge pull request #4244 from someone/other');
+  db.prepare("INSERT INTO task_comments (task_id, author, body) VALUES (?, 'git', ?)").run(hung, `${merge.slice(0, 10)} Merge pull request #4244`);
+  let t = await look();
+  assert.equal(t['DM-23'], 'none', 'the pull request of a foreign repository read as the issue');
+  assert.equal(t['DM-24'], 'main');
+  assert.equal(t['DM-25'], 'none', 'the board hung it by the bare number');
+  // the mirror itself: a number there is the issue, and it is what the skill asks to write
+  git('remote', 'add', 'origin', 'git@github.com:lamaohub/server-comp.git');
+  forgetRepoBase(repo);
+  t = await look();
+  assert.equal(t['DM-23'], 'main', 'in the mirror itself #N is the issue');
+  git('remote', 'remove', 'origin');
+  forgetRepoBase(repo);
+});
+
+test('a key mentioned by another commit is not a commit of that task', async () => {
+  task(26); task(27); task(28);
+  commit('shipped (DM-26)');
+  git('checkout', '-q', '-b', 'claude/follow-up');
+  commit('DM-27 follow-up to DM-26');
+  git('commit', '-q', '--allow-empty', '-m', 'a subject of nobody', '-m', 'the body says see DM-28 for why');
+  git('checkout', '-q', 'main');
+  const t = await look();
+  assert.equal(t['DM-26'], 'main', 'a mention on a branch read as work left on it');
+  assert.equal(t['DM-27'], 'branch');
+  assert.equal(t['DM-28'], 'none', 'a key in the body is a mention');
+});
+
+test('a line that took its work back has not shipped it: a commit and its revert, an empty commit', async () => {
+  task(70); task(71);
+  git('checkout', '-q', '-b', 'claude/DM-70');
+  commit('a try (DM-70)');
+  git('revert', '--no-edit', 'HEAD');
+  git('checkout', '-q', '-b', 'claude/DM-71', 'main');
+  git('commit', '-q', '--allow-empty', '-m', 'nothing in it (DM-71)');
+  git('checkout', '-q', 'main');
+  const t = await look();
+  assert.equal(t['DM-70'], 'branch', 'nothing of it is on main, and the mark said it is');
+  assert.equal(t['DM-71'], 'branch', 'an empty commit read as shipped');
+});
+
+test('a number at the head of a subject is no key: the key stands after it', async () => {
+  task(72); task(73); task(74); task(75);
+  commit('Fix 2-3 second delay (DM-72)');
+  commit('Move to sha-256 hashes (DM-73)');
+  commit('The 2026-11 report (DM-74)');
+  db.prepare("INSERT INTO projects (slug, prefix, name, next_task_no) VALUES ('sib','SIB','sib',5)").run();
+  commit('SIB-3 follow-up to DM-75');
+  const t = await look();
+  assert.deepEqual([t['DM-72'], t['DM-73'], t['DM-74']], ['main', 'main', 'main'], 'a word that looks like a key took the place of the key');
+  assert.equal(t['DM-75'], 'none', 'a key of another project on the board still comes first');
+});
+
+test('a look leaves the objects of the project as they were, and nothing of its own behind', async () => {
+  const objects = () => readdirSync(join(repo, '.git', 'objects'), { recursive: true }).sort();
+  task(76);
+  git('checkout', '-q', '-b', 'claude/DM-76');
+  commit('one (DM-76)', 'sq76a');
+  commit('two (DM-76)', 'sq76b');
+  git('checkout', '-q', 'main');
+  git('merge', '-q', '--squash', 'claude/DM-76');
+  git('commit', '-q', '-m', 'the feature (#76)');
+  commit('main went on'); // a merge of the line into this main makes a tree nobody has yet
+  const line = 'claude/DM-76';
+  assert.equal(git('merge-tree', '--write-tree', '--no-messages', 'main', line).split('\n')[0], git('rev-parse', 'main^{tree}'), 'the case itself');
+  const before = objects();
+  const held = process.env.TMPDIR;
+  const scratch = mkdtempSync(join(tmp, 'tmp-'));
+  process.env.TMPDIR = scratch;
+  try {
+    assert.equal((await look())['DM-76'], 'main', 'the squash stopped being read');
+    assert.deepEqual(objects(), before, 'a look wrote into the repository of the project');
+    assert.deepEqual(readdirSync(scratch), [], 'a look left its directory behind');
+    chmodSync(join(repo, '.git', 'objects'), 0o555);
+    assert.equal((await look())['DM-76'], 'main', 'a repository the board may not write to');
+  } finally {
+    chmodSync(join(repo, '.git', 'objects'), 0o755);
+    if (held === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = held;
+  }
+});
+
+test('the keys a subject claims for itself, and how a word is cut out of it', async () => {
+  const { mirrorName, ownKeys, parseLog } = await import('../src/shipped.js');
+  const cases = [
+    ['SHI-108 follow-up to SHI-107', ['SHI-108']],
+    ['SHI-108: fix', ['SHI-108']],
+    ['[SHI-108] fix, see SHI-1', ['SHI-108']],
+    ['SHI-1, SHI-2 and SHI-3: both', ['SHI-1', 'SHI-2', 'SHI-3']],
+    ['fix the login (DM-1)', ['DM-1']],
+    ['What the review found (CK-894, CK-895, CK-934): more about CK-1', ['CK-894', 'CK-895', 'CK-934']],
+    ['villa: VT-572, VT-412 (acceptance of VT-627): a word', ['VT-572', 'VT-412']],
+    ['Fix CK-7', ['CK-7']],
+    ["Merge branch 'claude/DM-5-a1' into dev", ['DM-5']],
+    ['no key at all', []],
+  ];
+  for (const [subject, keys] of cases) assert.deepEqual(ownKeys(subject), keys, subject);
+  const words = (s) => [...parseLog(`abc\n\n${s}\n${s}\x1e`)[0].words];
+  assert.deepEqual(words('2K-1 starts with a digit'), ['2K-1'], 'the prefix was cut at its digit');
+  assert.deepEqual(words('fix (acme/app.js#12, #13)'), ['ACME/APP.JS#12', '#13']);
+  assert.deepEqual(['one', 'acme/app'].map((r) => mirrorName('acme', r)), ['acme/one', 'acme/app'], 'gh.repo holds either form');
+  assert.equal(mirrorName('', ''), '');
+});
+
 test('a task done by hand and a check say nothing, nor a task out of these columns', async () => {
   task(10, 'review', { labels: '["noclaude"]' }); task(11, 'review', { labels: '["check"]' }); task(12, 'doing');
   commit('work (DM-12)');
@@ -153,6 +391,25 @@ test('a branch is the task\'s by the key as a word of its name', async () => {
   assert.equal(cherryState(''), null);
   assert.equal(cherryState('- abc\n- def\n'), 'in');
   assert.equal(cherryState('- abc\n+ def\n'), 'ahead');
+});
+
+test('the page asks about the board it shows: a board opened while a question flies is asked about as that one lands', async () => {
+  let slug = 'alpha'; const asked = []; const waiting = []; const applied = [];
+  const ask = shipAsker({ every: 30000, board: () => slug, wanted: () => true, now: () => 1000,
+    ask: (s) => { asked.push(s); return new Promise((resolve) => { waiting.push(resolve); }); }, apply: (r) => applied.push(r) });
+  ask();
+  slug = 'beta';
+  ask(); // the render of the new board: the question of the old one still flies
+  assert.deepEqual(asked, ['alpha']);
+  waiting[0]('for alpha');
+  await new Promise((r) => { setTimeout(r, 5); });
+  assert.deepEqual(asked, ['alpha', 'beta'], 'the new board stayed without its marks');
+  assert.deepEqual(applied, [], 'the answer about the board left was applied');
+  waiting[1]('for beta');
+  await new Promise((r) => { setTimeout(r, 5); });
+  assert.deepEqual(applied, ['for beta']);
+  ask();
+  assert.equal(asked.length, 2, 'within the pause there is no second question');
 });
 
 test('what the card and the filter go by', () => {

@@ -1,4 +1,5 @@
 
+import { handedIn } from './ready-rules.js';
 import { $, NOW, api, esc, ic, state, tr } from './core.js';
 import { openDrawer } from './drawer.js';
 import { selectProject } from './sidebar.js';
@@ -68,11 +69,8 @@ function runBadge(run) {
 
 // the queue are gone — the owner asked what they were for: the badge of the run already says what its Claude does, and
 // the line under the title says the stage and "working" or "next in line".
-function wasHanded(t) {
-  return t.status === 'review' || t.status === 'done';
-}
 function mark(t) {
-  return wasHanded(t) ? `<span class="now-check" title="${esc(STATUS_LABELS[t.status])}">✓</span>` : '';
+  return handedIn(t.status) ? `<span class="now-check" title="${esc(STATUS_LABELS[t.status])}">✓</span>` : '';
 }
 
 function taskLine(t, run, column) {
@@ -154,7 +152,7 @@ function runHead(run, column) {
 
 function runRows(run, column) {
   // the column of ✓ only in a run that handed something in — elsewhere the keys start at the edge
-  const marks = run.tasks.some(wasHanded);
+  const marks = run.tasks.some((t) => handedIn(t.status));
   const rows = run.tasks.map((t) => `<div class="now-row" data-key="${esc(t.key)}" tabindex="0" role="button">`
     + (marks ? `<span class="now-mk">${mark(t)}</span>` : '')
     + `<span class="now-main"><span class="now-t"><span class="now-key">${esc(t.key)}</span><span class="now-title">${titleOf(t)}</span></span>`

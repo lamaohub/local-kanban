@@ -8,6 +8,25 @@ version it goes out as and opens an empty one again. Released sections are histo
 
 ## [Unreleased]
 
+## [2.0.0-beta.3]
+
+### Fixed
+
+- The mark «on main» counts a squash and a copy under another subject as shipped, no longer reads the head of the project, a foreign pull request or a mere mention as a task's commit, does not call a branch that took its work back shipped, finds a key after a number in the subject, costs a look a few git processes instead of four a commit, and leaves no objects in the project's repository.
+- Ready to ship: Prep and a label set on the way are no road past the column; an emptied column goes at once; the Dashboard's «Waiting for you» lists what waits for your word, with its number in the sidebar; Done with Claude and the first-run tour know the column; a guest of the Wi-Fi board cannot change a project's own word.
+- A label or a move the board refuses no longer holds the rest of the card: the label comes off with the reason said, and what you typed is saved in any order, after a lost connection and with the card closed too.
+- A guest of the Wi-Fi board is told that only the owner can do this, instead of «the board did not accept it».
+- **Wi-Fi: a guest could get the key out of a backup.** Backups hold the whole database, the key of the door with it, and a guest with a pass could take one and download it. Backups now stay with the owner, the list too, and Settings → Backups tells a guest so; About no longer gives a guest the paths on disk.
+- **Wi-Fi: the key no longer stays behind in the page of the board.** A link opens the board by a redirect, so a script there finds nothing of the key in `document.referrer`, and Back does not lead to its address. A right key on a long address opens the board instead of an empty page, and a guest with words typed when the key changes is told to copy them and reload.
+- The screens the terminal keeps to send only what changed take less memory and go when nobody looks.
+- A comment is no longer written twice when you press send again while it waits, or «Send back» again with the same reason. One written with its answer lost no longer stands under itself as «not sent», and one deleted before the resend stays deleted.
+- Automations: a board that has just restarted no longer types into a question or a limit screen it has not read yet, and going on with interrupted work leaves alone what is typed in the field, a task that left work and a session a day old; a card says the board went on only when the words got there.
+- Automations: «Did not start» says in the board's language that a Claude already works on the tasks, or that tmux did not answer.
+- `kb show A B`: a card whose comments did not load says it is cut short, and a refusal leaves no `---` behind.
+- `kb note` no longer reports a failure for a note it saved, and an answer of the board that breaks off in the middle exits with code 4, not as a failure of `kb` itself.
+- A release check names the file and line of what it found, and a broken private file of patterns is said in words.
+- A release runs the test of the mark «on main» after the rest of the suite, not beside it: on a Mac the two together failed tmux tests at random and stopped the release.
+
 ## [2.0.0-beta.2]
 
 ### Added

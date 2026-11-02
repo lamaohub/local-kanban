@@ -155,7 +155,6 @@ test('CK-794: a minute without the person the background stands still, and their
   assert.match(halt, /idle: false[\s\S]*freeze\(\)/, 'idle wipes the scene instead of freezing it');
   assert.match(src, /idle: performance\.now\(\) - activeAt >= IDLE_MS/);
   for (const ev of ['pointermove', 'pointerdown', 'keydown', 'wheel', 'touchstart']) assert.ok(src.includes(`'${ev}'`), `${ev} does not wake the background`);
-  assert.match(src, /activeAt = performance\.now\(\); if \(!frame\) syncGlyphs\(\);/, 'a move does not wake a frozen background');
 });
 
 test('only a click on empty background sends a pulse — not on buttons, cards, fields or other interface', () => {

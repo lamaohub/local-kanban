@@ -360,6 +360,27 @@ test('v12: task_comments without client_key gets it, its comments kept', (t) => 
   assert.equal(c.client_key, null);
 });
 
+test('v15: a board of v14 gets comment_keys_deleted, tied to its task', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'kb-mig-gone-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  migrateDir(dir);
+  const db = new Database(join(dir, 'kanban.db'));
+  db.exec('DROP TABLE comment_keys_deleted');
+  db.pragma('user_version = 14');
+  db.close();
+  migrateDir(dir);
+  const after = new Database(join(dir, 'kanban.db'));
+  t.after(() => after.close());
+  assert.ok(after.pragma('user_version', { simple: true }) >= 15);
+  after.pragma('foreign_keys = ON');
+  const project = after.prepare("INSERT INTO projects (slug, name, prefix) VALUES ('p', 'P', 'P')").run().lastInsertRowid;
+  const task = after.prepare("INSERT INTO tasks (project_id, task_no, title) VALUES (?, 1, 'T')").run(project).lastInsertRowid;
+  after.prepare("INSERT INTO comment_keys_deleted (task_id, client_key) VALUES (?, 'k')").run(task);
+  assert.throws(() => after.prepare("INSERT INTO comment_keys_deleted (task_id, client_key) VALUES (?, 'k')").run(task), /UNIQUE|PRIMARY/);
+  after.prepare('DELETE FROM tasks WHERE id = ?').run(task);
+  assert.equal(after.prepare('SELECT COUNT(*) AS n FROM comment_keys_deleted').get().n, 0);
+});
+
 test('v14: tasks take the status ready, every row and column kept, foreign keys intact', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'kb-mig-ready-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));

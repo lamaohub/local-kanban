@@ -1,19 +1,12 @@
-import { createHash } from 'node:crypto';
 import { resolveTask } from './tasks.js';
 import { sayToTerminal } from '../terminal-say.js';
 import { typing } from '../chat-queue.js';
 import { COLS_MAX, COLS_MIN, KEYS, REPLY_MAX, noteLook, phantomMessage, phantomResize, phantomStop, questionOpen, taskTerminal, widthFor } from '../phantom.js';
 import { logError } from '../db.js';
 import { scalarQuery } from '../query-params.js';
-import { screenDelta } from '../../public/js/term-delta.js';
+import { createScreens } from '../term-screens.js';
 
-const SCREENS_KEPT = 64;
-const screens = new Map();
-function keepScreen(v, term) {
-  screens.delete(v);
-  screens.set(v, { screen: term.screen, wraps: term.wraps });
-  if (screens.size > SCREENS_KEPT) screens.delete(screens.keys().next().value);
-}
+const screens = createScreens();
 
 export default async function terminalRoutes(app) {
   const taskOr404 = (req, reply) => {
@@ -41,15 +34,7 @@ export default async function terminalRoutes(app) {
     if (lay && !(await phantomResize(term.session, want)).err) term.cols = want;
     // whether Claude waits on an open question (a permission, the trust of a folder, a choice): «Claude review» says
     term.question = !term.dead && questionOpen(term.screen);
-    // a second, 9 answers out of 9 the same byte for byte. Now an answer the card already has is `same`
-    const v = createHash('sha1').update(JSON.stringify(term)).digest('hex').slice(0, 20);
-    const base = q.values.delta === '1' ? screens.get(q.values.seen) : undefined;
-    keepScreen(v, term);
-    if (q.values.seen === v) return { same: true, v };
-    const delta = base && screenDelta(base.screen, term.screen, q.values.seen);
-    if (!delta) return { ...term, v };
-    const { screen, wraps, ...rest } = term;
-    return { ...rest, delta, v, ...(JSON.stringify(wraps) === JSON.stringify(base.wraps) ? {} : { wraps }) };
+    return screens.answer(term, { seen: q.values.seen, delta: q.values.delta === '1' });
   });
 
   app.post('/api/tasks/:id/terminal', async (req, reply) => {

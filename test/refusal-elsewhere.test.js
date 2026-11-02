@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import vm from 'node:vm';
 import Fastify from 'fastify';
 import { boardOnly, effortOf, startEffort, checksOnly } from '../public/js/launch-rules.js';
-import { canRetry, changedFields, createTurns, createUnsentEdits, errorLine, refusalLine, refusalText } from '../public/js/unsaved.js';
+import { canRetry, changedFields, createCommentKeys, createTurns, createUnsentEdits, errorLine, refusalLine, refusalText, refusedFields } from '../public/js/unsaved.js';
 
 /* ── the server's own refusals outside the card ── */
 let app, tmp;
@@ -218,7 +218,7 @@ function card({ open = 'VV-1' } = {}) {
   const els = {};
   const box = {
     state: { drawerKey: open },
-    tr, seg: (s) => encodeURIComponent(String(s)), refusalText, refusalLine,
+    tr, seg: (s) => encodeURIComponent(String(s)), refusalText, refusalLine, commentKeys: createCommentKeys(),
     answer: () => ({}),
     api: async (method, path, body) => { calls.api.push({ method, path, body }); return box.answer(method, path, body); },
     styledAlert: (m) => { calls.alerts.push(m); },
@@ -404,12 +404,16 @@ function openCard({ server = 'up' } = {}) {
   const box = {
     $: (id) => { if (!els[id]) els[id] = fakeEl(); return els[id]; },
     state: { drawerKey: 'VV-1' },
-    tr, seg: (s) => s, canRetry, changedFields, refusalText, refusalLine,
+    tr, seg: (s) => s, canRetry, changedFields, refusalText, refusalLine, refusedFields,
     server,
     api: async (method, path, body) => {
       calls.patches.push({ path, body: { ...body } });
       if (box.during) box.during();
       const s = box.server;
+      if (s === 'no-label') {
+        if ('labels' in body) throw Object.assign(new Error('DM-1: noclaude and check are not put on a task in work'), { status: 409, body: { reason: 'ready-first', field: 'labels', labels: box.labelsOnServer } });
+        return {};
+      }
       if (s === 'down') throw Object.assign(new Error('Failed to fetch'), { offline: true });
       if (s === 'gone') throw NO_TASK();
       if (s === 'old') throw Object.assign(new Error('cannot go straight from "todo" to "done"'), { status: 400 });
@@ -422,6 +426,14 @@ function openCard({ server = 'up' } = {}) {
     refresh: () => { calls.refreshed++; },
     noteUnsaved: (fn, key) => { calls.queued.set(key, fn); },
     dropUnsaved: (key) => { calls.dropped.push(key); calls.queued.delete(key); },
+    retryUnsaved: async () => {
+      for (const [key, run] of [...calls.queued]) {
+        calls.queued.delete(key);
+        try { await run(); } catch (e) { if (canRetry(e)) calls.queued.set(key, run); }
+      }
+    },
+    buildStatusSelect() {}, closeLabelPicker() { calls.pickerClosed = true; }, renderDrawerLabels() {}, launchFollowsLabels() {},
+    setDrawerLock() {}, DrawerSync: { cardLocked: () => false },
     setTimeout: () => 1, clearTimeout: () => {},
     unsentEdits: createUnsentEdits(),
     editInTurn: createTurns(),
@@ -429,13 +441,15 @@ function openCard({ server = 'up' } = {}) {
     queuedBase: new Map(), descSending: new Map(), descBaseOf: () => '', descSent() {},
   };
   vm.runInNewContext([
-    'var autosaveTimer = null; var drawerLocked = false; var drawerLabels = []; var newFormId = 1; var creatingForm = null; var pendingAttachments = [];',
+    'var autosaveTimer = null; var drawerLocked = false; var drawerLabels = []; var drawerStatus = "todo"; var refusedNote = null; var newFormId = 1; var creatingForm = null; var pendingAttachments = [];',
     'var drawerSnapshot = { title: "found edit", description: "", priority: 0, labels: [], status: "todo" }; var drawerShown = () => true;',
     take('export function sayRefused('),
     take('export async function doAutosave('),
     take('function queueTaskEdit('),
     take('async function resendTaskEdit('),
+    take('function takeBackRefused('),
     take('function editRefusedText('),
+    take('function sayFieldRefused('),
     take('function showSaveNote('),
     take('function formToSave('),
     take('async function doAutosaveOnce('),
@@ -506,11 +520,130 @@ test('a refused status goes back in the card, and the next edit is not refused f
   });
   c.box.drawerSnapshot.status = 'review';
   await c.typed('x');
-  assert.equal(c.calls.patches.at(-1).body.status, 'done');
+  assert.equal(c.calls.patches[0].body.status, 'done');
   assert.equal(shown.status, 'review', 'the refused status stayed in the picker');
   c.box.server = 'up';
   await c.typed('x and more');
   assert.deepEqual(c.calls.patches.at(-1).body, { title: 'x and more' }, 'the next edit carries the refused status again');
+});
+
+const LABEL_NOTE = 'ru:The change is not saved: ru:noclaude and check are not put on a task in work — this project ships on your word';
+const bodies = (c) => c.calls.patches.map((p) => p.body);
+
+test('a refused label leaves the card and says why, and the words of the same edit get there', async () => {
+  const c = openCard({ server: 'no-label' });
+  c.box.$('d-desc').value = 'words of a person';
+  c.box.drawerLabels = ['noclaude'];
+  await c.box.doAutosave();
+  await settle();
+  assert.deepEqual(bodies(c).map((b) => [b.description, b.labels]), [['words of a person', ['noclaude']], ['words of a person', undefined]], 'the words stayed behind the refused label');
+  assert.deepEqual([...c.box.drawerLabels], [], 'the chip of the refused label stayed');
+  assert.equal(c.calls.pickerClosed, true, 'the picker keeps a tick on the refused label');
+  assert.equal(c.note(), LABEL_NOTE, 'saving the rest wiped the reason');
+  assert.equal(c.calls.queued.size, 0);
+  assert.equal(c.box.unsentEdits.size, 0);
+  assert.equal(c.box.drawerSnapshot.description, 'words of a person');
+});
+
+test('the rest of a refused edit that goes later, behind a resend already running, leaves the reason on the card', async () => {
+  const c = openCard({ server: 'no-label' });
+  const run = c.box.retryUnsaved;
+  c.box.retryUnsaved = async () => {};
+  c.box.$('d-desc').value = 'words of a person';
+  c.box.drawerLabels = ['noclaude'];
+  await c.box.doAutosave();
+  await run();
+  assert.equal(bodies(c).at(-1).description, 'words of a person');
+  assert.equal(c.note(), LABEL_NOTE, 'the saved rest wiped the reason');
+});
+
+test('a label set elsewhere while a refused one went is not erased by the next save', async () => {
+  const c = openCard({ server: 'no-label' });
+  c.box.labelsOnServer = ['bug'];
+  c.box.drawerLabels = ['noclaude'];
+  await c.box.doAutosave();
+  await settle();
+  assert.deepEqual([...c.box.drawerLabels], ['bug'], 'the card went back to its old snapshot of the labels');
+  assert.deepEqual([...c.box.drawerSnapshot.labels], ['bug']);
+});
+
+test('words typed after a refused label go out alone, and the note goes with the next save', async () => {
+  const c = openCard({ server: 'no-label' });
+  c.box.drawerLabels = ['noclaude'];
+  await c.box.doAutosave();
+  assert.equal(c.note(), LABEL_NOTE);
+  c.box.$('d-desc').value = 'typed after it';
+  await c.box.doAutosave();
+  assert.deepEqual(bodies(c).at(-1), { description: 'typed after it', description_base: '' }, 'the refused label went out again');
+  assert.equal(bodies(c).length, 2);
+  assert.equal(c.note(), null);
+});
+
+test('the card closed under a refused label: the refusal names its task and the words still get there', async () => {
+  const c = openCard({ server: 'no-label' });
+  c.box.$('d-desc').value = 'closed at once';
+  c.box.drawerLabels = ['noclaude'];
+  c.box.during = () => { c.box.state.drawerKey = null; c.box.during = null; };
+  await c.box.doAutosave();
+  await settle();
+  assert.equal(bodies(c).at(-1).description, 'closed at once', 'the words of a closed card were dropped');
+  assert.equal('labels' in bodies(c).at(-1), false);
+  assert.deepEqual(c.calls.alerts, [`VV-1: ${LABEL_NOTE}`]);
+});
+
+test('a label refused on the way back from no connection takes only itself out of the queue', async () => {
+  for (const closed of [false, true]) {
+    const c = openCard({ server: 'down' });
+    c.box.$('d-desc').value = 'typed without a connection';
+    c.box.drawerLabels = ['noclaude'];
+    await c.box.doAutosave();
+    await settle();
+    assert.ok(c.calls.queued.has('task:VV-1'));
+    if (closed) c.box.state.drawerKey = null;
+    c.box.server = 'no-label';
+    await c.calls.queued.get('task:VV-1')();
+    assert.equal(bodies(c).at(-1).description, 'typed without a connection', `the queue was dropped whole, closed: ${closed}`);
+    assert.equal('labels' in bodies(c).at(-1), false);
+    assert.equal(c.box.unsentEdits.size, 0);
+    if (closed) assert.deepEqual(c.calls.alerts, [`VV-1: ${LABEL_NOTE}`], 'a refusal nobody saw');
+    else {
+      assert.deepEqual([...c.box.drawerLabels], []);
+      assert.equal(c.note(), LABEL_NOTE);
+      assert.equal(c.box.drawerSnapshot.description, 'typed without a connection');
+    }
+  }
+});
+
+test('a refused status does not hold the words of its edit either', async () => {
+  const c = openCard({ server: 'up' });
+  const shown = { status: 'deploy' };
+  Object.assign(c.box, {
+    selVal: (id) => (id === 'd-status' ? shown.status : '0'),
+    buildStatusSelect: (status) => { shown.status = status; },
+    api: async (method, path, body) => {
+      c.calls.patches.push({ path, body: { ...body } });
+      if ('status' in body) throw Object.assign(new Error('VV-1 goes to ready first'), { status: 409, body: { reason: 'ready-first', field: 'status' } });
+      return {};
+    },
+  });
+  c.box.$('d-desc').value = 'typed before the move';
+  await c.box.doAutosave();
+  await settle();
+  assert.deepEqual(bodies(c).map((b) => b.description), ['typed before the move', 'typed before the move']);
+  assert.equal('status' in bodies(c).at(-1), false);
+  assert.equal(c.note(), 'ru:The change is not saved: ru:the task goes to Ready to ship first — this project ships on your word');
+  assert.equal(c.calls.refreshed, 1, 'the card keeps showing the column it was refused');
+});
+
+test('what a refusal is about: the field it names, or the move of the status; never one the edit did not carry', () => {
+  const said = (status, body) => ({ status, body });
+  assert.deepEqual(refusedFields(said(409, { field: 'labels' }), { labels: [] }), ['labels']);
+  assert.deepEqual(refusedFields(said(409, { field: 'labels' }), { labels: [], status: 'done' }), ['labels', 'status'], 'a move goes on alone, without the label that allowed it');
+  assert.deepEqual(refusedFields(said(409, { field: 'labels' }), { status: 'done' }), []);
+  assert.deepEqual(refusedFields(said(400, {}), { status: 'done', title: 'x' }), ['status']);
+  assert.deepEqual(refusedFields(said(400, {}), { title: 'x' }), []);
+  assert.deepEqual(refusedFields(said(500, { field: 'labels' }), { labels: [] }), [], 'a failure of the server is sent again whole');
+  assert.deepEqual(refusedFields({ offline: true }, { labels: [] }), []);
 });
 
 test('CK-829: an edit of the checklist the server did not take waits to be sent and is said; a gone item leaves with a word', async () => {

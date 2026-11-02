@@ -7,5 +7,14 @@ export function setGateOfBoard(on) { kvSet(GATE_KEY, on ? '1' : '0'); }
 /** The switch that holds for a project: its own word when it has one. */
 export const gateOf = (own) => (own === null || own === undefined ? gateOfBoard() : Boolean(own));
 export const gateOfProject = (id) => gateOf(db.prepare('SELECT ready_gate FROM projects WHERE id = ?').get(id)?.ready_gate);
-/** Whether a move from `from` to `to` goes past the column. Pure. */
-export const skipsReady = (from, to) => (to === 'deploy' && from !== 'ready' && from !== 'deploy') || (to === 'review' && from === 'doing');
+/** Whether a move from `from` to `to` goes past the column; `worked` — see `workedSince`. Pure. */
+export const skipsReady = (from, to, worked = false) => (to === 'deploy' && from !== 'ready' && from !== 'deploy')
+  || (to === 'review' && (from === 'doing' || (from === 'prep' && worked)));
+/** Whether the task has been in Doing since it last stood in the column, Deploying or Review. */
+export const workedSince = (id) => Boolean(db.prepare(`SELECT 1 FROM task_events e WHERE e.task_id = ? AND e.status = 'doing'
+  AND e.id > COALESCE((SELECT MAX(s.id) FROM task_events s WHERE s.task_id = e.task_id AND s.status IN ('ready', 'deploy', 'review')), 0) LIMIT 1`).get(id));
+const FREES = ['noclaude', 'check'];
+/** Whether labels `after` free a task in `status` from the column while `before` did not. Taking such a label off is no way
+    past it, and a person does that on a card done by hand. Pure. */
+export const labelDodges = (status, before, after) => ['prep', 'doing', 'ready'].includes(status)
+  && !FREES.some((l) => before.includes(l)) && FREES.some((l) => after.includes(l));

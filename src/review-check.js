@@ -5,7 +5,7 @@ export const CHECK_LABEL = 'check';
 /** The statuses of a check that is still open: made and not started yet, or worked on. The section of the page
     holds the same list (public/js/review-rules.js); a test keeps the two equal. A check in Review is the report
     of an earlier check, for the person to read. */
-export const OPEN_CHECK = ['todo', 'prep', 'doing', 'deploy'];
+export const OPEN_CHECK = ['todo', 'prep', 'doing', 'ready', 'deploy'];
 
 function labelsOf(t) {
   if (Array.isArray(t?.labels)) return t.labels;

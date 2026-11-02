@@ -3,7 +3,7 @@
 export const CHECK_LABEL = 'check';
 /** Statuses in which a check is still open: made and not started yet, or being worked on. The server holds the
     same list for its one-open-check guard (src/review-check.js); a test keeps the two equal. */
-export const OPEN_CHECK = ['todo', 'prep', 'doing', 'deploy'];
+export const OPEN_CHECK = ['todo', 'prep', 'doing', 'ready', 'deploy'];
 const isCheck = (t) => Array.isArray(t.labels) && t.labels.includes(CHECK_LABEL);
 export const IN_WORK = ['prep', 'doing', 'deploy'];
 const manual = (t) => Array.isArray(t.labels) && t.labels.includes('noclaude');
@@ -81,6 +81,20 @@ export function warningLine(w, say = (s) => s) {
   if (w?.reason === 'check-open' && typeof w.key === 'string') return `${say('This project already has an open check')} ${w.key}.`;
   return null;
 }
+/* Why a start of an automation was refused, in words of the page: the server keeps `<reason>: <its English>`. */
+const FAIL_WORDS = {
+  'no-folder': 'the project has no folder on this computer',
+  'no-tmux': 'tmux is not installed here',
+  'no-claude': 'Claude Code is not installed here',
+  'too-long': 'the prompt is too long for the board\'s terminal',
+  'check-open': 'the project already has an open check',
+  manual: 'a task done by hand cannot be given to Claude',
+  running: 'a Claude of the board already works on these tasks',
+  'tmux-slow': 'tmux did not answer in time',
+};
+/** The words for an automation's `error` — English, the Russian is in I18N_RU; null for a line that names no reason it knows. */
+export const failWord = (error) => FAIL_WORDS[String(error ?? '').match(/^([a-z-]+): /)?.[1]] ?? null;
+
 export const stillOpen = (status) => (status === 'todo'
   ? 'This check is still open and waits in To do — press ▶ on its card to start it.'
   : 'This check is still open — to start it again, move it back to To do and press ▶ on its card.');

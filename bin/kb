@@ -21,7 +21,7 @@ const ST_ALIAS = {
 // Exit codes are a contract for automation (scripts gate their moves on them):
 // 0 — success, 1 — the board is not responding, 2 — the request was rejected (4xx or an
 // unknown command), 3 — kb itself broke, 4 — the board answered, but with a failure of its
-// own (5xx) or with something that is not JSON, or not of the shape the board answers with.
+// own (5xx) or with something that is not JSON, not of the shape the board answers with, or cut off.
 // Previously an exception exited with 1 as well, so "the board is down" was indistinguishable from
 // "kb is broken".
 // Code 4 exists because 2 was answering two different questions at once. A live board that
@@ -99,7 +99,11 @@ async function api(method, path, body, expect = null) {
     return data;
   };
   if (res.status === 204) return shaped(null);
-  const text = await res.text();
+  // Headers came and the body did not finish: the board went down in the middle of its answer. That throws here,
+  // past the check above, and read as kb itself breaking.
+  let text;
+  try { text = await res.text(); }
+  catch { die(`kb: the board answered ${res.status} and broke off in the middle — whether it did what was asked is not known`, EXIT.BOARD_ERROR); }
   let data = null;
   let parsed = false;
   try { data = JSON.parse(text); parsed = true; } catch { /* not JSON — see below */ }
@@ -473,16 +477,22 @@ const commands = {
 
   // A batch is read in one go, so every key is printed, cards apart by a line of ---. A wrong key stops the
   // command before the first request; a task the board does not know stops it there, and says at which key.
+  // The line goes out once the next card is read, so a refused one leaves none hanging, and a card whose comments
+  // did not come is called cut short: its head is printed, and it does not look like a whole one.
   async show() {
     if (!args.length) die('kb show <key> [<key> …]');
     const ids = args.map(key);
     let at = 0;
+    let cut = null;
     process.on('exit', (code) => {
-      if (code && ids.length > 1) process.stderr.write(`kb: stopped at ${args[at]}: ${at} of ${ids.length} printed\n`);
+      if (!code) return;
+      const part = cut ? `${cut} is cut short — its comments did not load` : '';
+      if (ids.length > 1) process.stderr.write(`kb: stopped at ${args[at]}: ${at} of ${ids.length} printed${part ? `, ${part}` : ''}\n`);
+      else if (part) process.stderr.write(`kb: ${part}\n`);
     });
     for (; at < ids.length; at++) {
-      if (at) console.log('---');
       const t = await api('GET', `/api/tasks/${ids[at]}`, null, TASK);
+      if (at) console.log('---');
       console.log(`${t.key} ${t.project} ${t.status}${t.pinned ? ' ' + PIN : ''}${t.blocked ? ` blocked: ${t.blocked_reason || ''}` : ''}${PRI[t.priority] ? ' ' + PRI[t.priority] : ''}${t.labels.length ? ' [' + t.labels.join(',') + ']' : ''}`);
       console.log(t.title);
       if (t.description) console.log(t.description);
@@ -493,7 +503,9 @@ const commands = {
       printSessions(t);
       printUsage(t);
       printAttachments(t);
+      cut = t.key;
       printComments(await api('GET', `/api/tasks/${t.id}/comments`, null, LIST), 5);
+      cut = null;
     }
   },
 
@@ -591,9 +603,10 @@ const commands = {
   async note() {
     const [id, body] = args;
     if (!id || !body) die('kb note <key> "text"');
+    // Nothing is read after the write: a read that failed reported a failure of a note already saved, and the retry
+    // wrote a second one. So the key is printed as it was typed.
     await api('POST', `/api/tasks/${key(id)}/comments`, { body, author: 'claude' }, COMMENT);
-    const t = await api('GET', `/api/tasks/${key(id)}`, null, TASK);
-    console.log(`${t.key} 📝`);
+    console.log(`${id} 📝`);
   },
 
   // kb link A B [child|parent|related] — `child`: B becomes a sub-task of A, `parent`: B becomes

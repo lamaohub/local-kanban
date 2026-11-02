@@ -1,4 +1,4 @@
-import { gateOfProject, skipsReady } from '../ready-gate.js';
+import { gateOfProject, labelDodges, skipsReady, workedSince } from '../ready-gate.js';
 import { execFile } from 'node:child_process';
 import { writeFileSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -152,7 +152,7 @@ function unknownLabels(arr) {
   return arr.filter((l) => !Object.prototype.hasOwnProperty.call(LABELS, l));
 }
 function labelPaletteError(bad) {
-  return { error: `unknown labels: ${bad.join(', ')} — they are not in the palette and the GitHub sync would fail. Allowed: ${Object.keys(LABELS).join(', ')}` };
+  return { error: `unknown labels: ${bad.join(', ')} — they are not in the palette and the GitHub sync would fail. Allowed: ${Object.keys(LABELS).join(', ')}`, field: 'labels' };
 }
 
 async function fullTask(t) {
@@ -194,6 +194,9 @@ function planPatch(t, b, sid = null, { undone = false } = {}) {
     const next = [...new Set([...cur, ...add])].filter((l) => !remove.includes(l));
     if (JSON.stringify(next) !== JSON.stringify(cur)) labels = next;
   }
+  if (labels && labelDodges(t.status, JSON.parse(t.labels || '[]'), labels) && gateOfProject(t.project_id)) {
+    return { code: 409, error: `${t.key}: noclaude and check are not put on a task in work while this project ships on the person's word — it stops in ready and waits for that word`, reason: 'ready-first', field: 'labels', labels: JSON.parse(t.labels || '[]') };
+  }
   if (labels) { updates.push('labels = ?'); values.push(JSON.stringify(labels)); }
   if (b.blocked !== undefined) {
     updates.push('blocked = ?'); values.push(b.blocked ? 1 : 0);
@@ -215,9 +218,10 @@ function planPatch(t, b, sid = null, { undone = false } = {}) {
     if (!isManual(labels || t.labels) && ['backlog', 'todo'].includes(t.status) && ['ready', 'review', 'done'].includes(b.status)) {
       return bad(`cannot go straight from "${t.status}" to "${b.status}" — it has to pass through the working statuses`);
     }
-    // a check has nothing to ship, and words undone only put back what they moved
-    if (!undone && !isCheck({ labels: labels || t.labels }) && !isManual(labels || t.labels) && skipsReady(t.status, b.status) && gateOfProject(t.project_id)) {
-      return { code: 409, error: `${t.key} goes to ready first: this project ships on the person's word — kb mv ${t.key} ready, and deploy once they say so`, reason: 'ready-first' };
+    // a check has nothing to ship, and words undone only put back what they moved. The labels the task HAD: one given in this
+    // very request frees nothing
+    if (!undone && !isCheck(t) && !isManual(t.labels) && skipsReady(t.status, b.status, t.status === 'prep' && b.status === 'review' && workedSince(t.id)) && gateOfProject(t.project_id)) {
+      return { code: 409, error: `${t.key} goes to ready first: this project ships on the person's word — kb mv ${t.key} ready, and deploy once they say so`, reason: 'ready-first', field: 'status' };
     }
     updates.push('status = ?'); values.push(b.status);
     if (b.status === 'done' && t.status !== 'done') updates.push("done_at = datetime('now')");
@@ -690,6 +694,10 @@ export default async function taskRoutes(app) {
     }
     const sent = clientKey && db.prepare('SELECT * FROM task_comments WHERE task_id = ? AND client_key = ?').get(t.id, clientKey);
     if (sent) return reply.code(200).send(sent);
+    // and a comment deleted in between stays deleted: the resend is delivered, with nothing written
+    if (clientKey && db.prepare('SELECT 1 FROM comment_keys_deleted WHERE task_id = ? AND client_key = ?').get(t.id, clientKey)) {
+      return reply.code(200).send({ deleted: true, client_key: clientKey });
+    }
     const r = db.prepare('INSERT INTO task_comments (task_id, author, body, client_key) VALUES (?,?,?,?)')
       .run(t.id, author === 'claude' ? 'claude' : 'me', String(body).trim(), clientKey ?? null);
     const c = db.prepare('SELECT * FROM task_comments WHERE id = ?').get(r.lastInsertRowid);
@@ -705,7 +713,10 @@ export default async function taskRoutes(app) {
     const c = db.prepare('SELECT * FROM task_comments WHERE id = ? AND task_id = ?').get(req.params.commentId, t.id);
     if (!c) return reply.code(404).send({ error: 'comment not found' });
     if (c.image) { try { rmSync(join(ATTACH_DIR, String(t.id), c.image), { force: true }); } catch {  } }
-    db.prepare('DELETE FROM task_comments WHERE id = ?').run(c.id);
+    db.transaction(() => {
+      db.prepare('DELETE FROM task_comments WHERE id = ?').run(c.id);
+      if (c.client_key) db.prepare('INSERT OR IGNORE INTO comment_keys_deleted (task_id, client_key) VALUES (?, ?)').run(t.id, c.client_key);
+    })();
     emit('task.comment', { task_id: t.id, key: t.key, project: t.project, comments_n: commentsN(t.id) });
     return reply.code(204).send();
   });

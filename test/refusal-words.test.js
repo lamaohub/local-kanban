@@ -29,6 +29,7 @@ before(async () => {
   app = Fastify();
   await app.register((await import('../src/routes/tasks.js')).default);
   await app.register((await import('../src/routes/terminal.js')).default);
+  await app.register((await import('../src/routes/projects.js')).default);
   await app.ready();
 });
 after(async () => {
@@ -65,6 +66,26 @@ test('the server\'s refusals of a deleted task say it is gone; the other missing
   const claude = refusalText(await refusal('POST', '/api/tasks/DM-1/terminal', { text: 'y' }));
   assert.equal(claude.claudeGone, true, 'no Claude on the task reads as something else');
   assert.equal(claude.gone, false);
+});
+
+test('the refusals of a project that ships on the word and of a guest say why, and name no road out of work', async () => {
+  db.prepare("INSERT INTO projects (slug, prefix, name, next_task_no, ready_gate) VALUES ('held', 'HD', 'held', 3, 1)").run();
+  const held = db.prepare("SELECT id FROM projects WHERE slug = 'held'").get().id;
+  db.prepare("INSERT INTO tasks (project_id, task_no, title, status) VALUES (?, 1, 'Ready', 'ready'), (?, 2, 'Doing', 'doing')").run(held, held);
+  const label = await refusal('PATCH', '/api/tasks/HD-1', { labels_add: ['noclaude'] });
+  assert.equal(label.body.field, 'labels');
+  assert.equal(refusalText(label).reason, 'noclaude and check are not put on a task in work — this project ships on your word');
+  assert.doesNotMatch(label.message, /todo|backlog/i, 'the refusal points at the road round the column');
+  const move = await refusal('PATCH', '/api/tasks/HD-2', { status: 'deploy' });
+  assert.equal(move.body.field, 'status');
+  assert.equal(refusalText(move).reason, 'the task goes to Ready to ship first — this project ships on your word');
+  assert.equal(refusalText(move).refresh, true);
+  const palette = await refusal('PATCH', '/api/tasks/DM-1', { labels: ['nonsense'] });
+  assert.equal(palette.body.field, 'labels');
+  assert.equal(refusalText(palette).reason, 'this board has no such label');
+  const guest = await refusal('PATCH', '/api/projects/held', { ready_gate: 0 }, { 'x-kb-guest': '1' });
+  assert.equal(refusalText(guest).reason, 'only the owner of the board can do this');
+  assert.equal(refusalText({ status: 403, message: 'a guest starts Claude inside the board only', body: { reason: 'guest' } }).reason, 'a guest starts Claude only inside the board');
 });
 
 test('the server\'s refusals of an attachment say why in the board\'s words', async () => {
@@ -129,6 +150,8 @@ test('what a refusal says is in the Russian dictionary — the sentence, the rea
     { status: 409, message: 'the Claude app is not installed here' }, { status: 413 }, { status: 501 }, { status: 500 },
     { status: 400, message: 'cannot go straight from "a" to "b"' }, { status: 400, message: 'images only' },
     { status: 400, message: 'limit of images in comments: 30' }, { status: 400, message: 'x' },
+    { status: 409, body: { reason: 'ready-first', field: 'labels' } }, { status: 409, body: { reason: 'ready-first', field: 'status' } },
+    { status: 403, body: { reason: 'guest' } }, { status: 403, message: 'a guest starts Claude inside the board only' }, { status: 400, message: 'unknown labels: x' },
   ];
   const said = errors.flatMap((e) => [refusalText(e).text, refusalText(e).reason]);
   assert.deepEqual([...new Set(said)].filter((s) => !inDict(s)), [], 'a refusal stays English on the Russian board');

@@ -64,6 +64,12 @@ CREATE TABLE IF NOT EXISTS task_comments (
 );
 CREATE INDEX IF NOT EXISTS idx_comments_task ON task_comments(task_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_comments_client_key ON task_comments(task_id, client_key) WHERE client_key IS NOT NULL;
+CREATE TABLE IF NOT EXISTS comment_keys_deleted (
+  task_id     INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  client_key  TEXT NOT NULL,
+  deleted_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (task_id, client_key)
+);
 CREATE TABLE IF NOT EXISTS task_events (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id     INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,

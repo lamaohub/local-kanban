@@ -1,6 +1,7 @@
 
 import { WORKING, buildSelect, drawLinks } from './board.js';
 import { syncGlyphs } from './glyphs.js';
+import { flowNote } from './ready-rules.js';
 import { $, ALL, statusesFor, HEALTH, LANG, api, apiBlob, esc, fmtNum, ic, seg, smoothReload, state, tr } from './core.js';
 import { applyKeepDrawer, repaintWorkTabs } from './drawer.js';
 import { checkVersion, hasUnsavedInput, pendingReload } from './init.js';
@@ -14,7 +15,7 @@ import { openOnboarding } from './onboarding.js';
 import { repaintColumnViews } from './now-terms.js';
 import { CONTACT_NAME, CONTACT_URL } from './onboarding-rules.js';
 import { installView } from './app-install-rules.js';
-import { renderShareSection } from './share.js';
+import { guestBackupsHTML, guestHere, renderShareSection } from './share.js';
 import { localStore } from './store.js';
 import { applyAutomations, automations } from './automations.js';
 import { PHONE_DEFAULTS, onPhone } from './phone-rules.js';
@@ -415,8 +416,7 @@ async function renderSection(sec) {
     const box = $('flow-gate');
     const say = (v) => {
       box.checked = v.ready_gate;
-      const left = v.ready_n ? `${tr('Waits in the column:')} ${v.ready_n}` : '';
-      $('flow-note').textContent = !v.ready_gate && v.left_n ? tr('The switch is off, and the tasks stay: the column goes once it is empty.') + ` ${left}` : left;
+      $('flow-note').textContent = flowNote(v, tr);
     };
     box.disabled = true;
     try { say(await api('GET', '/api/flow', undefined, { quiet: true })); box.disabled = false; } catch { /* the row stays off and says nothing it does not know */ }
@@ -579,6 +579,8 @@ async function renderSection(sec) {
       load();
     };
     load();
+  } else if (sec === 'backups' && guestHere()) {
+    body.innerHTML = `<div class="sm-h">${tr('Database backups')}</div>${guestBackupsHTML()}`;
   } else if (sec === 'backups') {
     body.innerHTML = `<div class="sm-h">${tr('Database backups')}`
       + `<button class="btn-ghost" id="bk-up" title="${esc(tr('The uploaded file opens as a separate board on a neighbouring port — this board and its tasks stay untouched.'))}">${tr('Upload')}</button>`
@@ -830,7 +832,7 @@ async function renderSection(sec) {
       const upStr = up >= 86400 ? `${Math.floor(up / 86400)}${tr('d')} ${Math.floor((up % 86400) / 3600)}${tr('h')}` : up >= 3600 ? `${Math.floor(up / 3600)}${tr('h')} ${Math.floor((up % 3600) / 60)}${tr('m')}` : `${Math.floor(up / 60)}${tr('m')}`;
       $('about-diag').innerHTML = [
         [tr('Database'), `${fmtNum(a.db_size / 1048576)} ${tr('MB')}`],
-        [tr('Database path'), a.db_path],
+        ...(a.db_path ? [[tr('Database path'), a.db_path]] : []), // a guest is not told it
         [tr('Server uptime'), upStr],
         [tr('Tasks · projects'), `${a.tasks} · ${a.projects}`],
         ['Node', a.node],
@@ -1455,6 +1457,7 @@ export function waitingHTML(w, folded = waitFolded()) {
     + `<summary class="wait-sec-h" title="${esc(tr('fold or unfold the list'))}">${esc(title)} (${list.length})</summary>${list.map(row).join('')}</details>`;
   const secs = [];
   if (w.claude?.length) secs.push(sec('claude', 'Claude', w.claude, (t) => wRow(t, t.status || 'doing', claudeMeta(t))));
+  if (w.ready?.length) secs.push(sec('ready', tr('Ready to ship'), w.ready, (t) => wRow(t, 'ready', '')));
   if (w.review.length) secs.push(sec('review', tr('Check'), w.review, (t) => wRow(t, 'review', '')));
   if (w.blocked.length) secs.push(sec('blocked', tr('Blocked'), w.blocked, (t) => wRow(t, 'cancelled', t.reason || '', true)));
   if (w.stale.length) secs.push(sec('stale', tr('Stalled'), w.stale, (t) => wRow(t, 'doing', `${t.hours}${tr('h without movement')}`)));

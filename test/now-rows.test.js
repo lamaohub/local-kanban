@@ -3,13 +3,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { handedIn } from '../public/js/ready-rules.js';
 
 const src = readFileSync(new URL('../public/js/now.js', import.meta.url), 'utf8')
   .replace(/^import .*$/gm, '').replace(/^export /gm, '');
 
 function runHTML(run) {
   const box = {
-    tr: (s) => s, esc: (s) => String(s), ic: () => '', plural: (n, a, b) => (n === 1 ? a : b), state: {}, NOW: '#now',
+    handedIn, tr: (s) => s, esc: (s) => String(s), ic: () => '', plural: (n, a, b) => (n === 1 ? a : b), state: {}, NOW: '#now',
     STATUS_LABELS: { prep: 'Preparation', doing: 'Doing', review: 'Review', done: 'Done' }, SHORT_MONTHS: [],
     localStorage: { getItem: () => null, setItem() {} }, setInterval() {}, document: { hidden: true }, onPhone: () => false, PHONE_NOW_VIEW: 'terms',
   };
@@ -47,7 +48,7 @@ test('the project of a run is a link to its board', () => {
 test('a project link opens its board, and Claude now, review and done wire their links', () => {
   const picked = [];
   const box = {
-    tr: (s) => s, esc: (s) => String(s), ic: () => '', plural: (n, a) => a, state: {}, NOW: '#now', STATUS_LABELS: {}, SHORT_MONTHS: [],
+    handedIn, tr: (s) => s, esc: (s) => String(s), ic: () => '', plural: (n, a) => a, state: {}, NOW: '#now', STATUS_LABELS: {}, SHORT_MONTHS: [],
     localStorage: { getItem: () => null, setItem() {} }, setInterval() {}, document: { hidden: true }, onPhone: () => false, PHONE_NOW_VIEW: 'terms', selectProject: (s) => picked.push(s),
   };
   vm.runInNewContext(`${src}\nthis.wire = wireProjectLinks;`, box);
@@ -71,7 +72,7 @@ test('a project link opens its board, and Claude now, review and done wire their
 // task of its terminal — the one way back to its conversation from the list; a run without `ended` has none.
 test('a run whose Claude of the board has exited offers Continue for its task, and says interrupted', () => {
   const box = {
-    tr: (s) => s, esc: (s) => String(s), ic: () => '', plural: (n, a, b) => (n === 1 ? a : b), state: {}, NOW: '#now',
+    handedIn, tr: (s) => s, esc: (s) => String(s), ic: () => '', plural: (n, a, b) => (n === 1 ? a : b), state: {}, NOW: '#now',
     STATUS_LABELS: { prep: 'Preparation', doing: 'Doing' }, SHORT_MONTHS: [], termTaskOf: (run) => run.tasks[0].key,
     localStorage: { getItem: () => null, setItem() {} }, setInterval() {}, document: { hidden: true }, onPhone: () => false, PHONE_NOW_VIEW: 'terms',
   };

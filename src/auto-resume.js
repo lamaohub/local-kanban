@@ -7,6 +7,8 @@ import { ADOPT_TOKEN, findTranscript } from './claude-sessions.js';
 import { tailLines } from './own-wait.js';
 import { nowRuns } from './claude-now.js';
 import { transcriptChat } from './chat-feed.js';
+import { fieldEmpty } from './phantom.js';
+import { typing } from './chat-queue.js';
 import { sayToTerminal } from './terminal-say.js';
 import { resolveTask } from './routes/tasks.js';
 
@@ -79,6 +81,7 @@ let deps = {
   runs: () => nowRuns(),
   turn: async (sid) => { const path = await findTranscript(sid); return path ? (await transcriptChat(path, { turns: 1 })).turns.at(-1) : null; },
   say: (t, sid, text) => sayToTerminal(t, sid, { text, key: 'Enter' }),
+  fieldEmpty: (sid) => fieldEmpty(sid),
   folder: sessionFolder,
 };
 /** Tests stand in for what needs a live Claude. */
@@ -95,13 +98,14 @@ function noted(map, sid, now) {
   kvSet(CHAINS_KEY, JSON.stringify(map));
 }
 
-const SAY_WAIT_MS = 10 * 60_000; // a Claude brought back that is not up by then: the next chain's business
+const SAY_WAIT_MS = 10 * 60_000; // a Claude brought back with no words by then, or a field that stays full: the next chain's business
 const LIMIT_GRACE_MS = 2 * 60_000; // past the moment the limit line names: the line may stay on the screen after the reset
 const LINE_BACK_MS = 6 * 3600_000; // a line first seen after its moment names that moment, not the same hour tomorrow
 const STOPPED_KEY = 'automations.resume.stopped';
-const stopped = new Map(); // sid → {key, why, at}: a board Claude to be told to go on once it stands at its prompt
+const stopped = new Map(); // sid → {key, why, at, held?}: a board Claude to be told to go on once it stands at its prompt; `held` — since when its field keeps the words out
 try { for (const [sid, v] of Object.entries(JSON.parse(kvGet(STOPPED_KEY) || '{}') || {})) stopped.set(sid, v); } catch { /* starts anew */ }
 const keepStopped = () => kvSet(STOPPED_KEY, JSON.stringify(Object.fromEntries(stopped)));
+const forget = (sid) => { stopped.delete(sid); keepStopped(); };
 let lastLook = 0;
 /** Tests start clean. */
 export function resetResume() { stopped.clear(); keepStopped(); lastLook = 0; }
@@ -135,24 +139,40 @@ export async function tickResume(app, now, { waiting = new Set(), limited = fals
   }
   // a session no longer among the runs (its task left work) has nobody to tell
   const here = new Set(runs.map((r) => r.session));
-  for (const [sid, v] of stopped) if (!here.has(sid) && now - v.at > SAY_WAIT_MS) { stopped.delete(sid); keepStopped(); }
+  for (const [sid, v] of stopped) if (!here.has(sid) && now - v.at > SAY_WAIT_MS) forget(sid);
   if (limited) return;
   const map = chains(now);
   for (const r of runs) {
     const was = stopped.get(r.session);
     if (!was) continue;
+    const late = now - was.at > SAY_WAIT_MS;
+    // the words of a resume belong to the minutes after it: a day later they would start work nobody expects
+    if (was.why === 'resume' && late) { forget(r.session); continue; }
     if (r.claude === 'limit') {
       // too early it stops at the limit again; the chain of tries holds how many times
       const at = resetAfter(r.resets, was.at - LINE_BACK_MS);
       if (at === null || now < at + LIMIT_GRACE_MS || !chainAllows(map[r.session], now)) continue;
-    } else if (r.claude !== 'idle') { if (now - was.at > SAY_WAIT_MS) { stopped.delete(r.session); keepStopped(); } continue; }
+    } else if (r.claude !== 'idle') { if (late) forget(r.session); continue; }
     const t = resolveTask(was.key);
-    // a question open, or the person took it up meanwhile: the words of the board are not for it (an Enter would answer)
+    // a question open, the person took it up meanwhile, or the task left work (words would move it back, sayToTerminal): the
+    // words of the board are not for it (an Enter would answer)
     const last = Date.parse((await deps.turn(r.session))?.items?.at(-1)?.at);
-    if (!t || waiting.has(t.id) || last > was.at) { stopped.delete(r.session); keepStopped(); continue; }
-    await deps.say(t, r.session, was.why === 'limit' ? say().go : say().goOn);
-    stopped.delete(r.session);
-    keepStopped();
+    if (!t || !WORKING.has(t.status) || waiting.has(t.id) || last > was.at) { forget(r.session); continue; }
+    // under the lock of typing into this terminal, as the chat's queue and api-break.js: words may go between a look and the
+    // typing. Something in the field is the person at work, or the words of a board killed before its Enter: an Enter here
+    // sends it with ours
+    const said = await typing(r.session, async () => {
+      const empty = await deps.fieldEmpty(r.session);
+      return empty === true ? (await deps.say(t, r.session, was.why === 'limit' ? say().go : say().goOn)) ?? {} : { field: empty };
+    });
+    if (said.field === null) continue; // tmux did not answer: the next look
+    if (said.field === false) {
+      was.held ??= now; // from here, not from `at`: a record of the limit is hours old by the reset
+      if (now - was.held > SAY_WAIT_MS) forget(r.session); else keepStopped();
+      continue;
+    }
+    if (said.err || said.refused) { logError('server', 'automations', `the words of ${was.key} did not reach Claude: ${said.refused || said.err?.message || said.err}`, r.session); continue; }
+    forget(r.session);
     if (was.why === 'limit') { noted(map, r.session, now); boardNote(t.id, say().told); } else boardNote(t.id, say().resumed);
     return;
   }
@@ -169,15 +189,15 @@ export async function tickResume(app, now, { waiting = new Set(), limited = fals
       if (!folder || !project?.path || !(await sameFolder(folder, project.path))) continue;
     }
     noted(map, r.session, now); // a start refused counts as a try: it must not be asked for every minute for good
+    // `claude --resume` stands at its prompt with the conversation back: only words set it to work, and only then has the
+    // board gone on (the next look, once Claude Code is up). Kept before the start: a restart right after it loses them
+    stopped.set(r.session, { key: keys[0], why: 'resume', at: now });
+    keepStopped();
     let res;
     try {
       res = await app.inject({ method: 'POST', url: '/api/launch', headers: own, payload: { mode: 'board', resume: r.session, adopt: ADOPT_TOKEN, project: project.slug, keys, ...launch } });
-    } catch (e) { logError('server', 'automations', `resume of ${r.session}: ${e.message}`); return; }
-    if (res.statusCode >= 300) { logError('server', 'automations', `resume of ${keys.join(', ')}: ${res.statusCode} ${res.body.slice(0, 200)}`); return; }
-    // `claude --resume` stands at its prompt with the conversation back: only words set it to work, and only then has the
-    // board gone on (the next look, once Claude Code is up)
-    stopped.set(r.session, { key: keys[0], why: 'resume', at: now });
-    keepStopped();
+    } catch (e) { forget(r.session); logError('server', 'automations', `resume of ${r.session}: ${e.message}`); return; }
+    if (res.statusCode >= 300) { forget(r.session); logError('server', 'automations', `resume of ${keys.join(', ')}: ${res.statusCode} ${res.body.slice(0, 200)}`); }
     return;
   }
 }

@@ -50,7 +50,7 @@ test('what waits is a small grey dot: the review dot of the sidebar, the queue o
   assert.match(rule('.now-queue'), /background:\s*var\(--muted\)/, 'a waiting task is coloured again');
   const now = readFileSync(new URL('../public/js/now.js', import.meta.url), 'utf8');
   assert.doesNotMatch(now, /now-queue|now-mark|live-dot"><\/span><\/span>'/, 'Claude now puts a dot in front of its tasks again');
-  assert.match(now, /return wasHanded\(t\) \? `<span class="now-check"/, 'Claude now lost the ✓ of a task handed in');
+  assert.match(now, /return handedIn\(t\.status\) \? `<span class="now-check"/, 'Claude now lost the ✓ of a task handed in');
   assert.equal(rule('.now-row.focus'), '', 'the task Claude is on is highlighted again');
   assert.doesNotMatch(now, /now-row\$\{t\.focus/, 'Claude now marks the task it is on with a class again');
   const done = readFileSync(new URL('../public/js/done.js', import.meta.url), 'utf8');

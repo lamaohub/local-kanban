@@ -1,6 +1,7 @@
 import { scalarQuery } from '../query-params.js';
 import { shippedOf } from '../shipped.js';
-import { gateOf } from '../ready-gate.js';
+import { gateOf, gateOfBoard } from '../ready-gate.js';
+import { isGuest } from '../share.js';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { join, basename, resolve, sep } from 'node:path';
@@ -67,6 +68,7 @@ function syncCategoryToPanel(project) {
 
 const PATCHABLE = ['name', 'prefix', 'path', 'server_path', 'deploy_skill', 'server', 'pm2_services', 'domain', 'category', 'description', 'pinned', 'archived', 'ready_gate'];
 
+const GUEST_GATE = { error: 'only the owner of the board says whether a project waits for the word', reason: 'guest' };
 const FIELD_KIND = { pinned: 'flag', archived: 'flag', pm2_services: 'any', name: 'required', ready_gate: 'choice' };
 function badField(k, v) {
   const kind = FIELD_KIND[k] || 'text';
@@ -526,6 +528,7 @@ export default async function projectRoutes(app) {
         ['На проверке', 'Claude доводит задачу до «Проверяю» и останавливается — принимает или возвращает человек.', 'review', 2, '["bug"]', 1800],
         ['Уже готова', 'Принятые задачи копятся в «Готово» и считаются в метриках дашборда.', 'done', 1, '[]', 3600],
       ],
+      ready: ['Ждёт твоей команды', 'С настройкой «Ждать команды перед выкаткой» Claude останавливается здесь: готово и проверено, в main ещё нет. Выкатывает по твоему слову.', 'ready', 2, '[]', 900],
       checklist: ['посмотреть колонки доски', 'открыть карточку и таймлайн', 'удалить демо, когда надоест'],
     },
     en: {
@@ -539,13 +542,15 @@ export default async function projectRoutes(app) {
         ['In review', 'Claude takes a task up to Review and stops — accepting or returning it is always up to the human.', 'review', 2, '["bug"]', 1800],
         ['Already done', 'Accepted tasks pile up in Done and feed the dashboard metrics.', 'done', 1, '[]', 3600],
       ],
+      ready: ['Waiting for your word', 'With «Wait for the word before shipping» on, Claude stops here: done and checked, not on main yet. It ships once you say so.', 'ready', 2, '[]', 900],
       checklist: ['look through the board columns', 'open a card and its timeline', 'delete the demo when done with it'],
     },
   };
 
   app.post('/api/projects/demo', (req, reply) => {
     if (projectBySlug('demo')) return reply.code(409).send({ error: 'the demo project already exists' });
-    const T = DEMO_TEXTS[req.body?.lang === 'en' ? 'en' : 'ru'];
+    const texts = DEMO_TEXTS[req.body?.lang === 'en' ? 'en' : 'ru'];
+    const T = { ...texts, rows: gateOfBoard() ? [...texts.rows, texts.ready] : texts.rows };
     const used = usedPrefixes();
     const prefix = used.has('DEMO') ? genPrefix('demo', used) : 'DEMO';
     db.prepare("INSERT INTO projects (slug, name, prefix, category, description) VALUES ('demo', ?, ?, ?, ?)")
@@ -600,6 +605,7 @@ export default async function projectRoutes(app) {
       return reply.code(400).send({ error: 'slug: latin letters, digits, ".", "-" and "_", up to 100 characters, one path segment, not starting with "." or "-"' });
     }
     if (projectBySlug(slug)) return reply.code(409).send({ error: 'slug exists' });
+    if (req.body.ready_gate !== undefined && isGuest(req)) return reply.code(403).send(GUEST_GATE);
     const dsErr = badDeploySkill(req.body);
     if (dsErr) return reply.code(400).send({ error: dsErr });
     const fields = { slug, name, prefix: makePrefix(slug) };
@@ -626,6 +632,7 @@ export default async function projectRoutes(app) {
   app.patch('/api/projects/:slug', (req, reply) => {
     const p = resolveProject(req.params.slug);
     if (!p) return reply.code(404).send({ error: 'project not found' });
+    if (req.body?.ready_gate !== undefined && req.body.ready_gate !== p.ready_gate && isGuest(req)) return reply.code(403).send(GUEST_GATE);
     const dsErr = badDeploySkill(req.body);
     if (dsErr) return reply.code(400).send({ error: dsErr });
     if (req.body?.prefix !== undefined) {

@@ -1,7 +1,7 @@
 // `node scripts/release.js --check` is what CI runs on every push to dev (.github/workflows/release-check.yml):
-// the checks of the published snapshot that need nothing private. Run here against a tiny repository that
-// carries a copy of the script, so the suite proves the mode itself: it needs no .release-private.json, it
-// passes a clean snapshot, and it fails on the three things that used to stop a release only on release day.
+// the checks of the published snapshot. Run here against a tiny repository that carries a copy of the script, so
+// the suite proves the mode itself: it needs no .release-private.json (and uses one that is there), it passes a
+// clean snapshot, and it fails on what used to stop a release only on release day.
 // The script is a private tool, left out of the published snapshot — there these tests are skipped.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -87,8 +87,87 @@ test('the check catches what looks like a leak without the private patterns (CK-
   const home = ['', 'Users', 'someone', 'notes.txt'].join('/');
   const r = check(repo(t, { 'test/ua.test.js': `export const peer = '${ip}';\n`, 'docs/note.md': `Kept in ${home}\n` }));
   assert.equal(r.code, 1, r.out);
-  assert.match(r.out, /test\/ua\.test\.js: IP address/);
-  assert.match(r.out, /docs\/note\.md: home directory path/);
+  assert.match(r.out, /test\/ua\.test\.js:1: IP address/);
+  assert.match(r.out, /docs\/note\.md:1: home directory path/);
+});
+
+// built at run time, like the others: a key whole would be the leak in this very file
+const KEY = ['sk', 'abcdefghij0123456789KLMNOP'].join('-');
+
+test('a finding of a built-in pattern says the line in the repository and what matched', (t) => {
+  if (!existsSync(RELEASE)) return t.skip('scripts/release.js is a private tool and is not part of the published slice');
+  const ip = ['203', '0', '113', '7'].join('.');
+  // the two comments are stripped from the snapshot, where the address stands on line 1: the person opens the source
+  const r = check(repo(t, { 'peer.js': `// CK-2: a note\n// CK-3: another\nexport const peer = '${ip}';\n` }));
+  assert.equal(r.code, 1, r.out);
+  assert.ok(r.out.includes(`peer.js:3: IP address — ${ip}`), r.out);
+});
+
+test('an API key is found, and the log gets its start, not the key', (t) => {
+  if (!existsSync(RELEASE)) return t.skip('scripts/release.js is a private tool and is not part of the published slice');
+  const r = check(repo(t, { 'test/key.test.js': `\n\nexport const key = '${KEY}';\n` }));
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /test\/key\.test\.js:3: API key — sk-abcdefghi…/);
+  assert.ok(!r.out.includes(KEY), 'the whole key went to the log');
+});
+
+test('a private pattern is searched when the file is there, and neither it nor the match reaches the log', (t) => {
+  if (!existsSync(RELEASE)) return t.skip('scripts/release.js is a private tool and is not part of the published slice');
+  const host = 'tunnel.internal-host.example';
+  const dir = repo(t, { 'docs/hosts.md': `# Hosts\n\nThe board sits on ${host}.\n` });
+  // after the commit, as in a real checkout: the file is git-ignored there and never in the snapshot
+  writeFileSync(join(dir, '.release-private.json'), JSON.stringify({ patterns: ['internal-host\\.example'] }));
+  const r = check(dir);
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /docs\/hosts\.md:3: private domain or host$/m);
+  assert.ok(!r.out.includes('internal-host'), `a private string went to the log:\n${r.out}`);
+});
+
+test('a class name holding "sk-" and addresses of the private ranges are not leaks', (t) => {
+  if (!existsSync(RELEASE)) return t.skip('scripts/release.js is a private tool and is not part of the published slice');
+  const ips = ['172.16.0.1', '172.20.10.2', '172.31.255.254'];
+  const r = check(repo(t, {
+    'public/look.css': '.desk-sidebar-with-very-long-class-name { color: red; }\n.my-sk-sidebar-with-very-long-class-name { color: red; }\n',
+    'docs/lan.md': `Examples: ${ips.join(', ')}\n`,
+  }));
+  assert.equal(r.code, 0, r.out);
+});
+
+test('an address just outside the private range is still a leak', (t) => {
+  if (!existsSync(RELEASE)) return t.skip('scripts/release.js is a private tool and is not part of the published slice');
+  for (const ip of [15, 32].map((n) => ['172', n, '0', '1'].join('.'))) {
+    const r = check(repo(t, { 'docs/lan.md': `See ${ip}\n` }));
+    assert.equal(r.code, 1, r.out);
+    assert.ok(r.out.includes(`docs/lan.md:1: IP address — ${ip}`), r.out);
+  }
+});
+
+test('a broken private file is one line naming it, not a stack, and shows nothing of it', (t) => {
+  if (!existsSync(RELEASE)) return t.skip('scripts/release.js is a private tool and is not part of the published slice');
+  const dir = repo(t, {});
+  for (const broken of ['{ "patterns": [ "secret-host.example" ', '{ "patterns": ["(secret-host"] }', '{ "patterns": "secret-host" }']) {
+    writeFileSync(join(dir, '.release-private.json'), broken);
+    const r = check(dir);
+    assert.equal(r.code, 1, r.out);
+    assert.match(r.out, /\.release-private\.json cannot be used/);
+    assert.ok(!/^\s+at /m.test(r.out), `a stack:\n${r.out}`);
+    assert.ok(!r.out.includes('secret-host'), `a private string went to the log:\n${r.out}`);
+  }
+});
+
+test('a failed check takes its snapshot with it, and the real node_modules stays', (t) => {
+  if (!existsSync(RELEASE)) return t.skip('scripts/release.js is a private tool and is not part of the published slice');
+  const failing = "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\ntest('red', () => { assert.equal(1, 2); });\n";
+  // one stop before the link to node_modules is made, one with it in place
+  for (const files of [{ 'CHANGELOG.md': `# Changelog\n\n- ${RU}.\n` }, { 'test/red.test.js': failing }]) {
+    const dir = repo(t, files);
+    mkdirSync(join(dir, 'node_modules'));
+    writeFileSync(join(dir, 'node_modules', 'keep.txt'), 'real');
+    const r = check(dir);
+    assert.equal(r.code, 1, r.out);
+    assert.deepEqual(readdirSync(r.tmp).filter((n) => n.startsWith('local-kanban-release-')), [], 'the failed check left its snapshot behind');
+    assert.ok(existsSync(join(dir, 'node_modules', 'keep.txt')), 'the cleanup walked into the real node_modules');
+  }
 });
 
 test('the check fails on a test that only passes with the comments in place', (t) => {
@@ -99,6 +178,18 @@ test('the check fails on a test that only passes with the comments in place', (t
   }));
   assert.equal(r.code, 1, r.out);
   assert.match(r.out, /the test suite fails ON THE SNAPSHOT/);
+});
+
+test('the suite in two steps proves all of it: a red test stops the check on either side', (t) => {
+  if (!existsSync(RELEASE)) return t.skip('scripts/release.js is a private tool and is not part of the published slice');
+  const red = (name) => `import { test } from 'node:test';\nimport assert from 'node:assert/strict';\ntest('${name}', () => { assert.equal(1, 2); });\n`;
+  const green = "import { test } from 'node:test';\ntest('fine', () => {});\n";
+  const apart = check(repo(t, { 'test/shipped.test.js': red('the file set apart'), 'test/other.test.js': green }));
+  assert.equal(apart.code, 1, apart.out);
+  assert.match(apart.out, /the file set apart/, 'the file set apart did not run');
+  const rest = check(repo(t, { 'test/shipped.test.js': green, 'test/other.test.js': red('a file of the rest') }));
+  assert.equal(rest.code, 1, rest.out);
+  assert.match(rest.out, /a file of the rest/, 'the rest did not run');
 });
 
 test('CI runs the check on every push to dev', (t) => {

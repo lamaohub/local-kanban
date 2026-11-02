@@ -1,6 +1,7 @@
 
 import { createRetryQueue, resendDelay } from './unsaved.js';
 import { localStore, sessionStore } from './store.js';
+import { readyShown, statusesShown } from './ready-rules.js';
 
 const ICONS = {
   grid: 'M2.5 2.5h4.5v4.5H2.5zM9 2.5h4.5v4.5H9zM2.5 9h4.5v4.5H2.5zM9 9h4.5v4.5H9z',
@@ -142,6 +143,7 @@ const I18N_RU = {
   'Port %s is taken by another program — the board did not open to the network. Free it or set another one in KB_SHARE_PORT.': 'Порт %s занят другой программой — доска в сеть не открылась. Освободи его или задай другой в KB_SHARE_PORT.',
   'Could not open the board to the network — the details are in Settings → Errors.': 'Не удалось открыть доску в сеть — подробности в «Настройки → Ошибки».',
   'You are a guest here': 'Ты здесь гость',
+  'backups stay with the owner of the board: a backup holds its key': 'бэкапы остаются у владельца доски: в бэкапе лежит её ключ',
   'this board runs on another computer; its owner opens and closes it to the network': 'доска работает на другом компьютере; открывает и закрывает её для сети владелец',
   'The board stays on this computer: it has to be running, and switching off closes it to the network at once. After a restart of the board it is open again, with the same link.': 'Доска остаётся на этом компьютере: она должна работать, а выключатель сразу закрывает её для сети. После перезапуска доски вход снова открыт — по той же ссылке.',
   'On a Mac the system may ask whether node may accept incoming connections — allow it, or nobody gets in.': 'На маке система может спросить, разрешить ли node входящие подключения, — разреши, иначе никто не войдёт.',
@@ -349,6 +351,8 @@ const I18N_RU = {
   'The switch is off: the column goes once it is empty': 'Переключатель выключен: колонка уйдёт, когда опустеет',
   'Statuses': 'Статусы',
   'Wait for the word before shipping': 'Ждать команды перед выкаткой',
+  'These projects say otherwise and do not wait:': 'Эти проекты решили иначе и не ждут:',
+  'tasks waiting for your word to ship': 'задачи ждут твоей команды на выкатку',
   'a finished task stops in Ready to ship until you say to ship it; Ready to ship means it is not on main yet, Review that people have it': 'готовая задача останавливается в «Ждёт выкатки», пока ты не скажешь выкатывать; «Ждёт выкатки» — в main ещё нет, «Проверяю» — уже у людей',
   'A project can say otherwise in its settings.': 'Проект может решить иначе в своих настройках.',
   'Waits in the column:': 'В колонке ждут:',
@@ -1468,6 +1472,16 @@ const I18N_RU = {
   'Not saved: the board answered with an error — the details are in Settings → Errors.': 'Не сохранено: доска ответила ошибкой — подробности в «Настройках → Ошибки».',
   'Not saved: the task has to go through work first — the board showed it in an old column.': 'Не сохранено: задачу сначала нужно провести через работу — доска показывала её в старой колонке.',
   'Not saved: the board did not accept it.': 'Не сохранено: доска это не приняла.',
+  'Not saved: noclaude and check are not put on a task in work — this project ships on your word.': 'Не сохранено: noclaude и check не ставятся на задачу в работе — этот проект выкатывается по твоей команде.',
+  'noclaude and check are not put on a task in work — this project ships on your word': 'noclaude и check не ставятся на задачу в работе — этот проект выкатывается по твоей команде',
+  'Not saved: the task goes to Ready to ship first — this project ships on your word.': 'Не сохранено: задача сначала идёт в «Ждёт выкатки» — этот проект выкатывается по твоей команде.',
+  'the task goes to Ready to ship first — this project ships on your word': 'задача сначала идёт в «Ждёт выкатки» — этот проект выкатывается по твоей команде',
+  'Not saved: only the owner of the board can do this.': 'Не сохранено: это может только владелец доски.',
+  'only the owner of the board can do this': 'это может только владелец доски',
+  'a guest starts Claude only inside the board': 'гость запускает Claude только внутри доски',
+  'this board has no such label': 'на этой доске такой метки нет',
+  'Not saved: this device no longer has the key of the board, it may have been changed. Copy what you typed, then reload the page and enter the key.': 'Не сохранено: у этого устройства больше нет ключа доски, возможно, его сменили. Скопируй набранное, обнови страницу и введи ключ.',
+  'this device no longer has the key of the board, it may have been changed — copy what you typed, then reload the page and enter the key': 'у этого устройства больше нет ключа доски, возможно, его сменили — скопируй набранное, обнови страницу и введи ключ',
   'The task is not created': 'Задача не создана',
   'The task is not created yet: there is no connection to the board. It is created by itself once the connection is back.': 'Задача ещё не создана: нет связи с доской. Она создастся сама, когда связь вернётся.',
   'The task is not created yet: the board answered with an error — the details are in Settings → Errors. Your next change tries again, or click “not saved” at the top.': 'Задача ещё не создана: доска ответила ошибкой — подробности в «Настройках → Ошибки». Следующая правка попробует снова — или нажми «не сохранено» вверху.',
@@ -1625,6 +1639,7 @@ const I18N_RU = {
   'Its terminal, its steps and its questions are right in the task.': 'Его терминал, шаги и вопросы — прямо в задаче.',
   'Done is your word': '«Готово» — твоё слово',
   'Claude stops at Review: you accept the work or send it back.': 'Claude останавливается на «Проверяю»: ты принимаешь работу или возвращаешь её.',
+  'Claude stops at Ready to ship until you say to ship it, then at Review: you accept the work or send it back.': 'Claude останавливается на «Ждёт выкатки» до твоей команды, потом на «Проверяю»: ты принимаешь работу или возвращаешь её.',
   'Open issue': 'Открыта',
   'adds this': 'добавит это',
   'hides this': 'спрячет это',
@@ -1725,6 +1740,8 @@ const I18N_RU = {
   'Automations are switched off in Settings': 'Автоматизации выключены в Настройках',
   'the project has no folder on this computer': 'у проекта нет папки на этом компьютере',
   'tmux is not installed here': 'здесь не установлен tmux',
+  'a Claude of the board already works on these tasks': 'над этими задачами уже работает Claude доски',
+  'tmux did not answer in time': 'tmux не ответил вовремя',
   'Claude Code is not installed here': 'здесь не установлен Claude Code',
   "the prompt is too long for the board's terminal": 'задание слишком длинное для терминала доски',
   'the project already has an open check': 'в проекте уже открыта проверка',
@@ -1851,11 +1868,8 @@ export const ALL_STATUSES = [
   ['done', tr('Done')],
   ['cancelled', tr('Cancelled')],
 ];
-export function readyInUse(slug) {
-  const on = (p) => Boolean(p.ship_gate || p.c_ready);
-  return slug === ALL ? state.projects.some(on) : on(state.projects.find((p) => p.slug === slug) || {});
-}
-export const statusesFor = (slug, current) => ALL_STATUSES.filter(([v]) => v !== 'ready' || v === current || readyInUse(slug));
+export const readyInUse = (slug) => readyShown(state.projects, slug, ALL);
+export const statusesFor = (slug, current) => statusesShown(ALL_STATUSES, current, readyInUse(slug));
 export const PRI_ICON = { 1: ['↓', 'p1', tr('low')], 2: ['＝', 'p2', tr('medium')], 3: ['↑', 'p3', tr('high')] };
 export const PRI_LEVELS = [[3, tr('↑ High')], [2, tr('＝ Medium')], [1, tr('↓ Low')], [0, tr('No priority')]];
 export let LABEL_COLORS = {};

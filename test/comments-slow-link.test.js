@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { canRetry, createRetryQueue, createTurns, refusalLine, refusalText, resendDelay, RESEND_MAX_MS, RESEND_MS, TURN_WAIT_MS } from '../public/js/unsaved.js';
+import { canRetry, createCommentKeys, createRetryQueue, createTurns, refusalLine, refusalText, resendDelay, RESEND_MAX_MS, RESEND_MS, TURN_WAIT_MS } from '../public/js/unsaved.js';
 
 const read = (f) => readFileSync(new URL(`../public/js/${f}`, import.meta.url), 'utf8');
 const drawer = read('drawer.js');
@@ -60,7 +60,7 @@ function card() {
     tr: (s) => s, esc: (s) => String(s), ic: () => '', seg: (s) => String(s), relTime: () => 'now',
     canRetry, refusalLine, refusalText, resendDelay,
     api: (method, path) => new Promise((ok, fail) => { gets.push({ key: path.split('/')[3], ok, fail }); }),
-    paintUnsent: () => {}, openLightbox: () => {}, deleteComment: (id) => { box.deleted = id; },
+    paintUnsent: () => {}, commentOnServer: () => {}, openLightbox: () => {}, deleteComment: (id) => { box.deleted = id; },
     setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
     clearTimeout: (id) => { if (id && timers[id - 1]) timers[id - 1].fn = null; },
     Math, Set, Boolean, Number,
@@ -215,7 +215,7 @@ function sendForm() {
     $: (id) => els[id], state: { drawerKey: 'VV-1' }, seg: (s) => s, Map, Date: { now: () => box.now }, now: 1000, Infinity,
     api: (method, path, body) => new Promise((ok) => { posts.push({ body, ok }); }),
     sayRefused: () => {}, queued: [], queueComment: (key, body, token) => box.queued.push(token), commentDrafts: new Map(), autoGrow: () => {},
-    tokens: 0, commentToken: () => `t${++box.tokens}`,
+    tokens: 0, commentToken: () => `t${++box.tokens}`, commentKeys: createCommentKeys(), unsentToken: () => undefined,
     arrived: [], commentArrived: (key, cm) => box.arrived.push(cm.id),
     shown: [], showOwnComment: (key, id) => box.shown.push(id),
   };

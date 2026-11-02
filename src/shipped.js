@@ -1,35 +1,58 @@
 import { execFile } from 'node:child_process';
-import { db } from './db.js';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { db, ghOwner, ghRepo } from './db.js';
+import { repoHttpsBase } from './repo-base.js';
 
 const KEEP_MS = 30_000;
 const MAIN_SCAN = 3000;   // commits of main read: older ones are long shipped
 const SIDE_SCAN = 1000;
 const GIT_MS = 8000;
 const SEP = '\x1e';
-const WORDS = /[A-Za-z][A-Za-z0-9]*-\d+|#\d+/g;
+const KEY = /(?<![A-Za-z0-9])[A-Za-z0-9]+-\d+/g;
+const NUMBER = /(?<![\w./-])(?:[\w.-]+\/[\w.-]+)?#\d+/g; // owner/repo#N or #N
+const KEY_LIST = /^[^\p{L}\p{N}]*(?:and|\u0438)?[^\p{L}\p{N}]*$/iu; // what stands between two keys of one list
 
-function git(path, args) {
-  return new Promise((resolve) => {
-    execFile('git', ['-C', path, ...args], { timeout: GIT_MS, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' } },
-      (err, out) => resolve(err ? null : out));
+function git(path, args, env = {}) {
+  return new Promise((done) => {
+    execFile('git', ['-C', path, ...args], { timeout: GIT_MS, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0', ...env } },
+      (err, out) => done(err ? null : out));
   });
 }
 
-/** Commits of a `git log` with FORMAT: [{hash, subject, words}] — `words` the keys and issue numbers of the message. Pure. */
-const FORMAT = `%H%n%s%n%B${SEP}`;
-export function parseLog(out) {
+/** The keys a subject claims for itself, not all it names: the first list of them. «SHI-108 follow-up to SHI-107» is a commit
+    of SHI-108, «VT-572, VT-412 (acceptance of VT-627)» of the two. `known` — the prefixes of the board, in capitals: «2-3» and
+    «sha-256» have a key's shape and are not keys, and standing first they took the place of the real one. Pure. */
+export function ownKeys(subject, known = null) {
+  const hits = [...subject.matchAll(KEY)].filter((h) => !known || known.has(h[0].split('-')[0].toUpperCase()));
+  if (!hits.length) return [];
+  const keys = [hits[0][0]];
+  for (let i = 0; hits[i + 1] && KEY_LIST.test(subject.slice(hits[i].index + hits[i][0].length, hits[i + 1].index)); i += 1) keys.push(hits[i + 1][0]);
+  return keys;
+}
+
+/** Commits of a `git log` with FORMAT: [{hash, tip, subject, words}]. `tip` — the ref it was reached by (`--source`), `words` —
+    the keys its subject claims and the numbers of its message, in capitals. Pure. */
+const FORMAT = `%H%n%S%n%s%n%B${SEP}`;
+export function parseLog(out, known = null) {
   return String(out || '').split(SEP).map((c) => c.replace(/^\n/, '')).filter(Boolean).map((c) => {
-    const [hash, subject = ''] = c.split('\n', 2);
-    return { hash, subject, words: new Set((c.slice(hash.length).match(WORDS) || []).map((w) => w.toUpperCase())) };
+    const [hash, tip = '', subject = ''] = c.split('\n', 3);
+    return { hash, tip, subject, words: new Set([...ownKeys(subject, known), ...(c.slice(hash.length + tip.length + 1).match(NUMBER) || [])].map((w) => w.toUpperCase())) };
   });
 }
 
-/** Where task `t` {key, issue, hashes, branch} stands. `branch`: 'ahead' — its own branch holds what main has not, 'in' — all it
-    holds is on main, null — no such branch, or one with no commits of its own. `copies` — hashes of the side commits whose
-    patch stands on main. Pure. */
-export function placeOf(t, main, side, copies) {
-  const mine = (c) => c.words.has(t.key.toUpperCase()) || (t.issue && c.words.has(`#${t.issue}`)) || t.hashes.some((h) => c.hash.startsWith(h));
-  if (t.branch === 'ahead' || side.some((c) => mine(c) && !copies.has(c.hash))) return 'branch';
+/** What names a task in a message. `#N` of a foreign repository is its own pull request («Merge pull request #4242»), so a
+    number counts with the name of the mirror, and bare only in the repository that is the mirror. Pure. */
+export function wordsOf(key, issue, mirror, home) {
+  return [key, ...(issue && mirror ? [`${mirror}#${issue}`, ...(home ? [`#${issue}`] : [])] : [])].map((w) => w.toUpperCase());
+}
+
+/** Where task `t` {words, branch} stands. `branch`: 'ahead' — its own branch holds what main has not, 'in' — all it holds is
+    on main, null — no such branch, or one with no commits of its own. `onMain(c)` — this side commit stands on main. Pure. */
+export function placeOf(t, main, side, onMain) {
+  const mine = (c) => t.words.some((w) => c.words.has(w));
+  if (t.branch === 'ahead' || side.some((c) => mine(c) && !onMain(c))) return 'branch';
   return t.branch === 'in' || main.some(mine) || side.some(mine) ? 'main' : 'none';
 }
 
@@ -38,35 +61,34 @@ export function branchesOf(key, names) {
   return names.filter((n) => k.test(n.replace(/^(origin\/)?claude\//, '')));
 }
 
-const patchId = (path, hash) => new Promise((resolve) => {
-  const show = execFile('git', ['-C', path, 'show', '--format=', hash], { timeout: GIT_MS, maxBuffer: 64 * 1024 * 1024 }, (err, out) => {
-    if (err) { resolve(null); return; }
-    const id = execFile('git', ['-C', path, 'patch-id', '--stable'], { timeout: GIT_MS }, (e, o) => resolve(e ? null : String(o).split(' ')[0] || null));
-    id.stdin.on('error', () => {});
-    id.stdin.end(out);
-  });
-  show.on('error', () => resolve(null));
-});
-
-/** Of the side commits sharing a subject with main, those whose patch stands on main. */
-async function copiesOn(path, main, side) {
-  const bySubject = new Map();
-  for (const c of main) if (!bySubject.has(c.subject)) bySubject.set(c.subject, c);
-  const out = new Set();
-  for (const c of side) {
-    const twin = bySubject.get(c.subject);
-    if (!twin) continue;
-    const [a, b] = await Promise.all([patchId(path, c.hash), patchId(path, twin.hash)]);
-    if (a && a === b) out.add(c.hash);
-  }
-  return out;
-}
-
 /** What `git cherry` says of a branch against main: 'ahead', 'in', or null when it has no commit of its own. Pure. */
 export function cherryState(out) {
   const lines = String(out || '').split('\n').filter(Boolean);
   if (!lines.length) return null;
   return lines.some((l) => l.startsWith('+')) ? 'ahead' : 'in';
+}
+const cherryCopies = (out) => new Set(String(out || '').split('\n').filter((l) => l.startsWith('- ')).map((l) => l.slice(2)));
+
+/** A path for GIT_ALTERNATE_OBJECT_DIRECTORIES, which splits on a colon unless the entry is quoted. */
+const alternate = (p) => (/[:"\\]/.test(p) ? `"${p.replace(/["\\]/g, '\\$&')}"` : p);
+
+/** Whether a line ahead by patches is squashed into main: merging it leaves main's tree as it is, and it does change something
+    (a line that took its work back merges the same way, with nothing on main). Git before 2.38 has no `--write-tree`, and a
+    conflict is not proof: neither is squashed. `--write-tree` puts the trees it makes into the objects of the repository, and
+    a look at a card must not grow the person's repository: `shelf` sends them to a directory of the look, reading through to
+    the real objects. */
+async function squashed(path, ref, tree, tip, shelf) {
+  if (!shelf) return false;
+  const merged = await git(path, ['merge-tree', '--write-tree', ref, tip], shelf);
+  if (merged === null || merged.split('\n')[0].trim() !== tree) return false;
+  return Boolean((await git(path, ['diff', '--name-only', `${ref}...${tip}`]))?.trim());
+}
+
+/** A side line against main: {state (as `cherryState`), copies (hashes of its commits with their patch on main)}. */
+async function sideLine(path, ref, tree, tip, shelf) {
+  const out = await git(path, ['cherry', ref, tip]);
+  const state = cherryState(out);
+  return { state: state === 'ahead' && await squashed(path, ref, tree, tip, shelf) ? 'in' : state, copies: cherryCopies(out) };
 }
 
 async function mainRef(path) {
@@ -76,6 +98,11 @@ async function mainRef(path) {
   return null;
 }
 
+/** `owner/repo` of the mirror of issues: `gh.repo` holds either the whole name or the part after the owner. */
+export function mirrorName(owner, repo) {
+  return !repo ? '' : repo.includes('/') ? repo : owner ? `${owner}/${repo}` : '';
+}
+
 async function look(project) {
   const tasks = db.prepare(`SELECT t.id, p.prefix || '-' || t.task_no AS key, t.gh_issue_number AS issue, t.labels FROM tasks t JOIN projects p ON p.id = t.project_id
     WHERE t.project_id = ? AND t.status IN ('ready', 'review')`).all(project.id)
@@ -83,23 +110,38 @@ async function look(project) {
   if (!tasks.length || !project.path) return {};
   const ref = await mainRef(project.path);
   if (!ref) return {}; // no git here, or no main: the card says nothing
-  const [mainLog, sideLog, refs] = await Promise.all([
+  const [mainLog, sideLog, refs, tree, objects, base] = await Promise.all([
     git(project.path, ['log', ref, '-n', String(MAIN_SCAN), `--format=${FORMAT}`]),
-    git(project.path, ['log', '--branches', '--remotes', '--not', ref, '-n', String(SIDE_SCAN), `--format=${FORMAT}`]),
+    git(project.path, ['log', '--source', '--no-merges', '--branches', '--remotes', '--not', ref, '-n', String(SIDE_SCAN), `--format=${FORMAT}`]),
     git(project.path, ['for-each-ref', '--format=%(refname:short)', 'refs/heads/claude', 'refs/remotes/origin/claude']),
+    git(project.path, ['rev-parse', `${ref}^{tree}`]),
+    git(project.path, ['rev-parse', '--git-path', 'objects']),
+    repoHttpsBase(project.path),
   ]);
   if (mainLog === null || sideLog === null) return {};
-  const main = parseLog(mainLog);
-  const side = parseLog(sideLog);
-  const copies = await copiesOn(project.path, main, side);
-  const branches = String(refs || '').split('\n').filter(Boolean);
+  const known = new Set(db.prepare('SELECT upper(prefix) AS prefix FROM projects').all().map((p) => p.prefix));
+  const main = parseLog(mainLog, known);
+  const side = parseLog(sideLog, known);
+  const names = String(refs || '').split('\n').filter(Boolean);
+  const mirror = mirrorName(ghOwner(), ghRepo());
+  const home = Boolean(mirror) && base?.toLowerCase() === `https://github.com/${mirror}`.toLowerCase();
+  const plans = tasks.map((t) => ({ key: t.key, words: wordsOf(t.key, t.issue, mirror, home), branches: branchesOf(t.key, names) }));
+  // only the lines that hold a task of these columns: a repository may have hundreds of others
+  const tips = new Set(plans.flatMap((t) => [...t.branches, ...side.filter((c) => t.words.some((w) => c.words.has(w))).map((c) => c.tip)]));
+  const lines = new Map();
+  const scratch = tips.size ? await mkdtemp(join(tmpdir(), 'kb-ship-')).catch(() => null) : null; // none: a squash is not seen, the rest stands
+  const shelf = scratch && objects !== null ? { GIT_OBJECT_DIRECTORY: scratch, GIT_ALTERNATE_OBJECT_DIRECTORIES: alternate(resolve(project.path, objects.trim())) } : null;
+  try {
+    for (const tip of tips) lines.set(tip, await sideLine(project.path, ref, String(tree || '').trim(), tip, shelf)); // one by one: this is a hint, not worth the cores
+  } finally {
+    if (scratch) await rm(scratch, { recursive: true, force: true }).catch(() => {});
+  }
+  const onMain = (c) => lines.get(c.tip)?.state === 'in' || Boolean(lines.get(c.tip)?.copies.has(c.hash));
   const out = {};
-  for (const t of tasks) {
-    const hashes = db.prepare("SELECT body FROM task_comments WHERE task_id = ? AND author = 'git'").all(t.id)
-      .map((c) => c.body.split(/\s/)[0]).filter((h) => /^[0-9a-f]{7,40}$/.test(h));
-    const states = await Promise.all(branchesOf(t.key, branches).map(async (b) => cherryState(await git(project.path, ['cherry', ref, b]))));
+  for (const t of plans) {
+    const states = t.branches.map((b) => lines.get(b).state);
     const branch = states.includes('ahead') ? 'ahead' : states.includes('in') ? 'in' : null;
-    out[t.key] = placeOf({ key: t.key, issue: t.issue, hashes, branch }, main, side, copies);
+    out[t.key] = placeOf({ words: t.words, branch }, main, side, onMain);
   }
   return out;
 }

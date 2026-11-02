@@ -8,6 +8,7 @@ import { checkWords } from './review.js';
 import { getSetting, openSettingsModal } from './settings.js';
 import { renderSidebar, selectProject, styledAlert } from './sidebar.js';
 import { refusalLine } from './unsaved.js';
+import { failWord } from './review-rules.js';
 
 const CHECK_KIND = 'finished-check';
 const SCHEDULED = new Set(['schedule-check', 'schedule-groom']);
@@ -80,18 +81,7 @@ export function phaseLine(r) {
 }
 const phaseText = (r) => { const d = document.createElement('div'); d.innerHTML = phaseLine(r); return d.textContent; };
 const hm = (ms) => { const d = new Date(ms); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
-const FAIL_WORDS = {
-  'no-folder': 'the project has no folder on this computer',
-  'no-tmux': 'tmux is not installed here',
-  'no-claude': 'Claude Code is not installed here',
-  'too-long': 'the prompt is too long for the board\'s terminal',
-  'check-open': 'the project already has an open check',
-  manual: 'a task done by hand cannot be given to Claude',
-};
-const failWhy = (r) => {
-  const reason = String(r.error || '').match(/^([a-z-]+): /)?.[1];
-  return reason && FAIL_WORDS[reason] ? tr(FAIL_WORDS[reason]) : esc(r.error || '');
-};
+const failWhy = (r) => { const word = failWord(r.error); return word ? tr(word) : esc(r.error || ''); };
 function endedLine(r) {
   const key = r.check_key ? `<button type="button" class="auto-key" data-key="${esc(r.check_key)}">${esc(r.check_key)}</button>` : '';
   if (r.state === 'fired') return `${tr('Check started')} ${key} · ${hm(r.ended_at)}`;

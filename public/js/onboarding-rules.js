@@ -33,6 +33,9 @@ export const FEATURES = [
   { id: 'accept', icon: 'check', title: 'Done is your word', note: 'Claude stops at Review: you accept the work or send it back.' },
 ];
 
+const ACCEPT_GATED = 'Claude stops at Ready to ship until you say to ship it, then at Review: you accept the work or send it back.';
+export const featuresFor = (gated) => FEATURES.map((f) => (gated && f.id === 'accept' ? { ...f, note: ACCEPT_GATED } : f));
+
 /** The ways ▶ can start Claude, in the order offered (the values of the `launch` setting), and why one cannot here:
     `avail` — the answer of GET /api/launch; before it comes nothing is said to be missing. */
 export function launchChoices(avail = {}) {

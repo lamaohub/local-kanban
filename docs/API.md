@@ -44,7 +44,7 @@ as arrays of objects. Nested-route params follow one scheme: `:commentId`, `:att
 
 | `POST /api/tasks/:key/duplicate` | copy title/description/priority/labels into a new `todo`/`backlog` task. A copy of a check that would be a second open one is refused: 409 `{reason: "check-open", key}` — the key of the copied check itself when it is open, of the project's open check otherwise; a copy landing in `backlog` is not open and goes through |
 | `POST /api/tasks/:key/move` | move the task to another project: `{project}` (slug or prefix). It keeps its id and everything on it and takes the next number there; the old key keeps leading to it. Refused: a task in work (409 `{reason: "in-work"}`, manual tasks excepted), the same or an archived project (400), an open check into a project that has one (409 `{reason: "check-open", key}`). Answers the task with `old_key`; event `task.moved` |
-| `GET/POST /api/tasks/:key/comments` | comments; POST `{body, author?, client_key?}` (`client_key`: up to 64 characters; a repeat with the same key answers 200 with the comment already written) or a raw `image/*` body (screenshot) |
+| `GET/POST /api/tasks/:key/comments` | comments; POST `{body, author?, client_key?}` (`client_key`: up to 64 characters; a repeat with the same key answers 200 with the comment already written, or `{deleted: true, client_key}` when it was deleted since: nothing is written again) or a raw `image/*` body (screenshot) |
 | `DELETE /api/tasks/:key/comments/:commentId` | delete a comment (local only) |
 | `POST /api/tasks/:key/links` | link tasks: `{key, rel: related\|child\|parent}` |
 | `DELETE /api/tasks/:key/links/:linkedId` | unlink |
@@ -175,7 +175,7 @@ with the same view.
 | `GET /api/projects/:slug` | one project (+ `deploy_skill_path`) |
 | `POST /api/projects` | create: `{slug, name, path?, server?, server_path?, pm2_services?, domain?, deploy_skill?, category?, prefix?}`. `slug` is one path segment: latin letters, digits, `.`, `-`, `_`, not starting with `.` or `-`, up to 100 characters |
 | `PATCH /api/projects/:slug` | update the same fields; `archived: 1` hides a project. `name` cannot be emptied; `prefix` is a string of 2-10 latin letters or digits |
-| `GET /api/shipped?project=` | whether the commits of the tasks in `ready` and `review` reached main: `{tasks: {KEY: 'main'\|'branch'\|'none'}}`; all projects without `project` |
+| `GET /api/shipped?project=` | whether the commits of the tasks in `ready` and `review` reached main: `{tasks: {KEY: 'main'\|'branch'\|'none'}}`; all projects without `project`. A commit is a task's by the first keys of its subject, by `owner/repo#N` of the mirror of issues (bare `#N` only inside the mirror), or by the branch `claude/<key>` |
 | `GET/PUT /api/flow` | `{ready_gate}` — the board's switch for `ready`; `ready_gate` of a project (null, 0, 1) goes over it |
 | `GET /api/projects/:slug/status` | live service statuses (local pm2 by default, or `PANEL_URL` provider) |
 | `GET /api/projects/folders` | folders on disk vs registry: `{root, unregistered, missing}` |

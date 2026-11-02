@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { canRetry, createUnsentComments, refusalText } from '../public/js/unsaved.js';
+import { canRetry, createCommentKeys, createUnsentComments, refusalText } from '../public/js/unsaved.js';
 
 const src = readFileSync(new URL('../public/js/drawer.js', import.meta.url), 'utf8');
 const take = (head) => {
@@ -66,7 +66,7 @@ function card() {
     esc: (s) => String(s),
     ic: () => '',
     seg: (s) => encodeURIComponent(String(s)),
-    canRetry, createUnsentComments, refusalText,
+    canRetry, createCommentKeys, createUnsentComments, refusalText,
     server: { mode: 'up' },
     api: async (method, path, body) => {
       calls.posts.push({ method, path, body });
@@ -95,6 +95,7 @@ function card() {
     take('export function peekTerminal('),
     line('const COMMENT_AUTHORS = '),
     line('const unsentComments = '),
+    line('const commentKeys = '),
     take('export function queueComment('),
     take('async function resendComment('),
     take('function paintUnsent('),
