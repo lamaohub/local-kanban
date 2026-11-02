@@ -56,6 +56,16 @@ test('a client that stopped reading is dropped instead of piling the stream up i
   } finally { sock.destroy(); }
 });
 
+test('review of CK-869: the limit of one stream holds by itself, the limit of all the streams does not stand in for it', async () => {
+  events.setSseTotalMax(1024 * 1024 * 1024);
+  const sock = await connect();
+  try {
+    sock.pause();
+    await flood(64);
+    assert.equal(events.sseCount(), 0, 'one stream went on past its own limit');
+  } finally { sock.destroy(); events.setSseTotalMax(0); }
+});
+
 test('a client that reads keeps its stream through the same burst', async () => {
   const sock = await connect();
   let got = 0;

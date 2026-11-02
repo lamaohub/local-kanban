@@ -25,10 +25,10 @@ function card({ view, saved = 'comments' } = {}) {
     renderTerminal: () => { seen.terminal++; }, workFlight: (k) => seen.fetched.push(k),
   };
   vm.runInNewContext(['let workKey = null; let termKey = null; let termScreen = null; let termFollow = true;',
-    'let termInfo = null; let termSeen = null; let termOpenNext = null;',
+    'let termInfo = null; let termSeen = null; let termOpenNext = null; let tabsFor = null; let cardTab = \'comments\';',
     line('export const claudeView = ').replace(/^export /, ''), line('let chatTab = '), line('let tabsTask = '),
     take('function renderWorkTabs('), take('export function refreshWork('), take('export function repaintWorkTabs('),
-    'this.api = { renderWorkTabs, refreshWork, repaintWorkTabs };'].join('\n'), box);
+    'this.api = { renderWorkTabs, refreshWork, repaintWorkTabs, opened: (x) => { cardTab = x; }, closed: () => { tabsFor = null; }, askClaude: (k) => { termOpenNext = k; } };'].join('\n'), box);
   return { ...box.api, tabs, seen, box, comments };
 }
 const live = { session: 's', dead: false };
@@ -67,24 +67,51 @@ test('no session and no terminal: no tabs at all, the comments are the card', ()
   assert.deepEqual(c.seen.fetched, [], 'a task.work event reads a chat that is not there');
 });
 
-test('CK-597: a task in work with its Claude alive opens on Claude — its terminal or its chat; otherwise the remembered tab', () => {
-  for (const [view, tab] of [['terminal', 'terminal'], ['chat', 'chat']]) {
-    for (const status of ['prep', 'doing', 'deploy']) {
-      const c = card({ view, saved: 'comments' });
-      c.renderWorkTabs({ key: 'K-1', sessions: [{}], status, terminal: live });
-      assert.deepEqual(c.seen.shown, [tab], `${view}, ${status}: the card opens on the remembered tab, not on Claude`);
-    }
+test('CK-597: a task in work with its Claude alive opens on its terminal; otherwise the remembered tab', () => {
+  for (const status of ['prep', 'doing', 'deploy']) {
+    const c = card({ view: 'terminal', saved: 'comments' });
+    c.renderWorkTabs({ key: 'K-1', sessions: [{}], status, terminal: live });
+    assert.deepEqual(c.seen.shown, ['terminal'], `${status}: the card opens on the remembered tab, not on Claude`);
   }
   for (const [status, terminal] of [['review', live], ['todo', live], ['doing', { session: 's', dead: true }]]) {
     const c = card({ view: 'terminal', saved: 'comments' });
     c.renderWorkTabs({ key: 'K-1', sessions: [{}], status, terminal });
     assert.deepEqual(c.seen.shown, ['comments'], `${status}, dead ${terminal.dead}: the remembered tab is overruled`);
   }
-  for (const view of ['terminal', 'chat']) {
-    const c = card({ view, saved: 'comments' });
-    c.renderWorkTabs({ key: 'K-1', sessions: [{}], status: 'doing', terminal: { session: 's', dead: true, exit: 143, interrupted: true } });
-    assert.deepEqual(c.seen.shown, [view], `${view}: the card of an interrupted Claude opens on the remembered tab`);
+  const c = card({ view: 'terminal', saved: 'comments' });
+  c.renderWorkTabs({ key: 'K-1', sessions: [{}], status: 'doing', terminal: { session: 's', dead: true, exit: 143, interrupted: true } });
+  assert.deepEqual(c.seen.shown, ['terminal'], 'the card of an interrupted Claude opens on the remembered tab');
+});
+
+test('CK-925: a card shown as a chat opens with the chat closed, whatever the task and the tab last used', () => {
+  for (const saved of ['comments', 'chat']) {
+    for (const [status, terminal] of [['doing', live], ['prep', live], ['review', null], ['doing', { session: 's', dead: true, interrupted: true }]]) {
+      const c = card({ view: 'chat', saved });
+      c.renderWorkTabs({ key: 'K-1', sessions: [{}], status, terminal });
+      assert.deepEqual(c.seen.shown, ['comments'], `${saved}, ${status}: the card opened on the chat`);
+      assert.match(c.tabs.innerHTML, /data-tab="chat"/, 'the chat has no tab to open it by');
+    }
   }
+});
+
+test('CK-925: the open card keeps the chat through a repaint, and opened anew it is closed again', () => {
+  const c = card({ view: 'chat' });
+  const t = { key: 'K-1', sessions: [{}], status: 'doing', terminal: live };
+  c.renderWorkTabs(t);
+  c.box.showWorkTab = (tab) => c.seen.shown.push(tab);
+  c.opened('chat');
+  c.renderWorkTabs(t);
+  assert.equal(c.seen.shown.at(-1), 'chat', 'a repaint of the open card closed the chat under the person');
+  c.closed();
+  c.renderWorkTabs(t);
+  assert.equal(c.seen.shown.at(-1), 'comments', 'the card opened again on the chat');
+});
+
+test('CK-925: ▶ and «Open in the card» do open the chat', () => {
+  const c = card({ view: 'chat' });
+  c.askClaude('K-1');
+  c.renderWorkTabs({ key: 'K-1', sessions: [{}], status: 'doing', terminal: live });
+  assert.deepEqual(c.seen.shown, ['chat']);
 });
 
 test('the setting redraws the open card at once, and only it', () => {
@@ -107,4 +134,10 @@ test('the terminal is the default; a tab remembered from the work feed opens the
     /\bchatView: 'terminal'/);
   assert.doesNotMatch(settings, /data-set="showChat"/, 'a second switch for the chat is back in Settings');
   assert.match(line('const savedTab = '), /v === 'work' \|\| v === 'chat' \? 'chat'/);
+});
+
+// set green, and the same card opened again kept its chat.
+test('CK-925: closing the card forgets it — the same card opened again is an opening', () => {
+  const close = src.slice(src.indexOf('export function closeDrawer('), src.indexOf('\n}\n', src.indexOf('export function closeDrawer(')));
+  assert.match(close, /tabsFor = null;/, 'the same card opened again keeps the chat');
 });

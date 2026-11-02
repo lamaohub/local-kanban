@@ -2,6 +2,7 @@ import { $, api, esc, ic, tr } from './core.js';
 import { copyText } from './sse.js';
 import { refusalLine } from './unsaved.js';
 import { moreHTML } from './settings.js';
+import { styledConfirm } from './sidebar.js';
 
 let shareOn = false;
 const buttonTitle = () => tr(shareOn ? 'The board is open to Wi-Fi' : 'Open the board to Wi-Fi');
@@ -26,6 +27,9 @@ const REFUSED_WHY = {
   host: 'opened another address: %s — not the one of the QR code',
   site: 'a request from another site, not from the page of the board',
   address: 'a broken address',
+  key: 'a wrong key',
+  nokey: 'no key: stopped at the page that asks for it',
+  oldpass: 'its pass is of an old key: stopped at the page that asks for the key',
 };
 const clock = (iso) => { const d = new Date(iso); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
 function refusedHTML(list) {
@@ -80,12 +84,14 @@ function drawShare(st) {
       + `<span class="set-lab">${tr('Scan with the phone camera')}<small>${tr('or send the link — it opens the board on any device of this network')}</small></span>`
       + `<code class="share-url">${esc(first.url)}</code>`
       + `<span><button type="button" class="btn-ghost" id="share-copy">${ic('copy', 13)} ${tr('Copy link')}</button></span></div></div>`
-      + row(tr('Connected now'), tr('devices that opened the board in the last minute'), `<span class="about-fresh" id="share-n">${st.guests_n}</span>`);
+      + row(tr('Key'), tr('the board asks for it on a device that has no link: it can be typed by hand'), `<code class="share-key" id="share-key">${esc(st.key || '')}</code>`)
+      + row(tr('Connected now'), tr('devices that opened the board in the last minute'), `<span class="about-fresh" id="share-n">${st.guests_n}</span>`)
+      + row(tr('New key'), tr('the old QR code, link and key stop working, everyone connected is out at once'), `<button type="button" class="btn-ghost" id="share-reset">${tr('Change the key')}</button>`);
   }
   if (st.on || st.refused?.length) h += `<div id="share-refused">${refusedHTML(st.refused)}</div>`;
-  h += `<div class="kbh-note warn">${tr('Whoever on this network opens the address can do on the board all you can: move tasks, write to Claude in the chat and the terminal — that is, run commands on this computer. The address has no password: keep the board open only on a network of people you trust, and switch it off in a café or a hotel.')} ${tr('Settings of the computer itself stay yours: connecting Claude Code, skills, project files, updating the board.')}</div>`;
+  h += `<div class="kbh-note warn">${tr('Whoever has the link, the QR code or the key can do on the board all you can: move tasks, write to Claude in the chat and the terminal — that is, run commands on this computer. Give them only to people you trust. The connection itself is not encrypted: on a network of strangers, a café or a hotel, switch the board off.')} ${tr('Settings of the computer itself stay yours: connecting Claude Code, skills, project files, updating the board.')}</div>`;
   const others = (st.urls || []).slice(1);
-  h += moreHTML(`<p>${tr('The board stays on this computer: it has to be running, and switching off closes it to the network at once. After a restart of the board it is open again, at the same address.')}</p>`
+  h += moreHTML(`<p>${tr('The board stays on this computer: it has to be running, and switching off closes it to the network at once. After a restart of the board it is open again, with the same link.')}</p>`
     + `<p>${tr('On a Mac the system may ask whether node may accept incoming connections — allow it, or nobody gets in.')}</p>`
     + (others.length && st.on ? `<p>${tr('Other addresses of this computer')}:</p>${others.map((u) => `<code class="share-url">${esc(u.url)}</code>`).join('')}` : ''));
   box.innerHTML = h;
@@ -96,6 +102,15 @@ function drawShare(st) {
     try { drawShare(await api('PUT', '/api/share', { on: toggle.checked })); } catch (e) {
       toggle.checked = !toggle.checked;
       toggle.disabled = false;
+      box.insertAdjacentHTML('beforeend', `<div class="kbh-note warn">${esc(refusalLine('Did not work out', e, tr))}</div>`);
+    }
+  };
+  const reset = $('share-reset');
+  if (reset) reset.onclick = async () => {
+    if (!(await styledConfirm(tr('Change the key? Everyone connected is out at once, and the old QR code and link stop working.'), { okLabel: tr('Change the key') }))) return;
+    reset.disabled = true;
+    try { drawShare(await api('POST', '/api/share/reset')); } catch (e) {
+      reset.disabled = false;
       box.insertAdjacentHTML('beforeend', `<div class="kbh-note warn">${esc(refusalLine('Did not work out', e, tr))}</div>`);
     }
   };

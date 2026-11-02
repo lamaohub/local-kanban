@@ -80,6 +80,17 @@ test('the check fails on a Russian string outside the Russian locale', (t) => {
   assert.match(r.out, /test\/words\.test\.js: 8 Cyrillic characters outside the Russian locale/);
 });
 
+test('the check catches what looks like a leak without the private patterns (CK-916)', (t) => {
+  if (!existsSync(RELEASE)) return t.skip('scripts/release.js is a private tool and is not part of the published slice');
+  // built at run time, or this very file would be the leak
+  const ip = ['203', '0', '113', '7'].join('.');
+  const home = ['', 'Users', 'someone', 'notes.txt'].join('/');
+  const r = check(repo(t, { 'test/ua.test.js': `export const peer = '${ip}';\n`, 'docs/note.md': `Kept in ${home}\n` }));
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /test\/ua\.test\.js: IP address/);
+  assert.match(r.out, /docs\/note\.md: home directory path/);
+});
+
 test('the check fails on a test that only passes with the comments in place', (t) => {
   if (!existsSync(RELEASE)) return t.skip('scripts/release.js is a private tool and is not part of the published slice');
   const r = check(repo(t, {

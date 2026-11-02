@@ -1,3 +1,6 @@
+import { scalarQuery } from '../query-params.js';
+import { shippedOf } from '../shipped.js';
+import { gateOf } from '../ready-gate.js';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { join, basename, resolve, sep } from 'node:path';
@@ -62,13 +65,14 @@ function syncCategoryToPanel(project) {
   } catch {  }
 }
 
-const PATCHABLE = ['name', 'prefix', 'path', 'server_path', 'deploy_skill', 'server', 'pm2_services', 'domain', 'category', 'description', 'pinned', 'archived'];
+const PATCHABLE = ['name', 'prefix', 'path', 'server_path', 'deploy_skill', 'server', 'pm2_services', 'domain', 'category', 'description', 'pinned', 'archived', 'ready_gate'];
 
-const FIELD_KIND = { pinned: 'flag', archived: 'flag', pm2_services: 'any', name: 'required' };
+const FIELD_KIND = { pinned: 'flag', archived: 'flag', pm2_services: 'any', name: 'required', ready_gate: 'choice' };
 function badField(k, v) {
   const kind = FIELD_KIND[k] || 'text';
   if (kind === 'any') return null;
   if (kind === 'required') return (typeof v === 'string' || typeof v === 'number') && String(v).trim() ? null : `${k}: required, a non-empty string`;
+  if (kind === 'choice') return v === null || v === 0 || v === 1 ? null : `${k}: expected null, 0 or 1`;
   if (kind === 'flag') {
     if (v === null || v === undefined) return `${k}: expected 0 or 1`;
     if (typeof v === 'boolean' || v === 0 || v === 1 || v === '0' || v === '1') return null;
@@ -80,7 +84,7 @@ function badField(k, v) {
 }
 const normField = (k, v) => {
   if (FIELD_KIND[k] === 'flag') return (v === true || v === 1 || v === '1') ? 1 : 0;
-  if (FIELD_KIND[k] === 'any') return v;
+  if (FIELD_KIND[k] === 'any' || FIELD_KIND[k] === 'choice') return v;
   return v === null ? null : String(v);
 };
 
@@ -162,6 +166,7 @@ export default async function projectRoutes(app) {
         SUM(CASE WHEN t.status='todo'      THEN 1 ELSE 0 END) AS c_todo,
         SUM(CASE WHEN t.status='prep'      THEN 1 ELSE 0 END) AS c_prep,
         SUM(CASE WHEN t.status='doing'     THEN 1 ELSE 0 END) AS c_doing,
+        SUM(CASE WHEN t.status='ready'     THEN 1 ELSE 0 END) AS c_ready,
         SUM(CASE WHEN t.status='deploy'    THEN 1 ELSE 0 END) AS c_deploy,
         SUM(CASE WHEN t.status='review'    THEN 1 ELSE 0 END) AS c_review,
         -- reports of checks in Review (label check): the section Claude review does not list them, nor counts them
@@ -174,7 +179,17 @@ export default async function projectRoutes(app) {
       WHERE p.archived = 0
       GROUP BY p.id
       ORDER BY p.position, p.name COLLATE NOCASE
-    `).all();
+    `).all().map((p) => ({ ...p, ship_gate: gateOf(p.ready_gate) }));
+  });
+
+  app.get('/api/shipped', async (req, reply) => {
+    const q = scalarQuery(req.query, ['project']);
+    if (q.error) return reply.code(400).send({ error: q.error });
+    const list = db.prepare(`SELECT DISTINCT p.id, p.slug, p.path FROM projects p JOIN tasks t ON t.project_id = p.id
+      WHERE p.archived = 0 AND t.status IN ('ready', 'review')`).all().filter((p) => q.values.project === undefined || p.slug === q.values.project);
+    const tasks = {};
+    for (const p of list) Object.assign(tasks, await shippedOf(p));
+    return { tasks };
   });
 
   app.get('/api/projects/archived', () => db.prepare(`
@@ -339,7 +354,7 @@ export default async function projectRoutes(app) {
   app.get('/api/projects/:slug', (req, reply) => {
     const p = resolveProject(req.params.slug);
     if (!p) return reply.code(404).send({ error: 'project not found' });
-    return { ...p, deploy_skill_path: resolveSkillPath(p.deploy_skill) };
+    return { ...p, deploy_skill_path: resolveSkillPath(p.deploy_skill), ship_gate: gateOf(p.ready_gate) };
   });
 
   const PROJECT_DOCS = ['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', 'README.md', 'ARCHITECTURE.md'];

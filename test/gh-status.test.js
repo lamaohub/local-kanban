@@ -46,7 +46,7 @@ test('the name map recognises BOTH locales and GitHub\'s own defaults', () => {
 });
 
 test('all 8 statuses have a name in both locales', () => {
-  const STATUSES = ['backlog', 'todo', 'prep', 'doing', 'deploy', 'review', 'done', 'cancelled'];
+  const STATUSES = ['backlog', 'todo', 'prep', 'doing', 'ready', 'deploy', 'review', 'done', 'cancelled'];
   for (const lang of ['ru', 'en']) {
     kvSet('ui.lang', lang);
     for (const s of STATUSES) {

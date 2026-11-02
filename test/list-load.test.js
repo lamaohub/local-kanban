@@ -28,6 +28,7 @@ function board() {
     const classes = new Set(['hidden']);
     return {
       textContent: '', title: '', onclick: null,
+      dataset: {},
       classList: { contains: (c) => classes.has(c), toggle: (c, on) => { if (on) classes.add(c); else classes.delete(c); } },
     };
   };

@@ -17,7 +17,7 @@ import { boardKb, readSettings } from './claude-settings.js';
 /** Permission modes the board offers for a background start; never one that skips the checks. */
 export const PERMISSION_MODES = ['auto', 'acceptEdits', 'manual', 'plan'];
 const KB_SAFE = ['ls', 'p', 'next', 'show', 'info', 'take', 'review', 'note', 'check', 'uncheck', 'add', 'link', 'unlink', 'block', 'unblock', 'pri', 'lbl', 'desc', 'svc', 'sync', 'retry'];
-export const MV_SAFE = ['backlog', 'todo', 'prep', 'doing', 'deploy', 'review'];
+export const MV_SAFE = ['backlog', 'todo', 'prep', 'doing', 'ready', 'deploy', 'review'];
 export const BOARD_ALLOWED = [...KB_SAFE.flatMap((c) => [`Bash(kb ${c})`, `Bash(kb ${c} *)`]), ...MV_SAFE.map((s) => `Bash(kb mv * ${s})`)];
 /** Keys a card may press in its session, beside typing text. */
 export const KEYS = new Set(['Enter', 'Escape', 'Up', 'Down', 'Left', 'Right', 'Tab', 'BTab', 'BSpace', 'C-c']);
@@ -438,7 +438,7 @@ export const RESTING_MAX_MS = 6 * 3600_000;
 let restingMax = RESTING_MAX_MS;
 /** For a test: how long a terminal with no task at work rests before it closes. */
 export function setRestingMax(ms) { restingMax = ms; }
-const AT_WORK = new Set(['prep', 'doing', 'deploy']);
+const AT_WORK = new Set(['prep', 'doing', 'ready', 'deploy']);
 export const LOOK_HOLD_MS = 5 * 60_000;
 let lookHold = LOOK_HOLD_MS;
 /** For a test: how long a look of the card keeps a terminal from resting. */
@@ -446,7 +446,7 @@ export function setLookHold(ms) { lookHold = ms; }
 const looked = new Map(); // sid → ms of the card's last look at its terminal
 /** The card looked at the terminal of a session (GET …/terminal). */
 export function noteLook(sid) { looked.set(sid, Date.now()); }
-const lookedLately = (sid) => Date.now() - (looked.get(sid) ?? -Infinity) < lookHold;
+export const lookedLately = (sid) => Date.now() - (looked.get(sid) ?? -Infinity) < lookHold;
 
 export const ASK_FRESH_MS = 3000;
 export const CHAT_COLS = 72;
@@ -506,9 +506,13 @@ export function closeFinishedTerminals() {
   sweeping = sweep.catch(() => {});
   return sweep;
 }
+const TASKLESS_KEY = 'phantom.taskless'; // in the base: a restart of the board must not make it a finished terminal
+const tasklessNow = () => { try { return new Set(JSON.parse(db.prepare('SELECT value FROM kv WHERE key = ?').get(TASKLESS_KEY)?.value || '[]')); } catch { return new Set(); } };
+export const markTaskless = (sid) => db.prepare('INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value').run(TASKLESS_KEY, JSON.stringify([...tasklessNow(), sid].slice(-50)));
 async function sweepOnce() {
   const ours = new Set(db.prepare('SELECT session_id FROM board_sessions').all().map((r) => r.session_id));
   if (!ours.size || !tmuxBin()) return [];
+  const taskless = tasklessNow();
   const ties = db.prepare('SELECT t.status FROM task_sessions s JOIN tasks t ON t.id = s.task_id WHERE s.session_id = ?');
   const seen = new Map(); // sid → {play, work}: the statuses of its tasks, read once a sweep
   const tasksOf = (sid) => {
@@ -529,7 +533,7 @@ async function sweepOnce() {
     // after /clear the same Claude goes on under a new id: what its tasks are counts too
     const other = now && now.sid !== p.sid ? tasksOf(now.sid) : { play: false, work: false };
     if (other.work) continue;
-    if (!tasksOf(p.sid).play && !other.play) { finished.push(p.sid); continue; }
+    if (!tasksOf(p.sid).play && !other.play && !taskless.has(p.sid)) { finished.push(p.sid); continue; }
     if (lookedLately(p.sid)) continue;
     if (p.dead) { if (p.deadAt && Date.now() - p.deadAt >= restingMax) finished.push(p.sid); continue; }
     if (now?.since && Date.now() - now.since >= restingMax) resting.push(p);

@@ -1,4 +1,5 @@
 
+import { wholeAnswer } from './term-delta.js';
 import { $, NOW, api, esc, ic, seg, state, tr } from './core.js';
 import { IMAGE_ACCEPT, TERM_ACTIVITY, TERM_KEYS, cardTermSession, endedWords, growTermInput, openTerminalOf, rolledBy, sayRefused, setTermHint, takeTermHint, wireTermImages } from './drawer.js';
 import { resumeOnBoard } from './sse.js';
@@ -202,13 +203,16 @@ async function look(c) {
   const q = new URLSearchParams();
   const n = cardHolds(c) ? null : askCols(fitCols(c), c.win);
   if (n) q.set('cols', n);
-  if (c.seen) q.set('seen', c.seen);
+  if (c.seen) { q.set('seen', c.seen); q.set('delta', '1'); }
   const n2 = ++c.req;
   let r;
   try { r = await api('GET', `/api/tasks/${seg(c.key)}/terminal?${q}`, undefined, { quiet: true }); } catch { return; }
   if (n2 !== c.req) return; // a newer look has answered already
   if (r.same) return;
+  r = wholeAnswer(r, c.base, c.seen);
+  if (!r) { c.seen = null; return; } // not against what this column has: the next look gets it whole
   c.seen = r.v || null;
+  c.base = r;
   const was = c.win;
   c.win = r.cols || null; // a known window, or null — the server could not say
   if (!r.dead) c.hold = holdUntil(c.hold, was, c.win);
@@ -404,8 +408,12 @@ function showView(c, run) {
   c.el.classList.toggle('as-chat', view === 'chat');
   if (view !== 'chat') { c.chat?.show(false); return; }
   if (!c.chat) c.chat = mountChat(chatBox, { key, session: run.session, full: { on: () => fullCol === c, set: (v) => setColumnFull(c, v) } });
-  else if (c.chatFor !== `${key} ${run.session}`) c.chat.setKey(key, run.session);
+  else if (c.chatFor !== `${key} ${run.session}`) {
+    if (c.chatSession !== run.session) c.chat.setKey(key, run.session);
+    else if (!c.chat.moveOn(key, run.session)) { c.chat.show(inSight(c)); return; } // a picture waits in the field: on the next look
+  }
   c.chatFor = `${key} ${run.session}`;
+  c.chatSession = run.session;
   c.chat.show(inSight(c));
 }
 

@@ -42,6 +42,27 @@ test('the person\'s next words end the turn before — the Claude app writes no 
   assert.match(box.turnHTML({ at: 't', user: 'x', ms: null, open: false, items: [step('ls'), { kind: 'stop' }] }), /class="chat-run"/);
 });
 
+test('a Markdown file in the list of files opens, another file stays a line', () => {
+  const box = page();
+  const html = box.turnHTML({ at: 't', user: 'go', ms: 2000, open: false, items: [
+    step('/a/report.md', { tool: 'Write', doc: 'one', diff: { add: 3, del: 0 } }), step('/a/report.md', { tool: 'Edit', doc: 'two', diff: { add: 1, del: 1 } }),
+    step('/a/code.js', { tool: 'Edit', diff: { add: 1, del: 0 } }), { kind: 'text', text: 'ok' }] });
+  assert.match(html, /<button[^>]*class="chat-file chat-file-doc" data-doc="two" data-name="report.md"/, 'the file opens by the step that changed it last');
+  assert.match(html, /<div class="chat-file" title="\/a\/code.js"/);
+  assert.equal((html.match(/data-doc=/g) || []).length, 1);
+});
+
+// words went behind the bar at that moment
+test('a turn that ended on a step keeps Claude\'s last words in sight', () => {
+  const box = page();
+  const html = box.turnHTML({ at: 't', user: 'go', ms: 2000, open: false, items: [step('one'), { kind: 'text', text: 'Sending helpers now.' }, step('two')] });
+  const bar = html.indexOf('chat-done');
+  assert.ok(bar >= 0, 'no bar');
+  assert.ok(html.indexOf('Sending helpers now.') > bar, 'the words are not under the bar');
+  const closed = html.replace(/<div class="chat-log-in[^]*?<\/div>/, '');
+  assert.match(closed, /Sending helpers now\./, 'the words went behind the bar');
+});
+
 test('steps opened while the turn went on stay open when it ends', () => {
   const box = page();
   const opened = new Set(['t|0', 'u|1']);

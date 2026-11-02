@@ -74,7 +74,7 @@ function node(world, html = '') {
 }
 
 function columnsModule({ view = 'terminal' } = {}) {
-  const world = { moved: [], store: new Map(), view };
+  const world = { moved: [], store: new Map(), view, chat: [] };
   const noop = () => {};
   const ctx = {
     world,
@@ -85,7 +85,8 @@ function columnsModule({ view = 'terminal' } = {}) {
     state: { slug: '#now' }, NOW: '#now', $: () => node(world),
     esc: (s) => String(s), tr: (s) => s, ic: () => '', seg: (s) => s, api: async () => ({}),
     getSetting: (k) => (k === 'chatView' ? world.view : undefined),
-    mountChat: () => ({ show: noop, setKey: noop, destroy: noop }),
+    mountChat: () => ({ show: noop, destroy: noop, setKey: (k) => world.chat.push(['setKey', k]),
+      moveOn: (k) => { world.chat.push(['moveOn', k]); return !world.heldByPicture; } }),
     TERM_ACTIVITY: {}, TERM_KEYS: [], cardTermSession: () => null, growTermInput: noop, openTerminalOf: noop, rolledBy: () => 0,
     sayRefused: noop, setTermHint: noop, takeTermHint: () => false, wireTermImages: noop, styledAlert: noop,
     styledConfirm: async () => true, refusalLine: () => '', refusalText: () => ({}), wireTermCopy: noop,
@@ -175,6 +176,28 @@ test('closed, a column shows the one task at work with «Show all tasks (N)»; t
   more('m').onclick();
   sync(box, [many, one, handed, run('n', [task('N-1', 'doing', true), task('N-2', 'todo')])]);
   assert.equal(el('n').classes.has('tasks-closed'), false, 'a new column ignores the open list of the others');
+});
+
+test('the session moving on to its next task carries the chat along; another session is another chat', () => {
+  const { world, sync, box } = columnsModule({ view: 'chat' });
+  const at = (k) => [run('s', [task('A-1', 'doing', k === 'A-1'), task('A-2', 'prep', k === 'A-2')], true)];
+  sync(box, at('A-1'));
+  sync(box, at('A-1'));
+  assert.deepEqual(world.chat, [], 'a repaint touched the chat');
+  sync(box, at('A-2'));
+  assert.deepEqual(world.chat, [['moveOn', 'A-2']], 'the same conversation was opened anew');
+  // a picture waits in the field: the chat says no, and it is asked again on the next look
+  world.chat.length = 0;
+  world.heldByPicture = true;
+  sync(box, at('A-1'));
+  sync(box, at('A-1'));
+  assert.deepEqual(world.chat, [['moveOn', 'A-1'], ['moveOn', 'A-1']]);
+  world.heldByPicture = false;
+  world.chat.length = 0;
+  sync(box, [{ ...at('A-1')[0], session: 's' }]);
+  assert.deepEqual(world.chat, [['moveOn', 'A-1']]);
+  sync(box, at('A-1'));
+  assert.equal(world.chat.length, 1, 'once there, the chat is left alone');
 });
 
 test('one setting shows the board\'s Claude as a chat or a terminal, at once; a Claude the board did not start is a chat', () => {

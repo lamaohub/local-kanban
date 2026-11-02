@@ -70,7 +70,7 @@ test('a right-click change and a comment sent while the server is down are queue
   assert.match(menu, /if \(res === 'saved'\) t\.labels = sent;/);
   const init = read('init.js');
   const send = init.slice(init.indexOf("$('c-send').onclick"), init.indexOf("$('c-input').addEventListener('keydown'"));
-  assert.match(send, /queueComment\(key, body\);/, 'a comment sent while the server is down is lost without a badge');
+  assert.match(send, /queueComment\(key, body, token\);/, 'a comment sent while the server is down is lost without a badge');
   assert.match(send, /if \(!e\?\.offline\) \{ sayRefused\(e, key\); return; \}/, 'a refused comment says nothing again, or says it in the English of the server');
 });
 

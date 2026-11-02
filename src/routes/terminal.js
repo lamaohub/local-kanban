@@ -5,6 +5,15 @@ import { typing } from '../chat-queue.js';
 import { COLS_MAX, COLS_MIN, KEYS, REPLY_MAX, noteLook, phantomMessage, phantomResize, phantomStop, questionOpen, taskTerminal, widthFor } from '../phantom.js';
 import { logError } from '../db.js';
 import { scalarQuery } from '../query-params.js';
+import { screenDelta } from '../../public/js/term-delta.js';
+
+const SCREENS_KEPT = 64;
+const screens = new Map();
+function keepScreen(v, term) {
+  screens.delete(v);
+  screens.set(v, { screen: term.screen, wraps: term.wraps });
+  if (screens.size > SCREENS_KEPT) screens.delete(screens.keys().next().value);
+}
 
 export default async function terminalRoutes(app) {
   const taskOr404 = (req, reply) => {
@@ -15,7 +24,7 @@ export default async function terminalRoutes(app) {
 
   app.get('/api/tasks/:id/terminal', async (req, reply) => {
     const t = taskOr404(req, reply); if (!t) return reply;
-    const q = scalarQuery(req.query, ['cols', 'seen']);
+    const q = scalarQuery(req.query, ['cols', 'seen', 'delta']);
     if (q.error) return reply.code(400).send({ error: q.error });
     const cols = q.values.cols === undefined ? null : Number(q.values.cols);
     if (cols !== null && !(Number.isInteger(cols) && cols >= COLS_MIN && cols <= COLS_MAX)) {
@@ -34,8 +43,13 @@ export default async function terminalRoutes(app) {
     term.question = !term.dead && questionOpen(term.screen);
     // a second, 9 answers out of 9 the same byte for byte. Now an answer the card already has is `same`
     const v = createHash('sha1').update(JSON.stringify(term)).digest('hex').slice(0, 20);
+    const base = q.values.delta === '1' ? screens.get(q.values.seen) : undefined;
+    keepScreen(v, term);
     if (q.values.seen === v) return { same: true, v };
-    return { ...term, v };
+    const delta = base && screenDelta(base.screen, term.screen, q.values.seen);
+    if (!delta) return { ...term, v };
+    const { screen, wraps, ...rest } = term;
+    return { ...rest, delta, v, ...(JSON.stringify(wraps) === JSON.stringify(base.wraps) ? {} : { wraps }) };
   });
 
   app.post('/api/tasks/:id/terminal', async (req, reply) => {

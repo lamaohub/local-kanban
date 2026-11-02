@@ -20,6 +20,7 @@ const ICONS = {
   warn: 'M8 2.6 14.4 13.4H1.6L8 2.6ZM8 6.6v3M8 11.4v.1',
   trash: 'M2.8 4.4h10.4M6.4 4.4V2.9h3.2v1.5M4.2 4.4l.6 8.7a1 1 0 0 0 1 .9h4.4a1 1 0 0 0 1-.9l.6-8.7M6.7 6.9v4.6M9.3 6.9v4.6',
   plus: 'M8 3.4v9.2M3.4 8h9.2',
+  branch: 'M5 5.3v5.4M11 5.3c0 2.7-6 1.7-6 4.3',
   sort: 'M4.8 2.8v10.4M4.8 13.2 2.4 10.8M4.8 13.2l2.4-2.4M11.2 13.2V2.8M11.2 2.8 8.8 5.2M11.2 2.8l2.4 2.4',
   download: 'M8 2.6v7.8M5 7.4 8 10.4l3-3M2.8 12.6v.8a1 1 0 0 0 1 1h8.4a1 1 0 0 0 1-1v-.8',
   duplicate: 'M3.4 10.6H2.6a1 1 0 0 1-1-1V2.6a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v.8M6.4 5.4h7a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1Z',
@@ -48,6 +49,8 @@ const ICONS = {
   wifi: 'M1.8 6.4a8.8 8.8 0 0 1 12.4 0M4 8.8a5.6 5.6 0 0 1 8 0M6.2 11.1a2.5 2.5 0 0 1 3.6 0',
 };
 const ICON_EXTRA = {
+  branch: '<circle cx="5" cy="3.9" r="1.4" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="5" cy="12.1" r="1.4" fill="none" stroke="currentColor" stroke-width="1.3"/>'
+    + '<circle cx="11" cy="3.9" r="1.4" fill="none" stroke="currentColor" stroke-width="1.3"/>',
   image: '<circle cx="10.4" cy="5.9" r="1.1" fill="none" stroke="currentColor" stroke-width="1.3"/>',
   more: '<circle cx="3.6" cy="8" r="1.1" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r="1.1" fill="currentColor" stroke="none"/>'
     + '<circle cx="12.4" cy="8" r="1.1" fill="currentColor" stroke="none"/>',
@@ -126,14 +129,21 @@ const I18N_RU = {
   'or send the link — it opens the board on any device of this network': 'или отправь ссылку — она откроет доску на любом устройстве этой сети',
   'Connected now': 'Подключено сейчас',
   'devices that opened the board in the last minute': 'устройства, открывавшие доску за последнюю минуту',
-  'Whoever on this network opens the address can do on the board all you can: move tasks, write to Claude in the chat and the terminal — that is, run commands on this computer. The address has no password: keep the board open only on a network of people you trust, and switch it off in a café or a hotel.': 'Кто в этой сети откроет адрес, может на доске всё то же, что и ты: двигать задачи, писать Claude в чат и терминал — то есть выполнять команды на этом компьютере. Пароля у адреса нет: держи доску открытой только в сети, где все свои, а в кафе или гостинице выключай.',
+  'Whoever has the link, the QR code or the key can do on the board all you can: move tasks, write to Claude in the chat and the terminal — that is, run commands on this computer. Give them only to people you trust. The connection itself is not encrypted: on a network of strangers, a café or a hotel, switch the board off.': 'Кто получил ссылку, QR-код или ключ, может на доске всё то же, что и ты: двигать задачи, писать Claude в чат и терминал — то есть выполнять команды на этом компьютере. Давай их только тем, кому доверяешь. Само соединение не шифруется: в сети с чужими людьми, в кафе или гостинице, выключай доску.',
+  'Key': 'Ключ',
+  'the board asks for it on a device that has no link: it can be typed by hand': 'доска спросит его на устройстве без ссылки: его можно ввести руками',
+  'New key': 'Новый ключ',
+  'the old QR code, link and key stop working, everyone connected is out at once': 'старые QR-код, ссылка и ключ перестанут работать, все подключённые сразу выйдут',
+  'Change the key': 'Сменить ключ',
+  'Change the key? Everyone connected is out at once, and the old QR code and link stop working.': 'Сменить ключ? Все подключённые сразу выйдут, а старые QR-код и ссылка перестанут работать.',
+  'a wrong key': 'неверный ключ',
   'Settings of the computer itself stay yours: connecting Claude Code, skills, project files, updating the board.': 'Настройки самого компьютера остаются за тобой: подключение Claude Code, скиллы, файлы проектов, обновление доски.',
   'This computer is not on a network now — there is no address to give. Join a Wi-Fi network and open the section again.': 'Компьютер сейчас не в сети — давать нечего. Подключись к Wi-Fi и открой раздел снова.',
   'Port %s is taken by another program — the board did not open to the network. Free it or set another one in KB_SHARE_PORT.': 'Порт %s занят другой программой — доска в сеть не открылась. Освободи его или задай другой в KB_SHARE_PORT.',
   'Could not open the board to the network — the details are in Settings → Errors.': 'Не удалось открыть доску в сеть — подробности в «Настройки → Ошибки».',
   'You are a guest here': 'Ты здесь гость',
   'this board runs on another computer; its owner opens and closes it to the network': 'доска работает на другом компьютере; открывает и закрывает её для сети владелец',
-  'The board stays on this computer: it has to be running, and switching off closes it to the network at once. After a restart of the board it is open again, at the same address.': 'Доска остаётся на этом компьютере: она должна работать, а выключатель сразу закрывает её для сети. После перезапуска доски вход снова открыт — по тому же адресу.',
+  'The board stays on this computer: it has to be running, and switching off closes it to the network at once. After a restart of the board it is open again, with the same link.': 'Доска остаётся на этом компьютере: она должна работать, а выключатель сразу закрывает её для сети. После перезапуска доски вход снова открыт — по той же ссылке.',
   'On a Mac the system may ask whether node may accept incoming connections — allow it, or nobody gets in.': 'На маке система может спросить, разрешить ли node входящие подключения, — разреши, иначе никто не войдёт.',
   'Other addresses of this computer': 'Другие адреса этого компьютера',
   'A window of its own': 'Своё окно',
@@ -326,6 +336,28 @@ const I18N_RU = {
   'Deploy skills': 'Деплой-скиллы',
   'Deploy skills of the projects': 'Деплой-скиллы проектов',
   'Deploying': 'Деплою',
+  'Ready to ship': 'Ждёт выкатки',
+  'A task waits for your word to ship': 'Задача ждёт команды на выкатку',
+  'on main': 'в main',
+  'only in a branch': 'только в ветке',
+  'no commits found': 'коммитов не нашла',
+  'The commits of this task are on main': 'Коммиты этой задачи в main',
+  'Some commits of this task are not on main yet': 'Часть коммитов этой задачи ещё не в main',
+  'The board found no commit of this task': 'Доска не нашла коммитов этой задачи',
+  'Showing what is not on main: show all': 'Показано только то, чего нет в main: показать всё',
+  'Show only what is not on main': 'Показать только то, чего нет в main',
+  'The switch is off: the column goes once it is empty': 'Переключатель выключен: колонка уйдёт, когда опустеет',
+  'Statuses': 'Статусы',
+  'Wait for the word before shipping': 'Ждать команды перед выкаткой',
+  'a finished task stops in Ready to ship until you say to ship it; Ready to ship means it is not on main yet, Review that people have it': 'готовая задача останавливается в «Ждёт выкатки», пока ты не скажешь выкатывать; «Ждёт выкатки» — в main ещё нет, «Проверяю» — уже у людей',
+  'A project can say otherwise in its settings.': 'Проект может решить иначе в своих настройках.',
+  'Waits in the column:': 'В колонке ждут:',
+  'The switch is off, and the tasks stay: the column goes once it is empty.': 'Переключатель выключен, задачи никуда не делись: колонка уйдёт, когда опустеет.',
+  'as in Settings': 'как в настройках',
+  'wait for the word': 'ждать команды',
+  'ship right away': 'выкатывать сразу',
+  'Before shipping': 'Перед выкаткой',
+  'whether a finished task waits in Ready to ship for your word': 'ждёт ли готовая задача твоей команды в «Ждёт выкатки»',
   'Description': 'Описание',
   'Description…': 'Описание…',
   'Details are in the README. Enjoy!': 'Подробности — в README. Хорошей работы!',
@@ -1317,6 +1349,7 @@ const I18N_RU = {
   'Answer Claude… (↵ sends, ⇧↵ — new line)': 'Ответить Claude… (↵ отправить, ⇧↵ — новая строка)',
   'Answer Claude…': 'Ответить Claude…',
   'Move {key} to Review, so I can check it later': 'Переведи {key} в «Проверяю», чтобы я потом проверил',
+  'Move {key} to Ready to ship and wait for my word': 'Переведи {key} в «Ждёт выкатки» и жди моей команды',
   'Drag to shrink or grow the terminal · double-click — the usual height': 'Потяни, чтобы сжать или растянуть терминал · двойной клик — обычная высота',
   'Terminal height': 'Высота терминала',
   'Claude of the board no longer runs on this task — nothing was sent.': 'Claude доски на этой задаче больше не работает — ничего не отправлено.',
@@ -1421,6 +1454,9 @@ const I18N_RU = {
   'Turned away': 'Не пустил',
   'the last devices the board did not let in, and why. A device that never reached this computer — a guest network of the router, a VPN, mobile data — is not here: then the phone is simply on another network': 'последние устройства, которые доска не пустила, и почему. Устройства, не дошедшего до этого компьютера, — гостевая сеть роутера, VPN, мобильный интернет — здесь нет: тогда телефон просто в другой сети',
   'nobody so far': 'пока никого',
+  'projects did not load': 'проекты не загрузились',
+  'no key: stopped at the page that asks for it': 'без ключа: остановился на странице ключа',
+  'its pass is of an old key: stopped at the page that asks for the key': 'пропуск от старого ключа: остановился на странице ключа',
   'not from the local network of this computer': 'не из локальной сети этого компьютера',
   'opened another address: %s — not the one of the QR code': 'открыл другой адрес: %s — не тот, что в QR-коде',
   'a request from another site, not from the page of the board': 'запрос с другого сайта, а не со страницы доски',
@@ -1618,6 +1654,10 @@ const I18N_RU = {
   'Compact the conversation? Claude retells it to itself in short and goes on from the retelling — what it read word for word is gone.': 'Сжать разговор? Claude перескажет его себе коротко и продолжит с пересказа — дословно прочитанное уйдёт.',
   'Compact': 'Сжать',
   'Open the picture': 'Открыть картинку',
+  'Read the file': 'Прочитать файл',
+  'The file could not be opened': 'Файл не открылся',
+  'the file is no longer on this computer': 'файла больше нет на этом компьютере',
+  'the file is too large to show here': 'файл слишком большой, здесь его не показать',
   'The picture could not be opened': 'Картинку не открыть — её нет на диске или это не картинка',
   'Message Claude…': 'Написать Claude…',
   'Attach a picture': 'Прикрепить картинку',
@@ -1672,6 +1712,7 @@ const I18N_RU = {
   'The check was started by hand:': 'Проверку запустили вручную:',
   'the project was archived': 'проект ушёл в архив',
   'Check in': 'Проверка через',
+  'Next batch in': 'Следующая пачка через',
   'Waits for Claude to take up tasks of the project': 'Ждёт, пока Claude возьмётся за задачи проекта',
   'Claude is at work:': 'Claude работает:',
   'Claude has finished — the pause begins': 'Claude закончил — начинается пауза',
@@ -1696,11 +1737,57 @@ const I18N_RU = {
   'finishes, wait': 'закончит работу — подождать',
   'min and check Review': 'мин и проверить «Проверяю»',
   'New automation': 'Новая автоматизация',
-  'finishes its work,': 'закончит работу,',
   'wait': 'подождать',
   'minutes': 'минуты',
   'and start a check of the tasks in Review': 'и запустить проверку задач в «Проверяю»',
-  'Runs once: when every task Claude took in the project has reached Review and nothing waits for you. Like ▶ on the Review column — Claude inside the board, with the permissions and effort of Settings → Claude Code.': 'Сработает один раз: когда все задачи проекта, взятые Claude, дойдут до «Проверяю» и ничего не будет ждать тебя. Как ▶ на колонке «Проверяю» — Claude внутри доски, с правами и усилием из «Настройки → Claude Code».',
+  'Starts when every task Claude took in the project has reached Review and nothing waits for you. Like ▶ on the Review column — Claude inside the board, with the permissions and effort of Settings → Claude Code.': 'Запускается, когда все задачи, которые Claude взял в проекте, дошли до «Проверяю» и ничто не ждёт тебя. Как ▶ на колонке «Проверяю» — Claude внутри доски, с правами и усилием из «Настройки → Claude Code».',
+  'When the project finishes its work,': 'Когда проект закончит работу,',
+  'Repeat': 'Повторять',
+  'By itself': 'Сама',
+  'Waits: the work in the project was cut off —': 'Ждёт: работа в проекте оборвалась —',
+  'Watch the size of CLAUDE.md': 'Следить за размером CLAUDE.md',
+  'a file past the norm of Health gets a task in the backlog of its project, once a day; you start it yourself': 'файл сверх нормы «Здоровья» получает задачу в бэклоге своего проекта, раз в сутки; запускаешь её сам',
+  'While you were away': 'Пока тебя не было',
+  'Handed in': 'Сдано',
+  'Accepted': 'Принято',
+  'Returned': 'Вернулось',
+  'Stuck': 'Застряло',
+  'and more:': 'и ещё:',
+  'A check once Claude has finished': 'Проверка, когда Claude закончит',
+  'The next batch of To do': 'Следующая пачка из «Сделать»',
+  'A check of Review on a schedule': 'Проверка «Проверяю» по расписанию',
+  'The grooming of the backlog on a schedule': 'Разбор бэклога по расписанию',
+  'At most 5 tasks by priority, without ask and noclaude; it does not start while over 80% of the 5-hour or the weekly limit is used, nor over a question of Claude.': 'До 5 задач по приоритету, без ask и noclaude; не запускается, пока израсходовано больше 80% 5-часового или недельного лимита и пока Claude ждёт ответа.',
+  'If the computer sleeps at that time the run is skipped until the next one. It does not start over work going on in the project.': 'Если компьютер в это время спит, запуск пропускается до следующего раза. Поверх идущей в проекте работы не стартует.',
+  'Claude prepares the backlog and moves no tasks. If the computer sleeps at that time the run is skipped until the next one.': 'Claude готовит бэклог и задачи не двигает. Если компьютер в это время спит, запуск пропускается до следующего раза.',
+  'and start the next batch of To do': 'и запустить следующую пачку из «Сделать»',
+  'min and start the next batch of To do': 'мин и запустить следующую пачку из «Сделать»',
+  'a check of Review': 'проверка «Проверяю»',
+  'the grooming of the backlog': 'разбор бэклога',
+  'Next run:': 'Следующий запуск:',
+  'Waits: over 80% of the subscription limit is used': 'Ждёт: израсходовано больше 80% лимита подписки',
+  'Nothing to take in To do': 'В «Сделать» нечего брать',
+  'At': 'В',
+  'Every day': 'Каждый день',
+  'Monday': 'Понедельник',
+  'Tuesday': 'Вторник',
+  'Wednesday': 'Среда',
+  'Thursday': 'Четверг',
+  'Friday': 'Пятница',
+  'Saturday': 'Суббота',
+  'Sunday': 'Воскресенье',
+  'Fix what the check returns': 'Исправлять вернувшееся',
+  'the board starts a returned task in a new session and the check comes after it, at most 2 rounds; then the task waits for you': 'доска запускает возвращённую задачу новой сессией, а за ней снова проверку, не больше 2 кругов; дальше задача ждёт тебя',
+  'Each task that does not pass goes back to work by itself: write what is wrong with kb note <KEY>, then kb mv <KEY> todo.': 'Задача, которая не прошла, сама вернётся в работу: напиши, что не так, через kb note <KEY>, затем kb mv <KEY> todo.',
+  'fixing what comes back': 'исправляя вернувшееся',
+  'Go on with interrupted work': 'Продолжать прерванное',
+  'once the limit has reset or the Mac is up: all sessions, at most 3 times in a row, one a minute; never one that waits for you': 'когда сбросится лимит или поднимется мак: все сессии, не больше 3 раз подряд, по одной в минуту; никогда та, что ждёт тебя',
+  'Could not change the automation': 'Не удалось изменить автоматизацию',
+  'after a check the rule waits for the next batch, until you take it off': 'после проверки правило снова ждёт следующую пачку, пока не снимешь',
+  'min and check Review, every time': 'мин и проверить «Проверяю», каждый раз',
+  'The checks of the day are used up:': 'Проверки на сутки закончились:',
+  'Waits for a place: enough checks run on the board now': 'Ждёт места: на доске уже идёт достаточно проверок',
+  'Checks in the last day:': 'Проверок за сутки:',
   'Take off': 'Снять',
   'Remove from the list': 'Убрать из списка',
   'Automations are switched off': 'Автоматизации выключены',
@@ -1758,11 +1845,17 @@ export const ALL_STATUSES = [
   ['todo', tr('To do')],
   ['prep', tr('Prep')],
   ['doing', tr('Doing')],
+  ['ready', tr('Ready to ship')],
   ['deploy', tr('Deploying')],
   ['review', tr('Review')],
   ['done', tr('Done')],
   ['cancelled', tr('Cancelled')],
 ];
+export function readyInUse(slug) {
+  const on = (p) => Boolean(p.ship_gate || p.c_ready);
+  return slug === ALL ? state.projects.some(on) : on(state.projects.find((p) => p.slug === slug) || {});
+}
+export const statusesFor = (slug, current) => ALL_STATUSES.filter(([v]) => v !== 'ready' || v === current || readyInUse(slug));
 export const PRI_ICON = { 1: ['↓', 'p1', tr('low')], 2: ['＝', 'p2', tr('medium')], 3: ['↑', 'p3', tr('high')] };
 export const PRI_LEVELS = [[3, tr('↑ High')], [2, tr('＝ Medium')], [1, tr('↓ Low')], [0, tr('No priority')]];
 export let LABEL_COLORS = {};
@@ -1799,7 +1892,7 @@ export const SIDEBAR_SECTIONS = [[HORIZON, 'Horizon'], [CALENDAR, 'Calendar']]
 
 export const state = {
   projects: [], slug: DASH,
-  tasks: [], drawerKey: null, openingKey: null, search: '',
+  tasks: [], drawerKey: null, openingKey: null, search: '', shipped: {},
   searchApplied: '',
   searchHits: null,
   projSettings: null,
@@ -1896,6 +1989,7 @@ export const apiBlob = async (path, blob, opts = {}) => {
   const res = await fetch(path, { method: 'POST', headers: { 'Content-Type': blob.type }, body: blob })
     .catch((e) => { if (!opts.quiet) reportError(`POST ${path}`, `network: ${e.message}`); throw apiError(e.message, { offline: true }); });
   const data = await answerOf(res, `POST ${path}`, opts);
+  if (doorClosed(res, data)) return new Promise(() => {});
   if (!res.ok) {
     if (!opts.quiet) reportError(`POST ${path}`, `HTTP ${res.status}: ${data.error || ''}`.trim());
     throw apiError(data.error || `HTTP ${res.status}`, { status: res.status, body: data });
@@ -1906,6 +2000,10 @@ export const apiBlob = async (path, blob, opts = {}) => {
 export function apiError(message, extra) {
   return Object.assign(new Error(String(message)), extra);
 }
+
+let onDoorClosed = () => { location.reload(); return true; };
+export function setDoorClosed(f) { onDoorClosed = f; }
+const doorClosed = (res, data) => res.status === 401 && data.reason === 'share' && onDoorClosed();
 
 async function answerOf(res, what, opts) {
   let text = '';
@@ -1973,6 +2071,7 @@ export const api = async (method, path, body, opts = {}) => {
   });
   if (res.status === 204) return null;
   const data = await answerOf(res, `${method} ${path}`, opts);
+  if (doorClosed(res, data)) return new Promise(() => {});
   if (!res.ok) {
     if (!opts.quiet && path !== '/api/errors') reportError(`${method} ${path}`, `HTTP ${res.status}: ${data.error || ''}`.trim());
     throw apiError(data.error || res.status, { status: res.status, body: data });

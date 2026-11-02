@@ -7,12 +7,12 @@ import { noclaudeFilter } from './task-shape.js';
 import { waitsOwnWork } from './own-wait.js';
 
 /** How far along a task is by its stage alone — used when it has no checklist to say it better. */
-export const STAGE_PERCENT = { todo: 0, prep: 25, doing: 50, deploy: 75, review: 100, done: 100 };
-const SUBMITTED = new Set(['review', 'done']);
+export const STAGE_PERCENT = { todo: 0, prep: 25, doing: 50, ready: 65, deploy: 75, review: 100, done: 100 };
+const SUBMITTED = new Set(['ready', 'review', 'done']);
 const WORKING = new Set(['prep', 'doing', 'deploy']);
 const STALE_H = 2; // no movement for two hours: the card's "stuck" badge and the dashboard say the same
 // A task's place in its run, top to bottom: what is handed in, what Claude is on, what waits its turn.
-const RANK = { review: 0, done: 0, focus: 1, deploy: 2, doing: 2, prep: 3, todo: 4 };
+const RANK = { review: 0, done: 0, ready: 0, focus: 1, deploy: 2, doing: 2, prep: 3, todo: 4 };
 
 /** A task's progress in percent: its checklist when it has one, its stage otherwise. */
 export function taskPercent(t) {
@@ -43,7 +43,7 @@ const ROWS = `
   FROM tasks t JOIN projects p ON p.id = t.project_id AND p.archived = 0
   LEFT JOIN latest l ON l.task_id = t.id
   WHERE t.status IN ('prep','doing','deploy')
-     OR (t.status IN ('todo','review','done') AND ${noclaudeFilter('t.')}
+     OR (t.status IN ('todo','ready','review','done') AND ${noclaudeFilter('t.')}
        AND (l.session_id IN (SELECT session_id FROM held) OR l.session_id IN (SELECT value FROM json_each(?))))
   ORDER BY t.id`;
 
@@ -78,10 +78,10 @@ const WAITS_ON_PERSON = `
     FROM task_sessions) l
   JOIN tasks t ON t.id = l.task_id JOIN projects p ON p.id = t.project_id AND p.archived = 0
   WHERE l.rn = 1 AND ${noclaudeFilter('t.')} AND l.session_id IN (SELECT value FROM json_each(?))
-    AND (t.status = 'review' OR (t.status = 'todo'
+    AND (t.status IN ('ready', 'review') OR (t.status = 'todo'
       AND (SELECT e.session_id FROM task_events e WHERE e.task_id = t.id ORDER BY e.id DESC LIMIT 1) = l.session_id))`;
 /** The board's sessions that are "now" with none of their tasks in work: Map sid → 'busy' | 'background' (at work) |
-    'idle' | 'waiting' (at its prompt, a task handed in to Review or put back to To do). */
+    'idle' | 'waiting' (at its prompt, a task handed in to Ready to ship or Review, or put back to To do). */
 export async function activeBoardSessions(isAlive, registryOf = () => readRegistry(isAlive)) {
   // the board's terminals alive by the last look of the watch (every 3 s) — not every session it ever started
   const ours = [...currentBoardLive()];

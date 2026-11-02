@@ -8,6 +8,62 @@ version it goes out as and opens an empty one again. Released sections are histo
 
 ## [Unreleased]
 
+## [2.0.0-beta.2]
+
+### Added
+
+- A status «Ready to ship» between Doing and Deploying, off by default: with the switch in Settings → Statuses a finished task waits for your word, and the board itself refuses Deploying past it, and Doing straight to Review. A project can say otherwise in its settings.
+- A mark on the cards of Ready to ship and Review: on main, only in a branch or no commits found, and a filter of Review for what is not on main.
+
+### Fixed
+
+- The chat shows helpers and workflows at work: those started without the background flag, those brought back after a stop, and those that woke after finishing.
+- The terminal sends what changed on the screen instead of the whole screen every second: far less traffic on a phone.
+- The symbol background holds no video memory while it is off, and resizing the window no longer piles up canvases.
+- Scrolling a column with many link lines no longer rewrites all of them on every frame.
+- A comment whose answer got lost on the way is no longer written twice when the page sends it again.
+- Automations: a restart of the board no longer loses the words that tell an interrupted Claude to go on, and a limit line left on the screen past its moment does not hold them.
+- Automations: after a refused start, «Next batch in» counts down to the next try instead of standing at 0:00 for five minutes.
+- `kb show A B` prints every card, a line of `---` between them; it used to print the first one and drop the rest with code 0.
+- **Automations.** The fix of a returned task no longer waits hours for the terminals at their prompts; the grooming's Claude is
+  not closed while it asks you; one held task does not stop a batch; a blocked or `ask` task is not resumed.
+- **Words kept.** A last word in a checklist item is not overwritten by a late resend, a failed save of the description no longer
+  claims someone else changed it, and words typed into a question that went away come back by themselves.
+- **Phones and failures.** A phone on its side keeps the back gesture on the page, a phone says when the projects did not load,
+  a stream that never opened is announced, and a device stopped at the key page is listed in Turned away.
+- **Sessions.** Only a move of the status takes a task over: a note or a field edited from another session does not.
+
+### Changed
+
+- **Automations watch the size of CLAUDE.md.** A switch opens a task in a project's backlog when its CLAUDE.md is past the
+  norm of Health; you start it yourself, and a task you cancelled does not come back.
+- **A summary when you come back.** With automations on, the first look after eight hours of silence shows what was handed
+  in, accepted, returned or got stuck, each line opening its card.
+- **Automations take the queue and a schedule.** Once a marked project is finished its next batch of To do starts, at most 5
+  tasks and not over 80% of the limit; a check of Review or the grooming of the backlog can run at a set time. A run the
+  sleeping computer missed is skipped.
+- **A repeating automation can fix what its check returns.** A returned task goes back to work in a new session and the
+  check comes after it, at most 2 rounds; then the task waits for you.
+- **The board can go on with interrupted work by itself.** A switch in Automations: once the limit has reset or the Mac is
+  up, a session cut off mid-work goes on, one a minute, at most 3 times in a row, and never one that waits for you.
+- **An automation can repeat, and one form covers several projects.** A repeating rule stays after its check and waits for
+  the next batch, at most 10 checks a day; tick any projects, or all of them, and each gets its rule. At most two checks
+  run on the board at once, the others wait for a place.
+- **The board over Wi-Fi opens by a key again.** The QR code and the link carry it, and a browser without them is asked for
+  it, so a home-screen app or a private tab is never locked out: the 16 characters can be typed by hand, and the device
+  remembers. Settings → Wi-Fi shows the key and changes it. Everyone connected by the plain address needs the new link.
+- **Markdown files open in a window.** A `.md` file Claude wrote or edited opens from the list of changed files in the
+  chat, rendered and readable at the width of a page, on a phone too.
+- **A card opens with its chat closed.** It used to open on the chat and scroll to its end, taking the title and the
+  description out of sight; now the chat opens from its tab, from ▶ or from «Open in the card».
+
+### Fixed
+
+- **Words typed in a chat survive Claude moving to its next task.** In a column of Terminals the field emptied and the
+  chat blinked «Loading…» whenever the session took the next task of its batch; the words now stay and the chat stands still.
+- **Claude's last words stay in sight when its turn ends on a step.** A turn that ended by sending helpers or a command to
+  the background folded all its text behind the «Worked for» bar.
+
 ## [2.0.0-beta.1]
 
 **2.0 beta.** The board stopped being a list of tasks next to Claude and became the place you work with it: Claude starts

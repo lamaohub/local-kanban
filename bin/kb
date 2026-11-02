@@ -14,7 +14,7 @@ const PRI_BY_NAME = { none: 0, low: 1, med: 2, medium: 2, high: 3, p0: 0, p1: 1,
 const ST_ALIAS = {
   b: 'backlog', backlog: 'backlog', t: 'todo', todo: 'todo',
   pp: 'prep', prep: 'prep', d: 'doing', doing: 'doing',
-  dp: 'deploy', deploy: 'deploy', r: 'review', review: 'review', dn: 'done', done: 'done',
+  rd: 'ready', ready: 'ready', dp: 'deploy', deploy: 'deploy', r: 'review', review: 'review', dn: 'done', done: 'done',
   c: 'cancelled', cancelled: 'cancelled', cancel: 'cancelled',
 };
 
@@ -409,7 +409,7 @@ const commands = {
     const ps = await api('GET', '/api/projects', null, LIST);
     if (!ps.length) return console.log('no projects');
     for (const p of ps) {
-      console.log(`${p.slug} (${p.prefix}) b${p.c_backlog || 0} t${p.c_todo || 0} pp${p.c_prep || 0} d${p.c_doing || 0} dp${p.c_deploy || 0} r${p.c_review || 0} ✓${p.c_done || 0}${p.c_blocked ? ` !${p.c_blocked}` : ''}`);
+      console.log(`${p.slug} (${p.prefix}) b${p.c_backlog || 0} t${p.c_todo || 0} pp${p.c_prep || 0} d${p.c_doing || 0}${p.c_ready ? ` rd${p.c_ready}` : ''} dp${p.c_deploy || 0} r${p.c_review || 0} ✓${p.c_done || 0}${p.c_blocked ? ` !${p.c_blocked}` : ''}`);
     }
   },
 
@@ -471,21 +471,30 @@ const commands = {
     console.log(`${t.key} review 📝`);
   },
 
+  // A batch is read in one go, so every key is printed, cards apart by a line of ---. A wrong key stops the
+  // command before the first request; a task the board does not know stops it there, and says at which key.
   async show() {
-    const [id] = args;
-    if (!id) die('kb show <key>');
-    const t = await api('GET', `/api/tasks/${key(id)}`, null, TASK);
-    console.log(`${t.key} ${t.project} ${t.status}${t.pinned ? ' ' + PIN : ''}${t.blocked ? ` blocked: ${t.blocked_reason || ''}` : ''}${PRI[t.priority] ? ' ' + PRI[t.priority] : ''}${t.labels.length ? ' [' + t.labels.join(',') + ']' : ''}`);
-    console.log(t.title);
-    if (t.description) console.log(t.description);
-    printChecklist(t);
-    printLinks(t);
-    printIssue(t);
-    printMoves(t);
-    printSessions(t);
-    printUsage(t);
-    printAttachments(t);
-    printComments(await api('GET', `/api/tasks/${t.id}/comments`, null, LIST), 5);
+    if (!args.length) die('kb show <key> [<key> …]');
+    const ids = args.map(key);
+    let at = 0;
+    process.on('exit', (code) => {
+      if (code && ids.length > 1) process.stderr.write(`kb: stopped at ${args[at]}: ${at} of ${ids.length} printed\n`);
+    });
+    for (; at < ids.length; at++) {
+      if (at) console.log('---');
+      const t = await api('GET', `/api/tasks/${ids[at]}`, null, TASK);
+      console.log(`${t.key} ${t.project} ${t.status}${t.pinned ? ' ' + PIN : ''}${t.blocked ? ` blocked: ${t.blocked_reason || ''}` : ''}${PRI[t.priority] ? ' ' + PRI[t.priority] : ''}${t.labels.length ? ' [' + t.labels.join(',') + ']' : ''}`);
+      console.log(t.title);
+      if (t.description) console.log(t.description);
+      printChecklist(t);
+      printLinks(t);
+      printIssue(t);
+      printMoves(t);
+      printSessions(t);
+      printUsage(t);
+      printAttachments(t);
+      printComments(await api('GET', `/api/tasks/${t.id}/comments`, null, LIST), 5);
+    }
   },
 
   async add() {
@@ -506,7 +515,7 @@ const commands = {
     }
     if (si >= 0) {
       body.status = ST_ALIAS[args[si + 1]];
-      if (!body.status) die('kb: status backlog|todo|prep|doing|deploy|review|done');
+      if (!body.status) die('kb: status backlog|todo|prep|doing|ready|deploy|review|done');
     }
     const t = await api('POST', '/api/tasks', body, TASK);
     console.log(`${t.key} ${t.status} ${t.project}`);
@@ -515,7 +524,7 @@ const commands = {
   async mv() {
     const [id, st] = args;
     const status = ST_ALIAS[st];
-    if (!id || !status) die('kb mv <key> backlog|todo|prep|doing|deploy|review');
+    if (!id || !status) die('kb mv <key> backlog|todo|prep|doing|ready|deploy|review');
     const k = key(id);
     // started by the board runs only after asking (src/phantom.js), while its `kb mv` goes without asking. Before
     // this, `kb mv <key> done` sent the very request of `kb done` and skipped the question.
@@ -650,6 +659,7 @@ const commands = {
     if (p.domain) out.push(`domain: ${p.domain}`);
     // CLAUDE.md", "deployed by skill X", DNS facts) — info printed everything but it
     if (p.description) out.push(`description: ${p.description}`);
+    if (p.ship_gate) out.push('ships on the word: after the commit kb mv <key> ready and wait; deploy only once the person says so');
     // page; without this line Claude went looking by itself and sometimes missed. A missing
     // CLAUDE.md is said out loud — it is a signal (the task starts without architecture notes).
     if (p.path) {

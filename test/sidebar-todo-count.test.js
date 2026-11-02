@@ -30,7 +30,7 @@ after(async () => {
   for (const d of [tmp, root]) if (d) rmSync(d, { recursive: true, force: true });
 });
 
-const STATUSES = ['backlog', 'todo', 'prep', 'doing', 'deploy', 'review', 'done', 'cancelled'];
+const STATUSES = ['backlog', 'todo', 'prep', 'doing', 'ready', 'deploy', 'review', 'done', 'cancelled'];
 let no = 0;
 const addTask = (projectId, status, extra = {}) => db.prepare(
   'INSERT INTO tasks (project_id, task_no, title, status, labels, blocked) VALUES (?, ?, ?, ?, ?, ?)',

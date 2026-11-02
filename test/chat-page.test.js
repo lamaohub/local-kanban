@@ -410,6 +410,78 @@ test('words refused after the person went to another task come back to their own
   c.destroy();
 });
 
+test('the session moving on to its next task keeps what is typed, and the chat does not read «Loading…»', async () => {
+  const own = { ...answer, send: true, state: 'idle' };
+  const asked = [];
+  const mountChat = chatModule(async (method, path) => { asked.push(path); return structuredClone(own); });
+  const p = page();
+  const c = mountChat(p.box, { key: 'CH-8', session: SID });
+  await c.flight;
+  const field = p.form.kids.textarea;
+  field.value = 'half a thought';
+  field.oninput();
+  const drawn = p.log.innerHTML;
+  assert.equal(c.moveOn('CH-9'), true);
+  assert.equal(field.value, 'half a thought', 'the typed words went with the task left behind');
+  assert.equal(p.log.innerHTML, drawn, 'the conversation left the screen while it is the same one');
+  assert.equal(p.form.classList.contains('hidden'), false, 'the field was taken away under the person');
+  await c.flight;
+  assert.equal(c.key, 'CH-9');
+  assert.match(asked.at(-1), /CH-9/, 'the chat goes on asking about the old task');
+  assert.equal(field.value, 'half a thought');
+  c.destroy();
+});
+
+test('moving on takes this field\'s words, not those typed in another chat of the task, and goes back to the run\'s session', async () => {
+  const own = { ...answer, send: true, state: 'idle' };
+  const asked = [];
+  const mountChat = chatModule(async (method, path) => { asked.push(path); return structuredClone(own); });
+  const card = page();
+  const column = page();
+  const inCard = mountChat(card.box, { key: 'CH-20' });
+  await inCard.flight;
+  const c = mountChat(column.box, { key: 'CH-20', session: 'picked-older-one' });
+  await c.flight;
+  card.form.kids.textarea.value = 'typed in the card';
+  card.form.kids.textarea.oninput();
+  column.form.kids.textarea.value = '';
+  c.moveOn('CH-21', SID);
+  await c.flight;
+  assert.equal(column.form.kids.textarea.value, '', 'the words of the card came into the column');
+  inCard.setKey('CH-30');
+  inCard.setKey('CH-20');
+  assert.equal(card.form.kids.textarea.value, 'typed in the card', 'the card lost its words');
+  assert.ok(asked.some((p) => p.includes('CH-21') && p.includes(`session=${SID}`)), 'the chat went on asking the new task of a session of the old one');
+  c.destroy();
+  inCard.destroy();
+});
+
+test('words refused after the chat moved on come back to its field, and their bubble goes', async () => {
+  const own = { ...answer, send: true, state: 'idle' };
+  let refuse;
+  const api = async (method) => {
+    if (method === 'POST') return new Promise((_, no) => { refuse = no; });
+    return structuredClone(own);
+  };
+  const mountChat = chatModule(api, { refusalLine: (head, e) => `${head}: ${e.message}` });
+  const p = page();
+  const c = mountChat(p.box, { key: 'CH-40', session: SID });
+  await c.flight;
+  const field = p.form.kids.textarea;
+  field.value = 'one more thing';
+  const going = p.form.kids['.chat-send'].onclick();
+  await new Promise((r) => setImmediate(r));
+  c.moveOn('CH-41', SID);
+  await c.flight;
+  refuse(Object.assign(new Error('the words did not show'), { status: 409 }));
+  await going;
+  await c.flight;
+  assert.equal(field.value, 'one more thing', 'the refused words are lost');
+  assert.match(p.note.textContent, /Not sent/);
+  assert.doesNotMatch(p.log.innerHTML, /sending…/, 'the bubble says they go');
+  c.destroy();
+});
+
 // The same acceptance: words refused while the person typed the next ones were dropped for the new ones
 test('words refused while the next ones were typed come back before them, not instead of them', async () => {
   const own = { ...answer, send: true, state: 'idle' };
@@ -622,5 +694,85 @@ test('words typed into the question of a task left behind stay that task\'s, not
   assert.equal(p.form.kids.textarea.value, '', 'the words of CH-1\'s question are in the field of CH-2');
   c.setKey('CH-1');
   assert.equal(p.form.kids.textarea.value, 'for the Claude of CH-1', 'the words are lost');
+  c.destroy();
+});
+
+// set green: only the form read off the screen was held by a test.
+test('CK-853: words typed into the hook\'s form that goes come back to the field, with a note', async () => {
+  let req = { id: 'ask-1', key: 'CH-1', input: { questions: [] } };
+  const p = page();
+  const ask = p.box.kids['.chat-ask'];
+  let drawn = false; // the form's fields are gone with its HTML, as on the page
+  ask.append = () => { drawn = true; };
+  const html = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(ask), 'innerHTML');
+  Object.defineProperty(ask, 'innerHTML', { get() { return html.get.call(this); }, set(h) { html.set.call(this, h); if (h === '') drawn = false; } });
+  const other = Object.assign(new El('ask-other'), { value: '' });
+  ask.querySelectorAll = (sel) => (drawn && sel === '.ask-other, .ask-qnote, .ask-reason' ? [other] : []);
+  const c = chatModule(async () => ({ ...answer, send: true, state: 'idle' }), { requestAnimationFrame: () => 0, questionAsk: () => req, askBlock: () => new El('ask'), isSending: () => false })(p.box, { key: 'CH-1' });
+  await c.flight;
+  const field = p.form.kids.textarea;
+  other.value = 'my own answer';
+  field.value = 'half a message';
+  req = null; // the request left: answered in Claude's own window, or Claude stopped waiting
+  c.paintAsk(c.data);
+  assert.equal(field.value, 'half a message\nmy own answer', 'the words went with the form');
+  assert.equal(other.value, '', 'taken once: a repaint would bring them twice');
+  c.destroy();
+});
+
+test('CK-853: an option picked from a form of the screen sends what was typed nowhere: it does not come back', async () => {
+  const choice = { tabs: [], text: 'Pick one?', multi: false, options: [{ n: 1, label: 'A', note: '', cursor: true }, { n: 2, label: 'Type something.', note: '', cursor: false, other: true }] };
+  let data = { ...answer, send: true, state: 'question', question: 'Pick one?\n❯ 1. A\nEsc to cancel', choice };
+  const p = page();
+  const ask = p.box.kids['.chat-ask'];
+  let other = null;
+  const pick = Object.assign(new El('ask-pick'), { dataset: { n: '1' } });
+  const fields = () => (ask.html.includes('ask-other') ? [other ||= Object.assign(new El('ask-other'), { value: '' })] : []);
+  ask.querySelectorAll = (sel) => (sel === '.ask-other, .ask-qnote, .ask-reason' ? fields() : sel === '.ask-pick' ? [pick] : []);
+  ask.querySelector = (sel) => (sel === '.ask-other' ? fields()[0] || null : null);
+  const c = chatModule(async (m) => (m === 'POST' ? {} : structuredClone(data)), { requestAnimationFrame: () => 0 })(p.box, { key: 'CH-1' });
+  await c.flight;
+  fields()[0].value = 'changed my mind';
+  await pick.onclick();
+  for (const v of ['v2', 'v3']) {
+    data = { ...answer, send: true, state: 'idle', v };
+    c.stale = true; c.show(true);
+    await c.flight;
+  }
+  assert.equal(p.form.kids.textarea.value, '', 'words the person dropped by picking an option came back as «answered elsewhere»');
+  c.destroy();
+});
+
+test('CK-926: a picture in the field holds the chat on its task', () => {
+  const chat = readFileSync(new URL('../public/js/chat.js', import.meta.url), 'utf8');
+  assert.match(chat, /c\.moveOn = \(k, session\) => \{\s*if \(k === c\.key\) return true;\s*if \(images\(\)\.length\) return false;/, 'the chat left the task its picture belongs to');
+});
+
+test('CK-889: the time of the step Claude is on ticks', () => {
+  const chat = readFileSync(new URL('../public/js/chat.js', import.meta.url), 'utf8');
+  assert.match(chat, /if \(!runClock && log\.querySelector\('\.chat-run-time'\)\) runClock = setInterval\(tickRuns, 1000\);/, 'the time of the step stands still');
+});
+
+// waited for a second look that never came, out of sight.
+test('CK-853: words of a form of the screen come back by themselves when no next look would come', async () => {
+  const choice = { tabs: [], text: 'Pick one?', multi: false, options: [{ n: 1, label: 'A', note: '', cursor: true }, { n: 2, label: 'Type something.', note: '', cursor: false, other: true }] };
+  let data = { ...answer, send: true, state: 'question', question: 'Pick one?\n❯ 1. A\nEsc to cancel', choice };
+  const p = page();
+  const ask = p.box.kids['.chat-ask'];
+  let other = null;
+  const fields = () => (ask.html.includes('ask-other') ? [other ||= Object.assign(new El('ask-other'), { value: '' })] : []);
+  ask.querySelectorAll = (sel) => (sel === '.ask-other, .ask-qnote, .ask-reason' ? fields() : []);
+  ask.querySelector = (sel) => (sel === '.ask-other' ? fields()[0] || null : null);
+  const later = [];
+  const c = chatModule(async () => structuredClone(data), { requestAnimationFrame: () => 0, setTimeout: (f) => { later.push(f); return later.length; } })(p.box, { key: 'CH-1' });
+  await c.flight;
+  fields()[0].value = 'my own words';
+  data = { ...answer, send: true, state: 'idle', v: 'v2' };
+  c.stale = true; c.show(true);
+  await c.flight;
+  data = { ...answer, send: true, state: 'idle', v: 'v3' };
+  for (const f of later.splice(0)) f(); // only what the chat asked for itself
+  await c.flight;
+  assert.equal(p.form.kids.textarea.value, 'my own words', 'the words stay out of sight until something else rings');
   c.destroy();
 });

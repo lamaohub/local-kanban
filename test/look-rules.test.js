@@ -235,7 +235,7 @@ test('CK-850/CK-831: the top bar is measured by its own width, and its badges an
   assert.ok(narrow.length > 0, 'nothing narrows the top bar by its own width');
   const block = narrow.slice(0, narrow.indexOf('\n}\n'));
   assert.match(block, /#week-stats \{ display: none; \}/);
-  assert.match(block, /\.topbar h1 \{ min-width: 0; overflow: hidden; text-overflow: ellipsis; \}/);
+  assert.match(css, /\n\.topbar h1 \{ min-width: 0; overflow: hidden; text-overflow: ellipsis; \}/, 'a long name runs over the count and takes ⋯ off the bar');
   assert.match(css, /\.topbar-right > \* \{ white-space: nowrap; \}/, '«sound off» breaks into two lines on a phone of 320 again');
   const head = css.slice(css.indexOf('.col-head {'), css.indexOf('}', css.indexOf('.col-head {')));
   assert.match(head, /white-space: nowrap;/, '«To do» breaks into «To / do» on a phone of 320 again');

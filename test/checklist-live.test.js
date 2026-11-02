@@ -16,6 +16,7 @@ function card({ shown, timers = {}, sending = [], focusedId = null }) {
   };
   vm.runInNewContext(`let drawerChecklist = ${JSON.stringify(shown)}; const clSaveTimers = ${JSON.stringify(timers)};
 const clSending = new Set(${JSON.stringify(sending)});
+const clUnsent = new Map();
 const renderChecklist = (list) => { this.drawn = list; drawerChecklist = list; };
 ${fnOf('export function applyChecklist(')}
 this.apply = applyChecklist;`, box);

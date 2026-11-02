@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS projects (
   position           REAL NOT NULL DEFAULT 0,
   archived           INTEGER NOT NULL DEFAULT 0,
   created_at         TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at         TEXT NOT NULL DEFAULT (datetime('now'))
+  updated_at         TEXT NOT NULL DEFAULT (datetime('now')),
+  ready_gate         INTEGER
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_prefix ON projects(prefix);
 CREATE TABLE IF NOT EXISTS tasks (
@@ -30,7 +31,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   title            TEXT NOT NULL,
   description      TEXT NOT NULL DEFAULT '',
   status           TEXT NOT NULL DEFAULT 'backlog'
-                     CHECK (status IN ('backlog','todo','prep','doing','deploy','review','done','cancelled')),
+                     CHECK (status IN ('backlog','todo','prep','doing','ready','deploy','review','done','cancelled')),
   priority         INTEGER NOT NULL DEFAULT 0
                      CHECK (priority BETWEEN 0 AND 3),
   labels           TEXT NOT NULL DEFAULT '[]',
@@ -58,9 +59,11 @@ CREATE TABLE IF NOT EXISTS task_comments (
   author      TEXT NOT NULL DEFAULT 'me',
   body        TEXT NOT NULL,
   image       TEXT,
-  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  client_key  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_comments_task ON task_comments(task_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_comments_client_key ON task_comments(task_id, client_key) WHERE client_key IS NOT NULL;
 CREATE TABLE IF NOT EXISTS task_events (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id     INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -210,6 +213,12 @@ CREATE TABLE IF NOT EXISTS automations (
   created_at  INTEGER NOT NULL,
   ended_at    INTEGER,
   task_id     INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
-  error       TEXT
+  error       TEXT,
+  repeat      INTEGER NOT NULL DEFAULT 0,
+  rearmed_at  INTEGER,                    -- the last check it counted: the work and the tasks handed back are from here on
+  fires       TEXT NOT NULL DEFAULT '[]', -- the moments it fired within a day, for FIRES_DAY_MAX
+  fix         INTEGER NOT NULL DEFAULT 0,
+  rounds      TEXT NOT NULL DEFAULT '{}', -- task id → {n, at}: the rounds of fixing, and when the last one started
+  plan        TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_automations_state ON automations(state);

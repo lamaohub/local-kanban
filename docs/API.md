@@ -6,7 +6,7 @@ The board is a plain HTTP server on `http://127.0.0.1:3100`. Everything the UI a
 
 The server binds to **127.0.0.1 only** and has **no authentication**: the local machine is trusted, the network is not. **Do not** expose the port via reverse proxies or port forwarding. Anything that can make HTTP requests on your machine has full access to the board — that is the intended model, same as any local dev tool.
 
-The one way in from the network is the owner's own switch, **Settings → Wi-Fi**: a separate door on `0.0.0.0:<port + 10>` (`KB_SHARE_PORT`) that lets in requests from private networks only (no secret in the address; another site may only open the board as a page, its forms, fetches and frames get 403) and passes the request on to the board on loopback marked `x-kb-guest: 1`. A guest can do on the board what the owner can. Off by default; switching off closes the door and every connection.
+The one way in from the network is the owner's own switch, **Settings → Wi-Fi**: a separate door on `0.0.0.0:<port + 10>` (`KB_SHARE_PORT`) that lets in requests from private networks that hold its key: `?k=` in the link, or typed on the door's page (`POST /door/key`, form field `k`), then an HttpOnly cookie with an HMAC of the key. Without it a page gets the door's form and `/api/*` 401 `{reason: 'share'}`; the manifest and the icons are free. Another site may only open the board as a page, its forms, fetches and frames get 403 and passes the request on to the board on loopback marked `x-kb-guest: 1`. A guest can do on the board what the owner can. Off by default; switching off closes the door and every connection.
 
 ## Conventions
 
@@ -44,7 +44,7 @@ as arrays of objects. Nested-route params follow one scheme: `:commentId`, `:att
 
 | `POST /api/tasks/:key/duplicate` | copy title/description/priority/labels into a new `todo`/`backlog` task. A copy of a check that would be a second open one is refused: 409 `{reason: "check-open", key}` — the key of the copied check itself when it is open, of the project's open check otherwise; a copy landing in `backlog` is not open and goes through |
 | `POST /api/tasks/:key/move` | move the task to another project: `{project}` (slug or prefix). It keeps its id and everything on it and takes the next number there; the old key keeps leading to it. Refused: a task in work (409 `{reason: "in-work"}`, manual tasks excepted), the same or an archived project (400), an open check into a project that has one (409 `{reason: "check-open", key}`). Answers the task with `old_key`; event `task.moved` |
-| `GET/POST /api/tasks/:key/comments` | comments; POST `{body, author?}` or a raw `image/*` body (screenshot) |
+| `GET/POST /api/tasks/:key/comments` | comments; POST `{body, author?, client_key?}` (`client_key`: up to 64 characters; a repeat with the same key answers 200 with the comment already written) or a raw `image/*` body (screenshot) |
 | `DELETE /api/tasks/:key/comments/:commentId` | delete a comment (local only) |
 | `POST /api/tasks/:key/links` | link tasks: `{key, rel: related\|child\|parent}` |
 | `DELETE /api/tasks/:key/links/:linkedId` | unlink |
@@ -57,7 +57,9 @@ as arrays of objects. Nested-route params follow one scheme: `:commentId`, `:att
 | `GET /api/done` | `{runs}` — what Claude has finished lately, the most recently finished run first — see below |
 | `GET /api/automations` | `{on, rules, now}` — the automations: the switch and the rules, waiting ones first — see below |
 | `PUT /api/automations/switch` | `{on}` — switch the automations on or off; the answer is the view |
-| `POST /api/automations` | arm a rule: `{project, delay_min?, words, launch?}` — 409 `armed` when the project has one waiting |
+| `POST /api/automations` | arm a rule: `{project, kind?, delay_min?, plan?, repeat?, fix?, words, launch?}`; `kind`: `finished-check` (the default), `todo-queue` (the next batch of To do), `schedule-check`, `schedule-groom` (with `plan` `{at: 'HH:MM', day: 0…6 or null}`, local time; a run the sleeping computer missed is skipped) (`fix`, with `repeat` and `words.back`: what the check returns goes back to work, 2 rounds a task) — 409 `armed` when the project has one waiting |
+| `GET /api/automations/summary?since=` | what moved since a moment in milliseconds: `{handed, accepted, returned, stuck}`, each `{n, tasks: [{key, title, project}]}` (at most 12 tasks), without manual tasks and checks |
+| `PUT /api/automations/extras` | `{resume?, health?, launch?}` — what the board does by itself besides the rules, each off by default; the answer is the view, its `extras` says what is on |
 | `DELETE /api/automations/:automationId` | take a waiting rule off (it goes to the history), or drop an ended one from it |
 | `GET /api/health` | `{norms, everywhere, projects}` — the size of the instructions Claude Code reads in each project not archived: `norms` (`lines` 200 per CLAUDE.md, `file_chars` 40 000 per file, `total_chars` 120 000 for all together); `everywhere` — the person's own files (`files`, `chars`, `lines`); per project `main` (its own CLAUDE.md: `path`, `lines`, `chars`, or null), `files` (everything a session started in its folder reads: `kind` `main`/`parent`/`local`/`import`/`rule`/`memory`, `path`, `lines`, `chars`, `from` for an import), `chars`, `lines`, `nested` (CLAUDE.md of subfolders); `folder: null` — none set, `missing: true` — not on this computer. Names and counts only, never the text |
 | `GET /api/tasks/:key/chat` | the chat of one session of the task: its turns, the words waiting for its Claude, whether it can be spoken to — see below |
@@ -66,6 +68,7 @@ as arrays of objects. Nested-route params follow one scheme: `:commentId`, `:att
 | `POST /api/tasks/:key/chat/stop` | stop the board's own Claude of the task at its turn (Esc); 409 `not-busy` when it is not at work, `stopping` within 1.5 s of the last stop |
 | `DELETE /api/tasks/:key/chat/queue/:itemId` | take queued words back before they go |
 | `GET /api/tasks/:key/chat/picture/:toolId?session=` | the picture file a `Read` step of the task's session read — found by the step's id (`pic` of the step), never by a path: a picture type (png, jpg, gif, webp), a file, at most 25 MB; a step that failed has none (404) |
+| `GET /api/tasks/:key/chat/doc/:toolId?session=` | the Markdown file a `Write` or `Edit` step of the task's session changed — found by the step's id (`doc` of the step), never by a path: a `.md`/`.markdown` file (the file a link leads to must be one too), at most 2 MB. `{name, text}` |
 | `GET /api/tasks/:key/chat/image/:ref?session=` | a picture the person sent in a turn of the task's session — Claude Code keeps it in the transcript itself; `ref` is one of the turn's `shots`: a picture type its own bytes confirm, at most 25 MB; anything the chat does not offer is 404 |
 | `GET /api/launch` | `{board, desktop, terminal, cli}` — which ways of starting Claude this machine has |
 | `POST /api/launch` | start Claude: `{mode: board, text, project, keys?, permission?, effort?}` (inside the board) or `{mode: desktop\|terminal, text, project?}` (`effort?` for terminal), or open a session that worked on a task: `{mode: desktop, host}` / `{mode: terminal, resume, project?}` — see below |
@@ -75,7 +78,7 @@ as arrays of objects. Nested-route params follow one scheme: `:commentId`, `:att
 | `DELETE /api/tasks/:key/terminal` | stop that Claude, or close the screen of one that has finished |
 | `POST /api/projects/:slug/folder` | give a project without a folder on this computer a new, empty one in the projects root — `demo`, or `demo-2` if `demo` is taken; 409 if it has one |
 
-Statuses: `backlog → todo → prep → doing → deploy → review → done` (+ `cancelled`). Tasks labeled `noclaude` may jump straight from `backlog`/`todo` to `review`/`done`.
+Statuses: `backlog → todo → prep → doing → [ready →] deploy → review → done` (+ `cancelled`). `ready` is optional: with `ship_gate` on for the project, a move into `deploy` from anything but `ready`, and `doing → review`, answer 409 `{reason: 'ready-first'}`. Tasks labeled `noclaude` may jump straight from `backlog`/`todo` to `review`/`done`.
 
 **Claude Code sessions.** A request may carry `X-Claude-Session: <uuid>` — `kb` sends the
 `CLAUDE_CODE_SESSION_ID` that Claude Code sets for every command it runs. A status change, a comment
@@ -101,12 +104,12 @@ only the stretches when the session was on this one, judged by the status change
 shown; it reads no helpers and sends no items. Requests for the same feed that arrive while it is being
 built get that one build.
 
-**The chat** (`GET /api/tasks/:key/chat?session=&turns=&seen=`) answers `{session, sessions, turns, earlier_n,
-queue, send, state, model, v}` (`model` — the model of the session's newest answer, or null): the newest `turns` (15 by default, up to 200) turns of one session of the task — the one
+**The chat** (`GET /api/tasks/:key/chat?session=&turns=&seen=`) answers `{session, sessions, turns, going?, earlier_n,
+queue, send, state, model, v}` (`model` — the model of the session's newest answer, or null; `going` — helpers at work in a turn past the ones sent, steps in the shape of a turn's, a running step with `since` when it came back after a stop): the newest `turns` (15 by default, up to 200) turns of one session of the task — the one
 asked for, which must be the task's, else the newest. A turn is `{at, user, images?, shots?, items, ms, open, compact?}`: the
 person's words (`images` — how many pictures came with them, `shots` — those the board can show, `[{ref, w?, h?}]` for
 `…/chat/image/:ref`, with the picture's size when its head tells it), then Claude's `text` and its steps (`tool` items as in the work feed, with `ms` and `error`, and `wrote` — how long Claude took to write the step, when that is 3 s or more; a `Read` of a
-picture has `pic` — the step's id for `…/chat/picture/:toolId`; an answered `AskUserQuestion` has `answers`
+picture has `pic` — the step's id for `…/chat/picture/:toolId`, one that changed a Markdown file has `doc` — for `…/chat/doc/:toolId`; an answered `AskUserQuestion` has `answers`
 `[{h?, q, a}]` — header, question, answer), `ms` —
 how long Claude worked on it, `open` — not over yet. What a step returned is never sent. `pace` — what Claude Code's spinner says of a Claude at work in a board terminal, `{tokens?, thinking?, compacting?}`: it is not part of `v`, and comes with a `same` answer too. `queue` — the words waiting
 for that Claude, `{id, text, images_n?, at}`; `send` — whether the chat can speak to it (only the board's own Claude of the task,
@@ -156,9 +159,9 @@ labelled `noclaude` are left out. A task is `{id, key, project, project_name, ti
 done_at}`.
 
 **Automations** (`GET /api/automations`) is `{on, rules, now}`. A rule is `{id, project, project_name, kind, delay_s,
-state, created_at, ended_at, error, check_key, check_status}`, times in milliseconds; `state` is `armed`, `fired`,
+state, created_at, ended_at, error, check_key, check_status, repeat}`, times in milliseconds; a repeating rule stays waiting after its check and adds `fires_n`, `fires_max` — its checks of the last 24 hours and their limit; `state` is `armed`, `fired`,
 `failed`, `cancelled` or `covered` — a check was made by hand after the rule was set (the last 20 ended ones are kept). A waiting rule adds `phase` — `idle` (no work in the project
-since it was set), `working`, `held` (`reason`: `question`, `ask`, `sent-back`, `limit`, `check-open`, `nothing`,
+since it was set), `working`, `planned` (a schedule between its runs), `held` (`reason`: `question`, `ask`, `sent-back`, `limit`, `limit-high`, `check-open`, `nothing`, `queue-empty`, `day-cap`, `busy`,
 `off`) or `ready` — with the `keys` it is about, and `due_at` once its pause runs. `POST` takes `delay_min` (whole
 minutes, 0–120, default 3), `words` — the check's `{title, tasks, later, done, report, run, doTask}` in the page's
 language — and `launch` `{permission, effort}` for the start; 409 `no-folder` when the project has no folder here. Every change goes out as the event `automation.updated`
@@ -168,10 +171,12 @@ with the same view.
 
 | Method & path | Meaning |
 |---|---|
-| `GET /api/projects` | registry with per-status counters |
+| `GET /api/projects` | registry with per-status counters and `ship_gate`, whether the project waits for the word before shipping |
 | `GET /api/projects/:slug` | one project (+ `deploy_skill_path`) |
 | `POST /api/projects` | create: `{slug, name, path?, server?, server_path?, pm2_services?, domain?, deploy_skill?, category?, prefix?}`. `slug` is one path segment: latin letters, digits, `.`, `-`, `_`, not starting with `.` or `-`, up to 100 characters |
 | `PATCH /api/projects/:slug` | update the same fields; `archived: 1` hides a project. `name` cannot be emptied; `prefix` is a string of 2-10 latin letters or digits |
+| `GET /api/shipped?project=` | whether the commits of the tasks in `ready` and `review` reached main: `{tasks: {KEY: 'main'\|'branch'\|'none'}}`; all projects without `project` |
+| `GET/PUT /api/flow` | `{ready_gate}` — the board's switch for `ready`; `ready_gate` of a project (null, 0, 1) goes over it |
 | `GET /api/projects/:slug/status` | live service statuses (local pm2 by default, or `PANEL_URL` provider) |
 | `GET /api/projects/folders` | folders on disk vs registry: `{root, unregistered, missing}` |
 | `POST /api/projects/folders` | mkdir/adopt a folder under `KB_LOCAL_ROOT` as a project |
@@ -322,7 +327,7 @@ board checks every 3 s and stays silent while nothing changes.
 
 - `GET /api/sync` — queue state: `{pending, failed, errors, paused, configured, owner, repo, source, last_ok}`. `configured: false` = local-only mode.
 - `GET /api/stats` — weekly done/time counters.
-- `GET /api/share` — the Wi-Fi door: `{on, wanted, port, error, urls: [{name, url}], qr, guests_n}` (`qr` is an SVG of the first; `error` — `port-busy`/`failed`); through the door — only `{guest: true, on: true}`. `PUT /api/share {on}` opens or closes it — only from the board's page and never by a guest (403). Event `share.updated` carries `{on}` only.
+- `GET /api/share` — the Wi-Fi door: `{on, wanted, port, error, key, urls: [{name, url}], qr, guests_n}` (`qr` is an SVG of the first; `error` — `port-busy`/`failed`); through the door — only `{guest: true, on: true}`. `PUT /api/share {on}` opens or closes it, `POST /api/share/reset` makes a new key (the old link, key and passes stop working, every guest is cut off) — only from the board's page and never by a guest (403). Event `share.updated` carries `{on}` only.
 - `GET /api/limits` — `{windows, at, model, link}`: the subscription's rate-limit windows as Claude Code's status line last
   reported them — `five_hour`, `seven_day` and, behind a gateway, `spend_limit`, each `{used, resets_at}` (`used` a
   percentage, `resets_at` Unix seconds) — and `at`, when the board received a reading last. A window whose reset time

@@ -196,3 +196,17 @@ test('a browser without locks or channels keeps a stream per tab', async () => {
   await w.advance(10);
   assert.equal(w.live().length, 2);
 });
+
+test('review of CK-838: attempts forced while a reconnect waits leave one chain, not one more per attempt', async () => {
+  const w = world();
+  const t = w.open(); await w.advance(10);
+  w.server.up = false;
+  w.live()[0].drop();
+  await w.advance(1000);
+  // clicks on the notice and returns to the tab while a pause runs: each is one attempt now, none starts a chain
+  for (let i = 0; i < 5; i++) { t.link.retry(); await w.advance(100); }
+  const made = w.server.streams.length;
+  await w.advance(120_000);
+  const after = w.server.streams.length - made;
+  assert.ok(after <= 4, `${after} attempts in the two minutes after the clicks: the waiting timers were left running`);
+});

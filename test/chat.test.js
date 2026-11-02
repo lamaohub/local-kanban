@@ -3,7 +3,7 @@
 // at its prompt, else wait in a queue until it has been idle for two seconds (the rule of the owner's reference).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
@@ -415,6 +415,13 @@ test('the page lights the chat for a Claude at work or waiting for its helpers, 
   const turn = { at: 't', user: 'go', items: [step('one'), helper, step('two'), { kind: 'text', text: 'Waiting.' }], ms: 4000, open: false };
   assert.equal(box.workingLine({ working: false, turns: [turn] }), '', 'a Claude at rest is lit');
   assert.match(box.workingLine({ working: true, turns: [turn] }), /Claude works in the background… · helpers at work: 1/);
+  const older = step('Old helper', { tool: 'Agent', running: true, ms: undefined, at: '2026-01-01T01:00:00.000Z', since: '2026-01-01T09:30:00.000Z' });
+  const rest = { ...turn, items: [{ kind: 'text', text: 'Waiting.' }] };
+  assert.match(box.workingLine({ working: true, turns: [rest], going: [older] }), /helpers at work: 1/, 'a helper past the shown turns is not counted');
+  const lived = box.liveHTML({ working: true, turns: [rest], going: [older] });
+  assert.match(lived, /chat-going[\s\S]*Old helper/, 'a helper past the shown turns is not said over the field');
+  assert.match(lived, new RegExp(new Date('2026-01-01T09:30:00.000Z').getHours().toString().padStart(2, '0') + ':30'), 'a helper brought back says the moment of its first launch');
+  assert.match(box.workingLine({ working: true, turns: [{ ...rest, items: [step('Audit', { tool: 'Workflow', running: true, ms: undefined })] }] }), /helpers at work: 1/, 'a workflow reads as a command');
   assert.match(box.workingLine({ working: true, turns: [{ ...turn, open: true }] }), /Claude is working…/);
   assert.match(box.workingLine({ working: false, send: true, state: 'busy', turns: [{ ...turn, open: true }] }), /Claude is working…/, 'the board\'s own Claude at a turn is not lit');
   // is in says what it does and for how long, by the light
@@ -508,6 +515,47 @@ test('a question answered shows as the person\'s bubble of questions and answers
   assert.match(done, /1 step</);
   // declined: a step, with what Claude Code wrote
   assert.doesNotMatch(box.turnHTML({ ...going, items: [{ ...ask, answers: undefined, error: true }] }), /chat-answers/);
+});
+
+test('a Markdown file Claude changed opens by its step: that file of a step of this task, nothing else', async () => {
+  const DOC = 'eeeeeeee-5555-4555-8555-eeeeeeeeeeee';
+  const md = join(tmp, 'report.md');
+  writeFileSync(md, '# Report\n\nAll **good**.');
+  writeFileSync(join(tmp, 'code.js'), 'secret()');
+  writeFileSync(join(tmp, 'secret.txt'), 'private key');
+  symlinkSync(join(tmp, 'secret.txt'), join(tmp, 'link.md'));
+  writeFileSync(join(tmp, 'huge.md'), 'x'.repeat(2 * 1024 * 1024 + 1));
+  writeFileSync(join(tmp, 'read.md'), 'only read');
+  writeFileSync(join(tmp, 'gone.md'), 'for a moment');
+  writeFileSync(join(claude, 'projects', '-chat', `${DOC}.jsonl`), user(1, 'Write it up')
+    + call(2, 'm1', 'Write', { file_path: md, content: 'x' }) + result(3, 'm1', 'written')
+    + call(4, 'm2', 'Edit', { file_path: join(tmp, 'code.js') }) + result(5, 'm2', 'edited')
+    + call(6, 'm3', 'Edit', { file_path: join(tmp, 'link.md') }) + result(7, 'm3', 'edited')
+    + call(8, 'm4', 'Write', { file_path: join(tmp, 'huge.md') }) + result(9, 'm4', 'written')
+    + call(10, 'm5', 'Read', { file_path: join(tmp, 'read.md') }) + result(11, 'm5', 'read')
+    + call(12, 'm6', 'Edit', { file_path: join(tmp, 'gone.md') }) + result(13, 'm6', 'no match', true)
+    + call(14, 'm7', 'Write', { file_path: join(tmp, 'moved.md') }) + result(15, 'm7', 'written'));
+  const other = db.prepare('SELECT id FROM tasks WHERE task_no = 3').get()?.id ?? db.prepare('SELECT id FROM tasks WHERE task_no = 2').get().id;
+  db.prepare("INSERT INTO task_sessions (task_id, session_id, first_seen, last_seen) VALUES (?, ?, '2026-10-23 10:00:00', '2026-10-23 10:00:11')").run(other, DOC);
+  const key = db.prepare("SELECT task_no FROM tasks WHERE id = ?").get(other).task_no;
+  const r = (await app.inject({ method: 'GET', url: `/api/tasks/CH-${key}/chat?session=${DOC}` })).json();
+  const steps = r.turns[0].items.filter((i) => i.kind === 'tool');
+  assert.deepEqual(steps.map((i) => i.doc), ['m1', undefined, 'm3', 'm4', undefined, undefined, 'm7'], 'only Markdown a step changed is offered');
+  assert.ok(!JSON.stringify(r).includes(`${tmp}/report`), 'the path of the file went to the page');
+  const get = (id) => app.inject({ method: 'GET', url: `/api/tasks/CH-${key}/chat/doc/${id}?session=${DOC}` });
+  const ok = await get('m1');
+  assert.equal(ok.statusCode, 200, ok.body);
+  assert.deepEqual(ok.json(), { name: 'report.md', text: '# Report\n\nAll **good**.' });
+  assert.equal((await get('m2')).statusCode, 404, 'a file that is not Markdown is served');
+  const link = await get('m3');
+  assert.equal(link.statusCode, 404, 'a link named .md led to another file');
+  assert.ok(!link.body.includes('private key'));
+  assert.equal((await get('m4')).statusCode, 413);
+  assert.equal((await get('m5')).statusCode, 404, 'a file only read is served');
+  assert.equal((await get('m6')).statusCode, 404, 'a step that failed is served');
+  assert.equal((await get('m7')).json().error, 'the file is no longer there');
+  assert.equal((await get('..%2Freport')).statusCode, 400);
+  assert.equal((await app.inject({ method: 'GET', url: `/api/tasks/CH-1/chat/doc/m1?session=${DOC}` })).statusCode, 404, 'a session of another task reads the file');
 });
 
 // the task's session read is served by the step's id, never by a path the page names

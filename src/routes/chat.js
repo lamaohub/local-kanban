@@ -2,9 +2,9 @@
 import { resolveTask, taskAttachmentPaths } from './tasks.js';
 import { CHAT_COLS, REPLY_MAX, claudeAtPrompt, paceOnScreen, phantomResize, phantomScreen, phantomSend, taskTerminal, watched } from '../phantom.js';
 import { SESSION_ID_RE, taskSessions, transcriptNow } from '../claude-sessions.js';
-import { PICTURE_MAX, PICTURE_TYPES, SHOT_RE, TURNS_DEFAULT, TURNS_MAX, chatHash, chatPicture, chatShot, pictureKindOf, saidCommand, transcriptChat, watchChat } from '../chat-feed.js';
+import { DOC_MAX, PICTURE_MAX, PICTURE_TYPES, SHOT_RE, TURNS_DEFAULT, TURNS_MAX, chatDoc, chatHash, chatPicture, chatShot, isMarkdown, pictureKindOf, saidCommand, transcriptChat, watchChat } from '../chat-feed.js';
 import { createReadStream } from 'node:fs';
-import { open, realpath, stat } from 'node:fs/promises';
+import { open, readFile, realpath, stat } from 'node:fs/promises';
 import { enqueue, enqueueFirst, markSaid, queued, saidLately, takeQueued, typing, unqueue } from '../chat-queue.js';
 import { sayToTerminal } from '../terminal-say.js';
 import { emit } from '../bus.js';
@@ -170,6 +170,21 @@ export default async function chatRoutes(app) {
     if (!type || type !== await pictureKind(real)) return reply.code(404).send({ error: 'no picture read in this step' });
     return reply.type(type).header('X-Content-Type-Options', 'nosniff').header('Cache-Control', 'private, max-age=300')
       .header('Content-Length', st.size).send(createReadStream(real));
+  });
+
+  app.get('/api/tasks/:id/chat/doc/:toolId', async (req, reply) => {
+    const t = taskOr404(req, reply); if (!t) return reply;
+    const s = await pictureSession(req, reply, t, TOOL_ID_RE.test(req.params.toolId) ? null : 'toolId: the id of a step');
+    if (!s) return reply;
+    const path = await chatDoc(s.transcript, req.params.toolId);
+    if (!path) return reply.code(404).send({ error: 'no Markdown file changed in this step' });
+    let real;
+    let st;
+    try { real = await realpath(path); st = await stat(real); } catch { return reply.code(404).send({ error: 'the file is no longer there' }); }
+    if (!st.isFile() || !isMarkdown(real)) return reply.code(404).send({ error: 'the file is no longer there' });
+    if (st.size > DOC_MAX) return reply.code(413).send({ error: 'the file is too large to show' });
+    const text = await readFile(real, 'utf8');
+    return reply.header('Cache-Control', 'no-store').send({ name: real.split('/').pop(), text });
   });
 
   app.get('/api/tasks/:id/chat/image/:ref', async (req, reply) => {

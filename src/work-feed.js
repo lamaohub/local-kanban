@@ -42,6 +42,8 @@ export function toolSummary(name, input = {}) {
     case 'Grep': return clip(`${input.pattern ?? ''}${input.path ? ` · ${shortPath(input.path)}` : ''}`, 160);
     case 'Glob': return clip(input.pattern, 160);
     case 'Agent': case 'Task': return clip(input.description || input.subagent_type, 160);
+    case 'Workflow': return clip(input.name || input.description || '', 160);
+    case 'SendMessage': return clip(input.summary || input.to || '', 160);
     case 'WebFetch': return clip(input.url, 160);
     case 'WebSearch': return clip(input.query, 160);
     case 'Skill': return clip(input.skill, 80);

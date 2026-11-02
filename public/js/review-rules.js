@@ -9,7 +9,10 @@ export const IN_WORK = ['prep', 'doing', 'deploy'];
 const manual = (t) => Array.isArray(t.labels) && t.labels.includes('noclaude');
 export const HOLD_STALE_MS = 2 * 3600 * 1000;
 export function holdsCheck(t, live = {}, now = Date.now()) {
-  if (!IN_WORK.includes(t.status) || isCheck(t) || manual(t) || t.blocked) return false;
+  return !isCheck(t) && atWork(t, live, now);
+}
+export function atWork(t, live = {}, now = Date.now()) {
+  if (!IN_WORK.includes(t.status) || manual(t) || t.blocked) return false;
   const claude = live?.[t.id]?.claude;
   if (claude) return claude !== 'gone';
   const at = Date.parse(`${String(t.updated_at || '').replace(' ', 'T')}Z`);
@@ -83,5 +86,5 @@ export const stillOpen = (status) => (status === 'todo'
   : 'This check is still open — to start it again, move it back to To do and press ▶ on its card.');
 
 export function checkDescription(batch, say) {
-  return [`${say.tasks} ${batch.join(', ')}`, say.later, say.done, say.report].filter(Boolean).join('\n\n');
+  return [`${say.tasks} ${batch.join(', ')}`, say.later, say.done, say.back, say.report].filter(Boolean).join('\n\n');
 }

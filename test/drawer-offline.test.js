@@ -120,7 +120,7 @@ const settle = () => new Promise((r) => setImmediate(r));
 
 test('a comment sent without a connection stays in the card as not sent, and goes once it is back', async () => {
   const c = card();
-  c.box.queueComment('VV-1', 'please check the login');
+  c.box.queueComment('VV-1', 'please check the login', 'first-send');
   const shown = c.els.comments.unsent();
   assert.equal(shown.length, 1, 'the comment is gone from the card: the person types it again');
   assert.equal(shown[0].body, 'please check the login');
@@ -129,7 +129,7 @@ test('a comment sent without a connection stays in the card as not sent, and goe
   assert.match(c.calls.noted[0].key, /^comment:VV-1:\d+$/);
   // the connection is back: the queue runs the resend
   await c.calls.noted[0].retry();
-  assert.deepEqual(JSON.parse(JSON.stringify(c.calls.posts.map((p) => p.body))), [{ body: 'please check the login', author: 'me' }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(c.calls.posts.map((p) => p.body))), [{ body: 'please check the login', author: 'me', client_key: 'first-send' }]);
   assert.equal(c.els.comments.unsent().length, 0, 'the sent comment still says it is not sent');
   assert.deepEqual(c.calls.rendered, ['VV-1'], 'the card does not show the delivered comment');
   assert.deepEqual(c.calls.arrived, { id: 1 }, 'the card is not given the comment the server took');
@@ -320,6 +320,7 @@ test('reading above a long screen, the text stays put while the window of a thou
   assert.equal(c.box.rolledBy(rows(0, 50), rows(0, 50)), 0);
   const lead = ['', '', ...rows(0, 40).split('\n')];
   assert.equal(c.box.rolledBy(lead.join('\n'), lead.slice(1).join('\n')), 1, 'one matching line (a blank one) is taken for the window standing still');
+  assert.equal(c.box.rolledBy(['x', 'a', 'b', 'c', ...rows(0, 40).split('\n')].join('\n'), ['a', 'b', 'c', ...rows(100, 40).split('\n')].join('\n')), 0, 'three lines in common read as a roll');
   assert.equal(c.box.rolledBy(['', '', ...Array(40).fill('')].join('\n'), ['', '', ...Array(40).fill('')].join('\n')), 0, 'blank lines read as a roll');
   // and the text under the reader ran with the output (52 lines in 20 s)
   const same = [...Array(100).fill('─'.repeat(40)), ...rows(0, 1000).split('\n')].slice(0, 1000); // more equal lines than the roll

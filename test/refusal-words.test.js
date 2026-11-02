@@ -360,7 +360,7 @@ test('a refused upload carries what api() refusals carry — the status, or no c
   vm.runInNewContext([
     fromCore('export function apiError('),
     fromCore('async function answerOf('),
-    'const reportError = (scope, message) => { reported.push(message); };',
+    'const reportError = (scope, message) => { reported.push(message); }; const doorClosed = () => false;',
     core.slice(core.indexOf('export const apiBlob = '), core.indexOf('\n};\n', core.indexOf('export const apiBlob = ')) + 3).replace(/^export /, ''),
     'out = { apiBlob };',
   ].join('\n'), box);

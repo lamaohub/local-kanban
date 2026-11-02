@@ -81,7 +81,7 @@ export default async function dashboardRoutes(app) {
              AVG((julianday(done_at) - julianday(created_at)) * 24) AS cyc
       FROM tasks WHERE status = 'done' AND ${LIVE} AND ${NOT_NOCLAUDE} AND done_at >= datetime('now','localtime','start of day', ?, 'utc')
     `).get(sinceArg);
-    const active = db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE status IN ('todo','prep','doing','deploy','review') AND ${LIVE} AND ${NOT_NOCLAUDE}`).get().n;
+    const active = db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE status IN ('todo','prep','doing','ready','deploy','review') AND ${LIVE} AND ${NOT_NOCLAUDE}`).get().n;
     const doneTotal = db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE status = 'done' AND ${LIVE} AND ${NOT_NOCLAUDE}`).get().n;
     const manualPeriod = db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE status = 'done' AND ${LIVE} AND ${IS_NOCLAUDE} AND done_at >= datetime('now','localtime','start of day', ?, 'utc')`).get(sinceArg).n;
     const manualTotal = db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE status = 'done' AND ${LIVE} AND ${IS_NOCLAUDE}`).get().n;
@@ -112,11 +112,11 @@ export default async function dashboardRoutes(app) {
       ORDER BY t.priority DESC, t.updated_at DESC`).all();
     const planRow = (t) => ({ key: t.key, title: t.title, project: t.project, status: t.status, priority: t.priority, idle_days: t.idle_days });
 
-    const FUNNEL_ST = ['backlog', 'todo', 'prep', 'doing', 'deploy', 'review'];
+    const FUNNEL_ST = ['backlog', 'todo', 'prep', 'doing', 'ready', 'deploy', 'review'];
     const funMap = Object.fromEntries(db.prepare(
-      `SELECT status, COUNT(*) n FROM tasks WHERE status IN ('backlog','todo','prep','doing','deploy','review')
+      `SELECT status, COUNT(*) n FROM tasks WHERE status IN ('backlog','todo','prep','doing','ready','deploy','review')
          AND ${LIVE_TASKS()} GROUP BY status`).all().map((r) => [r.status, r.n]));
-    const funnel = FUNNEL_ST.map((s) => ({ status: s, n: funMap[s] || 0 }));
+    const funnel = FUNNEL_ST.filter((s) => s !== 'ready' || funMap.ready).map((s) => ({ status: s, n: funMap[s] || 0 }));
 
     const nextScore = (t) => t.priority * 100 + Math.min(t.age_days, NEXT_FRESH_DAYS);
     const next = activeRows.filter((t) => !t.no_desc && t.priority > 0)

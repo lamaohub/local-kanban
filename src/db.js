@@ -48,6 +48,49 @@ const MIGRATIONS = [
     if (!cols.length || cols.some((c) => c.name === 'host_session')) return;
     db.exec('ALTER TABLE task_sessions ADD COLUMN host_session TEXT');
   } },
+  { v: 9, name: 'automations-repeat', up: () => {
+    const cols = db.prepare('PRAGMA table_info(automations)').all();
+    if (!cols.length || cols.some((c) => c.name === 'repeat')) return; // no table yet: schema.sql makes it
+    db.exec(`ALTER TABLE automations ADD COLUMN repeat INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE automations ADD COLUMN rearmed_at INTEGER;
+      ALTER TABLE automations ADD COLUMN fires TEXT NOT NULL DEFAULT '[]';`);
+  } },
+  { v: 10, name: 'automations-fix', up: () => {
+    const cols = db.prepare('PRAGMA table_info(automations)').all();
+    if (!cols.length || cols.some((c) => c.name === 'fix')) return; // no table yet: schema.sql makes it
+    db.exec(`ALTER TABLE automations ADD COLUMN fix INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE automations ADD COLUMN rounds TEXT NOT NULL DEFAULT '{}';`);
+  } },
+  { v: 11, name: 'automations-plan', up: () => {
+    const cols = db.prepare('PRAGMA table_info(automations)').all();
+    if (!cols.length || cols.some((c) => c.name === 'plan')) return; // no table yet: schema.sql makes it
+    db.exec("ALTER TABLE automations ADD COLUMN plan TEXT NOT NULL DEFAULT '{}'");
+  } },
+  { v: 12, name: 'comment-client-key', up: () => {
+    const cols = db.prepare('PRAGMA table_info(task_comments)').all();
+    if (!cols.length || cols.some((c) => c.name === 'client_key')) return; // no table yet: schema.sql makes it
+    db.exec('ALTER TABLE task_comments ADD COLUMN client_key TEXT');
+  } },
+  { v: 13, name: 'project-ready-gate', up: () => {
+    const cols = db.prepare('PRAGMA table_info(projects)').all();
+    if (!cols.length || cols.some((c) => c.name === 'ready_gate')) return; // no table yet: schema.sql makes it
+    db.exec('ALTER TABLE projects ADD COLUMN ready_gate INTEGER');
+  } },
+  // today stays, whatever steps added them
+  { v: 14, name: 'status-ready', ownTx: true, up: () => {
+    const sql = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tasks'").get()?.sql;
+    if (!sql || sql.includes("'ready'")) return; // no table yet, or the step already ran
+    const made = sql.replace(/^CREATE TABLE\s+"?tasks"?/i, 'CREATE TABLE new_tasks').replace("'doing','deploy'", "'doing','ready','deploy'");
+    if (!made.includes("'ready'") || !made.includes('new_tasks')) throw new Error('the table of tasks has an unknown shape');
+    const cols = db.prepare('PRAGMA table_info(tasks)').all().map((c) => `"${c.name}"`).join(', ');
+    db.pragma('foreign_keys = OFF');
+    try {
+      db.exec(`BEGIN; ${made}; INSERT INTO new_tasks (${cols}) SELECT ${cols} FROM tasks; DROP TABLE tasks; ALTER TABLE new_tasks RENAME TO tasks; COMMIT;`);
+    } catch (e) {
+      if (db.inTransaction) db.exec('ROLLBACK');
+      throw e;
+    } finally { db.pragma('foreign_keys = ON'); }
+  } },
 ];
 export const SCHEMA_VERSION = MIGRATIONS.at(-1).v;
 
@@ -80,7 +123,7 @@ export const SYNC_MAX_ATTEMPTS = 15;
 
 export const WORK_SEGMENT_MAX_S = 2 * 3600;
 
-export const STATUSES = ['backlog', 'todo', 'prep', 'doing', 'deploy', 'review', 'done', 'cancelled'];
+export const STATUSES = ['backlog', 'todo', 'prep', 'doing', 'ready', 'deploy', 'review', 'done', 'cancelled'];
 
 function migrate() {
   const from = db.pragma('user_version', { simple: true });

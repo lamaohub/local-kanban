@@ -1,7 +1,7 @@
 // of the tasks in Review, as ▶ of that column does. One-shot; it runs on the server, so the page may be closed.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, realpathSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
@@ -262,6 +262,576 @@ test('a check started by hand after the rule was set ends the rule — it does n
   await move(byHand.key, 'cancelled');
   await auto.tickAutomations(app, t0 + 20 * MIN);
   assert.equal(checks(slug).length, 1, 'a second check was started after the one made by hand');
+});
+
+const CHECK_SID = 'dddddddd-9000-4000-8000-dddddddddddd';
+/** The check's own Claude moves a task: its session is the check's, as `kb` tells it. */
+const moveByCheck = async (slug, key, status) => {
+  db.prepare("INSERT OR IGNORE INTO task_sessions (task_id, session_id, first_seen, last_seen) VALUES (?, ?, '2026-10-31 10:00:00', '2026-10-31 10:00:01')").run(checks(slug)[0].id, CHECK_SID);
+  return app.inject({ method: 'PATCH', url: `/api/tasks/${key}`, payload: { status }, headers: { host: '127.0.0.1:3100', 'x-claude-session': CHECK_SID } });
+};
+const finishBatch = async (slug, at, keys = null) => {
+  const list = keys || [await add(slug, `work ${at}`)];
+  for (const x of list) await move(x.key, 'doing');
+  await auto.tickAutomations(app, at);
+  for (const x of list) await move(x.key, 'review');
+  await auto.tickAutomations(app, at + 1000); // the pause starts
+  return list;
+};
+const endCheck = (slug) => db.prepare(`UPDATE tasks SET status = 'done' WHERE project_id = (SELECT id FROM projects WHERE slug = ?) AND labels LIKE '%"check"%'`).run(slug);
+
+test('CK-919: a repeating rule stays armed after its check and fires again on the next batch, not on what the check left', async () => {
+  const slug = project();
+  const id = (await arm(slug, { repeat: true, delay_min: 0 })).json().id;
+  assert.equal((await view()).rules.find((x) => x.id === id).repeat, true);
+  const t0 = Date.now();
+  const first = await finishBatch(slug, t0);
+  await auto.tickAutomations(app, t0 + 2000);
+  assert.equal(checks(slug).length, 1, 'the first check did not start');
+  assert.equal(rule(id).state, 'armed', 'the rule went to the history');
+  let r = (await view()).rules.find((x) => x.id === id);
+  assert.equal(r.fires_n, 1);
+  assert.ok(r.check_key, 'the rule does not say which check it started');
+  // the check runs (its session alive), ends, and leaves a task in Review: no second check over it
+  const made = checks(slug)[0];
+  await auto.tickAutomations(app, t0 + 3000);
+  endCheck(slug);
+  for (let i = 0; i < 4; i++) await auto.tickAutomations(app, t0 + (4 + i) * MIN);
+  assert.equal(checks(slug).length, 1, 'the rule went round on what its check left in Review');
+  assert.equal(db.prepare('SELECT status FROM tasks WHERE id = ?').get(first[0].id).status, 'review');
+  // the next batch
+  const at = t0 + 10 * MIN;
+  await finishBatch(slug, at);
+  await auto.tickAutomations(app, at + 2000);
+  assert.equal(checks(slug).length, 2, 'the next batch was not checked');
+  assert.notEqual(rule(id).task_id, made.id);
+  assert.equal((await view()).rules.find((x) => x.id === id).fires_n, 2);
+  assert.match(checks(slug)[1].description, new RegExp(first[0].key), 'the second check does not take what still waits in Review');
+  await inject('DELETE', `/api/automations/${id}`);
+});
+
+test('CK-919: a check made by hand counts that batch for a repeating rule, and the rule stays', async () => {
+  const slug = project();
+  const id = (await arm(slug, { repeat: true, delay_min: 3 })).json().id;
+  const t0 = Date.now();
+  await finishBatch(slug, t0);
+  await add(slug, 'by hand', 'todo', ['check']);
+  await auto.tickAutomations(app, t0 + 2000);
+  assert.equal(rule(id).state, 'armed');
+  assert.equal(rule(id).seen_work, 0, 'the batch the hand check covers stays counted');
+  endCheck(slug);
+  await auto.tickAutomations(app, t0 + 20 * MIN);
+  assert.equal(checks(slug).length, 1, 'a second check over the same batch');
+  await inject('DELETE', `/api/automations/${id}`);
+});
+
+test('CK-919: a task handed back counts from the rule\'s last check, not from when it was set', async () => {
+  const slug = project();
+  const id = (await arm(slug, { repeat: true, delay_min: 0 })).json().id;
+  const t0 = Date.now();
+  const back = await add(slug, 'handed back early');
+  await move(back.key, 'doing');
+  await move(back.key, 'todo'); // before the rule's first check
+  await finishBatch(slug, t0);
+  await auto.tickAutomations(app, t0 + 2000);
+  await auto.tickAutomations(app, t0 + 3000);
+  db.prepare('UPDATE automations SET rearmed_at = ? WHERE id = ?').run(Date.now() + 1000, id);
+  endCheck(slug);
+  await finishBatch(slug, Date.now() + 2 * MIN);
+  await auto.tickAutomations(app, Date.now() + 3 * MIN);
+  assert.equal(rule(id).state, 'armed');
+  assert.notEqual((await view()).rules.find((x) => x.id === id).reason, 'sent-back', 'an old hand-back holds every next check');
+  await inject('DELETE', `/api/automations/${id}`);
+});
+
+// review: its own check, made within the second of the rule's re-arming, read as one made by hand
+test('CK-919: a batch finished while the rule\'s own check runs is checked after it', async () => {
+  const slug = project();
+  const id = (await arm(slug, { repeat: true, delay_min: 0 })).json().id;
+  const t0 = Date.now();
+  await finishBatch(slug, t0);
+  await auto.tickAutomations(app, t0 + 2000);
+  assert.equal(checks(slug).length, 1);
+  const during = await finishBatch(slug, t0 + 3000);
+  await auto.tickAutomations(app, t0 + 4000);
+  assert.equal(rule(id).seen_work, 1, 'the batch finished under the check was dropped');
+  assert.equal(checks(slug).length, 1, 'a second check beside the open one');
+  endCheck(slug);
+  await auto.tickAutomations(app, t0 + 5000);
+  await auto.tickAutomations(app, t0 + 6000);
+  assert.equal(checks(slug).length, 2, 'the batch was never checked');
+  assert.match(checks(slug)[1].description, new RegExp(during[0].key));
+  await inject('DELETE', `/api/automations/${id}`);
+});
+
+// review: one failed start stopped the person's automation for good, a line in the history the only word of it
+test('CK-919: a repeating rule that could not start stays, says so, and a refused start takes no place', async () => {
+  const slug = project();
+  const id = (await arm(slug, { repeat: true, delay_min: 0 })).json().id;
+  const t0 = Date.now();
+  await finishBatch(slug, t0);
+  db.prepare('UPDATE projects SET path = ? WHERE slug = ?').run('/no/such/folder', slug);
+  const other = project();
+  const second = (await arm(other, { delay_min: 0 })).json().id;
+  await finishBatch(other, t0 + 100);
+  await auto.tickAutomations(app, t0 + 2000);
+  const r = (await view()).rules.find((x) => x.id === id);
+  assert.equal(rule(id).state, 'armed', 'a failed start took the rule off');
+  assert.match(r.error, /no-folder|folder/);
+  assert.equal(rule(second).state, 'fired', 'a start that failed took the place of the next rule');
+  endCheck(slug);
+  endCheck(other);
+  db.prepare('UPDATE projects SET path = ? WHERE slug = ?').run(folder, slug);
+  await finishBatch(slug, t0 + 3000);
+  await auto.tickAutomations(app, t0 + 5000);
+  assert.equal(rule(id).error, null, 'the failure stayed after a good start');
+  await inject('DELETE', `/api/automations/${id}`);
+});
+
+test('CK-919: a rule has its checks of the day, and the board its checks at once', () => {
+  const base = { tasks: [{ id: 1, key: 'K-1', status: 'review', labels: [], updated_at: '2026-10-31 10:00:00' }], back: [], check: null, live: {}, questions: new Set(), asks: new Set(), limited: false, now: Date.now() };
+  assert.equal(auto.judge({ seen_work: 1 }, base).phase, 'ready');
+  assert.deepEqual(auto.judge({ seen_work: 1 }, { ...base, dayFull: true }), { phase: 'held', reason: 'day-cap' });
+  assert.deepEqual(auto.judge({ seen_work: 1 }, { ...base, busy: true }), { phase: 'held', reason: 'busy' });
+  // what waits for the person is said first
+  assert.equal(auto.judge({ seen_work: 1 }, { ...base, busy: true, back: ['K-2'] }).reason, 'sent-back');
+});
+
+test('CK-919: the day\'s limit stops a repeating rule, and a day later it goes on', async () => {
+  const slug = project();
+  const id = (await arm(slug, { repeat: true, delay_min: 0 })).json().id;
+  const now = Date.now();
+  db.prepare('UPDATE automations SET fires = ? WHERE id = ?').run(JSON.stringify(Array(auto.FIRES_DAY_MAX).fill(now - 3600000)), id);
+  await finishBatch(slug, now);
+  await auto.tickAutomations(app, now + 2000);
+  assert.equal(checks(slug).length, 0, 'the rule fired past its limit of the day');
+  assert.equal((await view()).rules.find((x) => x.id === id).reason, 'day-cap');
+  await auto.tickAutomations(app, now + 24 * 60 * MIN);
+  await auto.tickAutomations(app, now + 24 * 60 * MIN + 1000);
+  assert.equal(checks(slug).length, 1, 'the rule did not go on the next day');
+  await inject('DELETE', `/api/automations/${id}`);
+});
+
+test('CK-919: no more than two checks run at once on the board; the third waits for a place', async () => {
+  const slugs = [project(), project(), project()];
+  const ids = [];
+  const t0 = Date.now();
+  for (const slug of slugs) {
+    ids.push((await arm(slug, { delay_min: 0 })).json().id);
+    await add(slug, 'in Review', 'todo').then(async (x) => { await move(x.key, 'doing'); await move(x.key, 'review'); });
+  }
+  // all three ready in the same look: the places are counted within it too
+  db.prepare(`UPDATE automations SET seen_work = 1, ready_at = ? WHERE id IN (${ids.join(',')})`).run(t0 - 1000);
+  await auto.tickAutomations(app, t0);
+  assert.deepEqual(slugs.map((x) => checks(x).length), [1, 1, 0], 'three checks at once');
+  // the two run: each holds its place
+  for (const slug of slugs.slice(0, 2)) db.prepare(`UPDATE tasks SET status = 'doing', updated_at = datetime('now') WHERE project_id = (SELECT id FROM projects WHERE slug = ?) AND labels LIKE '%"check"%'`).run(slug);
+  await auto.tickAutomations(app, Date.now());
+  assert.equal((await view()).rules.find((x) => x.id === ids[2]).reason, 'busy');
+  endCheck(slugs[0]);
+  await auto.tickAutomations(app, Date.now());
+  await auto.tickAutomations(app, Date.now() + 1000);
+  assert.equal(checks(slugs[2]).length, 1, 'the third did not take the free place');
+  for (const slug of slugs) endCheck(slug);
+});
+
+test('CK-919: repeat is a yes or a no at the door, and a rule without it is one-shot', async () => {
+  assert.equal((await arm(project(), { repeat: 'yes' })).statusCode, 400);
+  const id = (await arm(project())).json().id;
+  assert.equal((await view()).rules.find((x) => x.id === id).repeat, false);
+  await inject('DELETE', `/api/automations/${id}`);
+});
+
+test('CK-927: which sessions may go on, and how many times', async () => {
+  const r = await import('../src/auto-resume.js');
+  const run = (over) => ({ session: 's', claude: 'gone', tasks: [{ key: 'K-1', status: 'doing' }, { key: 'K-2', status: 'review' }], ...over });
+  assert.deepEqual(r.resumable(run({})), ['K-1'], 'a session of the Terminal or the app is left behind');
+  assert.deepEqual(r.resumable(run({ board: true, ended: { interrupted: true } })), ['K-1']);
+  assert.deepEqual(r.resumable(run({ board: true, ended: { lost: true } })), ['K-1']);
+  assert.equal(r.resumable(run({ board: true, ended: { exit: 0 } })), null, 'a Claude that exited by itself was brought back');
+  assert.equal(r.resumable(run({ claude: 'idle' })), null, 'a Claude alive was started again');
+  assert.equal(r.resumable(run({ session: null })), null);
+  assert.equal(r.resumable(run({ tasks: [{ key: 'K-2', status: 'review' }] })), null, 'nothing in work');
+  const now = 1e12;
+  assert.equal(r.chainAllows(undefined, now), true);
+  assert.equal(r.chainAllows({ n: 2, at: now }, now), true);
+  assert.equal(r.chainAllows({ n: r.RESUME_TRIES, at: now }, now), false, 'more than three in a row');
+  assert.equal(r.chainAllows({ n: r.RESUME_TRIES, at: now - 4 * 3600_000 }, now), true, 'a break hours later is a chain of its own');
+  const step = (tool, extra = {}) => ({ kind: 'tool', tool, ...extra });
+  assert.equal(r.howItStopped({ open: true, items: [step('Bash')] }, true), 'cut');
+  assert.equal(r.howItStopped({ open: false, items: [step('Bash', { ms: 1 })] }, true), 'over');
+  assert.equal(r.howItStopped({ open: true, items: [step('AskUserQuestion')] }, true), 'asks', 'a question to the person was gone past');
+  assert.equal(r.howItStopped({ open: true, items: [step('Bash', { ms: 1 }), { kind: 'text', text: 'done' }] }, false), 'over', 'the app writes no end of a turn');
+  assert.equal(r.howItStopped({ open: true, items: [{ kind: 'text', text: 'going on' }] }, true), 'cut');
+  assert.equal(r.howItStopped(null, true), 'none');
+});
+
+test('CK-927: the switch, one session a look, a note in the card, and what waits for the person stays', async () => {
+  const r = await import('../src/auto-resume.js');
+  const slug = project();
+  const a = await add(slug, 'cut');
+  const b = await add(slug, 'waits');
+  await move(a.key, 'doing');
+  await move(b.key, 'doing');
+  const sid = (n) => `cccccccc-${n}000-4000-8000-cccccccccccc`;
+  for (const [t, s] of [[a, sid(1)], [b, sid(2)]]) db.prepare("INSERT INTO task_sessions (task_id, session_id, first_seen, last_seen) VALUES (?, ?, '2026-10-31 10:00:00', '2026-10-31 10:00:01')").run(t.id, s);
+  const runs = [{ session: sid(2), claude: 'gone', tasks: [{ key: b.key, status: 'doing' }] }, { session: sid(1), claude: 'gone', board: true, ended: { lost: true }, tasks: [{ key: a.key, status: 'doing' }] }];
+  const told = [];
+  r.setResumeDeps({ runs: async () => ({ runs }), turn: async () => ({ open: true, items: [{ kind: 'tool', tool: 'Bash' }] }), folder: async () => folder, say: async (t, s, text) => { told.push([t.key, s, text]); } });
+  r.resetResume();
+  const notes = (x) => db.prepare("SELECT COUNT(*) AS n FROM task_comments WHERE task_id = ? AND author = 'board'").get(x.id).n;
+  const look = (now, ctx) => r.tickResume(app, now, ctx);
+  await look(1e12);
+  assert.equal(notes(a) + notes(b), 0, 'it went on with the switch off');
+  assert.equal(await inject('PUT', '/api/automations/extras', { resume: 'yes' }).then((x) => x.statusCode), 400);
+  const v = (await inject('PUT', '/api/automations/extras', { resume: true, launch: { permission: 'auto' } })).json();
+  assert.equal(v.extras.resume, true);
+  await look(1e12, { waiting: new Set([b.id]) });
+  assert.equal(notes(b), 0, 'a task that waits for the person was gone on with');
+  assert.equal(notes(a), 0, 'the card says it went on before Claude was told a word');
+  // `claude --resume` stands at its prompt: the board says the words once it is up, and only then it has gone on
+  const held = { waiting: new Set([b.id]) };
+  await look(1e12 + 2 * 60_000, held);
+  assert.equal(told.length, 0, 'words typed into a Claude not up yet');
+  runs[1] = { ...runs[1], claude: 'idle' };
+  await look(1e12 + 4 * 60_000, held);
+  assert.equal(told.length, 1, 'a Claude brought back was never told to go on');
+  assert.equal(told[0][1], sid(1));
+  assert.equal(notes(a), 1, 'the card does not say so');
+  await look(1e12 + 4 * 60_000 + 1000, {});
+  assert.equal(notes(b), 0, 'two looks within a minute');
+  await look(1e12 + 6 * 60_000, { limited: true });
+  assert.equal(notes(b), 0, 'it started at a used-up limit');
+  // a session of the Terminal from another folder cannot be brought back from the project's
+  r.setResumeDeps({ folder: async () => '/some/worktree' });
+  told.length = 0;
+  await look(1e12 + 8 * 60_000, {});
+  runs[0] = { ...runs[0], claude: 'idle' };
+  await look(1e12 + 10 * 60_000, {});
+  assert.equal(told.length, 0, 'a session of another folder was brought back');
+  r.setResumeDeps({ folder: async () => folder });
+  runs[0] = { ...runs[0], claude: 'gone' };
+  await look(1e12 + 12 * 60_000, {});
+  runs[0] = { ...runs[0], claude: 'idle' };
+  await look(1e12 + 14 * 60_000, {});
+  assert.equal(notes(b), 1);
+  // an open question: no Enter into it
+  r.resetResume();
+  told.length = 0;
+  runs.length = 0;
+  runs.push({ session: sid(4), claude: 'limit', board: true, tasks: [{ key: b.key, status: 'doing' }] });
+  await look(3e12, { limited: true });
+  runs[0] = { ...runs[0], claude: 'idle' };
+  await look(3e12 + 2 * 60_000, { waiting: new Set([b.id]) });
+  assert.equal(told.length, 0, 'the board typed over a question of Claude');
+  // a Claude stopped at the limit, alive in its terminal: told once the limit has reset
+  r.resetResume();
+  runs.length = 0;
+  runs.push({ session: sid(3), claude: 'limit', board: true, tasks: [{ key: a.key, status: 'doing' }] });
+  await look(2e12, { limited: true });
+  runs[0] = { ...runs[0], claude: 'idle' };
+  await look(2e12 + 2 * 60_000, {});
+  assert.equal(told.length, 1, 'a Claude stopped at the limit was not told to go on');
+  assert.equal(told[0][0], a.key);
+  const fake = (await inject('POST', '/api/launch', { mode: 'board', resume: sid(2), adopt: true, project: slug, keys: [b.key] })).statusCode;
+  assert.equal(fake, 404, 'a request from outside brought back a session the board did not start');
+  await inject('PUT', '/api/automations/extras', { resume: false });
+  r.resetResume();
+});
+
+test('CK-934: a restart of the board loses no words, and a limit line that stays does not hold them for good', async () => {
+  const r = await import('../src/auto-resume.js');
+  const slug = project();
+  const a = await add(slug, 'cut');
+  await move(a.key, 'doing');
+  const sid = 'cccccccc-9000-4000-8000-cccccccccccc';
+  const told = [];
+  const quiet = { turn: async () => ({ open: true, items: [] }), say: async (t, s, text) => { told.push([t.key, s, text]); } };
+  const runs = [{ session: sid, claude: 'limit', board: true, resets: '3pm', tasks: [{ key: a.key, status: 'doing' }] }];
+  r.setResumeDeps({ ...quiet, runs: async () => ({ runs }) });
+  r.resetResume();
+  await inject('PUT', '/api/automations/extras', { resume: true, launch: { permission: 'auto' } });
+  const stoppedAt = new Date(2026, 10, 2, 10, 0).getTime();
+  await r.tickResume(app, stoppedAt, { limited: true });
+  // the board restarts: a second copy of the module reads what the first one kept
+  const again = await import('../src/auto-resume.js?restart=1');
+  again.setResumeDeps({ ...quiet, runs: async () => ({ runs }) });
+  await again.tickResume(app, stoppedAt + 2 * 3600_000, {});
+  assert.equal(told.length, 0, 'told while the limit line stands and its moment has not come');
+  await again.tickResume(app, new Date(2026, 10, 2, 15, 1).getTime(), {});
+  assert.equal(told.length, 0, 'told within the grace after the moment');
+  await again.tickResume(app, new Date(2026, 10, 2, 15, 3).getTime(), {});
+  assert.equal(told.length, 1, 'the words are lost with the restart, or wait for a line that never goes');
+  assert.equal(told[0][0], a.key);
+  assert.equal(JSON.parse(db.prepare("SELECT value FROM kv WHERE key = 'automations.resume.stopped'").get().value)[sid], undefined, 'said words stay kept');
+  // the line stays after the words, and goes on naming the same moment: the chain of tries holds how many times
+  const late = new Date(2026, 10, 2, 15, 3).getTime();
+  for (let i = 1; i <= 8; i += 1) { await again.tickResume(app, late + i * 60_000, {}); await again.tickResume(app, late + i * 60_000 + 61_000, {}); }
+  assert.ok(told.length <= 3, `told ${told.length} times over one line`);
+  await inject('PUT', '/api/automations/extras', { resume: false });
+  again.resetResume();
+  r.resetResume();
+});
+
+test('CK-934: the moment a limit line names', async () => {
+  const { resetAfter } = await import('../src/auto-resume.js');
+  const since = new Date(2026, 10, 2, 22, 0).getTime();
+  assert.equal(resetAfter('11:30pm', since), new Date(2026, 10, 2, 23, 30).getTime());
+  assert.equal(resetAfter('12:50am', since), new Date(2026, 10, 3, 0, 50).getTime(), 'past today means tomorrow');
+  assert.equal(resetAfter('3pm', since), new Date(2026, 10, 3, 15, 0).getTime());
+  assert.equal(resetAfter('Nov 9 at 10am', since), new Date(2026, 10, 9, 10, 0).getTime());
+  assert.equal(resetAfter('Nov 9, 10am', since), new Date(2026, 10, 9, 10, 0).getTime());
+  assert.equal(resetAfter('Oct 9 at 10am', since), new Date(2027, 9, 9, 10, 0).getTime(), 'a date gone by means next year');
+  assert.equal(resetAfter('9pm', since - 6 * 3600_000), new Date(2026, 10, 2, 21, 0).getTime(), 'first seen after its moment: that moment, not the same hour tomorrow');
+  assert.equal(resetAfter(null, since), null);
+  assert.equal(resetAfter('soon', since), null);
+});
+
+test('CK-928: fix is for a repeating rule, with the words of the return', async () => {
+  assert.equal((await arm(project(), { fix: true })).statusCode, 400, 'fix without repeat');
+  assert.equal((await arm(project(), { repeat: true, fix: 'y' })).statusCode, 400);
+  assert.equal((await arm(project(), { repeat: true, fix: true })).statusCode, 400, 'fix without the words of the return');
+  const id = (await arm(project(), { repeat: true, fix: true, words: { ...WORDS, back: 'Return it.' } })).json().id;
+  assert.equal((await view()).rules.find((x) => x.id === id).fix, true);
+  await inject('DELETE', `/api/automations/${id}`);
+});
+
+test('CK-928: what the check returned goes back to work, two rounds a task, and the card says so', async () => {
+  const slug = project();
+  const id = (await arm(slug, { repeat: true, fix: true, delay_min: 0, words: { ...WORDS, back: 'Return it.' } })).json().id;
+  const t0 = Date.now() - 60_000; // the rule's check before the return, by the clock of the events
+  const [task] = await finishBatch(slug, t0);
+  await auto.tickAutomations(app, t0 + 2000);
+  assert.match(checks(slug)[0].description, /Return it\./, 'the check is not told how to return a task');
+  const notes = () => db.prepare("SELECT body FROM task_comments WHERE task_id = ? AND author = 'board' ORDER BY id").all(task.id).map((x) => x.body);
+  const returned = async (at) => {
+    await moveByCheck(slug, task.key, 'todo');
+    await auto.tickAutomations(app, at);
+  };
+  // the check still open: nothing goes
+  await returned(t0 + 3000);
+  assert.equal(notes().length, 0, 'a fix started beside the open check');
+  endCheck(slug);
+  await auto.tickAutomations(app, Date.now());
+  assert.equal(notes().length, 1, 'the returned task did not go back to work');
+  assert.match(notes()[0], / 1 \S+ 2\)/, 'the card does not say the round');
+  await auto.tickAutomations(app, Date.now() + 500);
+  assert.equal(notes().length, 1, 'the same return was started twice');
+  // second round
+  await new Promise((r) => { setTimeout(r, 1100); });
+  await move(task.key, 'doing'); await move(task.key, 'review');
+  await new Promise((r) => { setTimeout(r, 1100); });
+  await returned(Date.now() + 1000);
+  assert.equal(notes().length, 2);
+  assert.match(notes()[1], / 2 \S+ 2\)/);
+  // third return: it waits for the person, and says so once
+  await new Promise((r) => { setTimeout(r, 1100); });
+  await move(task.key, 'doing'); await move(task.key, 'review');
+  await new Promise((r) => { setTimeout(r, 1100); });
+  await returned(Date.now() + 2000);
+  assert.equal(notes().length, 3);
+  assert.doesNotMatch(notes()[2], / \d \S+ \d\)/, 'a third round started');
+  await auto.tickAutomations(app, Date.now() + 3000);
+  assert.equal(notes().length, 3, 'the end of the rounds was said twice');
+  assert.equal(rule(id).state, 'armed');
+  await inject('DELETE', `/api/automations/${id}`);
+});
+
+test('CK-928: a task marked ask, done by hand or moved back by the person stays the person\'s', async () => {
+  const slug = project();
+  const id = (await arm(slug, { repeat: true, fix: true, delay_min: 0, words: { ...WORDS, back: 'Return it.' } })).json().id;
+  const t0 = Date.now() - 60_000;
+  const [task] = await finishBatch(slug, t0);
+  await auto.tickAutomations(app, t0 + 2000);
+  const of = () => auto.returnedTasks(rule(id).project_id, Date.now() - 60_000, rule(id).task_id).map((x) => x.key);
+  await move(task.key, 'todo');
+  assert.deepEqual(of(), [], 'the person moved it back, and the board took it for the check\'s return');
+  await move(task.key, 'doing'); await move(task.key, 'review');
+  await inject('PATCH', `/api/tasks/${task.key}`, { labels_add: ['ask'] });
+  await moveByCheck(slug, task.key, 'todo');
+  assert.deepEqual(of(), [], 'an ask task was taken');
+  await inject('PATCH', `/api/tasks/${task.key}`, { labels_remove: ['ask'] });
+  assert.deepEqual(of(), [task.key]);
+  endCheck(slug);
+  await inject('DELETE', `/api/automations/${id}`);
+});
+
+// review: a refused start spent a round, and the task stood in To do with no word
+test('CK-928: a start refused spends no round and is tried again', async () => {
+  const slug = project();
+  const id = (await arm(slug, { repeat: true, fix: true, delay_min: 0, words: { ...WORDS, back: 'Return it.' } })).json().id;
+  const t0 = Date.now() - 60_000;
+  const [task] = await finishBatch(slug, t0);
+  await auto.tickAutomations(app, t0 + 2000);
+  await moveByCheck(slug, task.key, 'todo');
+  endCheck(slug);
+  db.prepare('UPDATE projects SET path = ? WHERE slug = ?').run('/no/such/folder', slug);
+  await auto.tickAutomations(app, Date.now());
+  assert.equal(rule(id).rounds, '{}', 'a start that did not happen spent a round');
+  assert.match(rule(id).error, /folder/);
+  db.prepare('UPDATE projects SET path = ? WHERE slug = ?').run(folder, slug);
+  await auto.tickAutomations(app, Date.now() + 60_000);
+  assert.equal(rule(id).rounds, '{}', 'tried again at once, every look');
+  await auto.tickAutomations(app, Date.now() + 6 * 60_000);
+  assert.equal(JSON.parse(rule(id).rounds)[task.id].n, 1, 'never tried again');
+  assert.equal(rule(id).error, null);
+  await inject('DELETE', `/api/automations/${id}`);
+});
+
+test('CK-929: which tasks a queue takes, and what holds it', () => {
+  const t = (key, over = {}) => ({ id: Number(key.slice(2)), key, status: 'todo', labels: [], ...over });
+  const list = [t('K-1'), t('K-2', { priority: 3 }), t('K-3', { labels: ['ask'] }), t('K-4', { labels: ['noclaude'] }), t('K-5', { blocked: 1 }), t('K-6', { labels: ['check'] }),
+    t('K-7', { status: 'backlog' }), t('K-8', { pinned: 1 }), t('K-9'), t('K-10'), t('K-11'), t('K-12')];
+  assert.deepEqual(auto.queueBatch(list), ['K-8', 'K-2', 'K-1', 'K-9', 'K-10'], 'pinned, then priority, at most five, no ask, no noclaude, no blocked, no check');
+  assert.deepEqual(auto.queueBatch(list, new Set([8, 2])), ['K-1', 'K-9', 'K-10', 'K-11', 'K-12'], 'a task a fix rule gave up on was taken');
+  const base = { tasks: [], back: [], check: null, live: {}, questions: new Set(), asks: new Set(), limited: false, now: Date.now(), batch: ['K-1'] };
+  assert.deepEqual(auto.queueJudge(base), { phase: 'ready', keys: ['K-1'] });
+  assert.equal(auto.queueJudge({ ...base, over: true }).reason, 'limit-high');
+  assert.equal(auto.queueJudge({ ...base, limited: true }).reason, 'limit-high');
+  assert.equal(auto.queueJudge({ ...base, check: 'K-9' }).reason, 'check-open');
+  assert.equal(auto.queueJudge({ ...base, back: ['K-2'] }).reason, 'sent-back');
+  assert.equal(auto.queueJudge({ ...base, batch: [] }).reason, 'queue-empty');
+  const old = { id: 2, key: 'K-2', status: 'doing', labels: [], updated_at: '2020-01-01 00:00:00' };
+  assert.deepEqual(auto.queueJudge({ ...base, tasks: [old], live: { 2: { claude: 'gone' } } }), { phase: 'held', reason: 'unfinished', keys: ['K-2'] }, 'a batch over work cut off');
+  assert.equal(auto.queueJudge({ ...base, tasks: [{ ...old, labels: ['noclaude'] }] }).phase, 'ready', 'a manual task in work holds the queue');
+  assert.equal(auto.queueJudge({ ...base, dayFull: true }).reason, 'day-cap');
+  assert.equal(auto.queueJudge({ ...base, tasks: [{ id: 1, key: 'K-1', status: 'doing', labels: [], updated_at: new Date().toISOString().slice(0, 19).replace('T', ' ') }] }).phase, 'working');
+});
+
+test('CK-929: a queue starts the batch after its pause, a project has one of a kind beside its check rule', async () => {
+  const slug = project();
+  const queue = { kind: 'todo-queue', delay_min: 1, words: { run: 'Run the skill', doTask: 'Do the tasks' } };
+  const id = (await arm(slug, queue)).json().id;
+  assert.equal((await arm(slug, queue)).statusCode, 409, 'two queues on a project');
+  assert.equal((await arm(slug)).statusCode, 201, 'a queue took the place of the check rule');
+  assert.equal(rule(id).repeat, 1, 'a queue stays');
+  const t = await add(slug, 'next');
+  const t0 = Date.now();
+  await auto.tickAutomations(app, t0);
+  assert.equal((await view()).rules.find((x) => x.id === id).phase, 'ready');
+  await auto.tickAutomations(app, t0 + 30_000);
+  assert.equal(JSON.parse(rule(id).fires).length, 0, 'it started before its pause was over');
+  await auto.tickAutomations(app, t0 + 61_000);
+  assert.equal(JSON.parse(rule(id).fires).length, 1, 'the batch did not start');
+  assert.equal(rule(id).state, 'armed');
+  assert.ok(t.key);
+  for (const r of (await view()).rules.filter((x) => x.project === slug && x.state === 'armed')) await inject('DELETE', `/api/automations/${r.id}`);
+});
+
+test('CK-929: a schedule runs at its time, once, and a run the sleeping Mac missed is skipped', async () => {
+  const at = new Date(2026, 9, 31, 3, 0).getTime(); // a Saturday
+  const plan = { at: '03:00', day: null };
+  assert.equal(auto.slotOf(plan, at - 1000), null, 'before its time');
+  assert.equal(auto.slotOf(plan, at), at);
+  assert.equal(auto.slotOf(plan, at + 9 * 60_000), at);
+  assert.equal(auto.slotOf(plan, at + auto.SLOT_WINDOW_MS), null, 'a missed run was started late');
+  assert.equal(auto.slotOf({ at: '03:00', day: 6 }, at), at);
+  assert.equal(auto.slotOf({ at: '03:00', day: 1 }, at), null, 'another day of the week');
+  const slug = project();
+  assert.equal((await arm(slug, { kind: 'schedule-check' })).statusCode, 400, 'a schedule without its time');
+  assert.equal((await arm(slug, { kind: 'schedule-check', plan: { at: '25:00' } })).statusCode, 400);
+  assert.equal((await arm(slug, { kind: 'schedule-check', plan: { at: '03:00', day: 9 } })).statusCode, 400);
+  const id = (await arm(slug, { kind: 'schedule-check', plan })).json().id;
+  await add(slug, 'in Review').then(async (x) => { await move(x.key, 'doing'); await move(x.key, 'review'); });
+  db.prepare("UPDATE tasks SET updated_at = datetime('now', '-1 day') WHERE project_id = ?").run(rule(id).project_id);
+  await auto.tickAutomations(app, at - 60_000);
+  assert.equal(checks(slug).length, 0, 'it ran before its time');
+  assert.equal((await view()).rules.find((x) => x.id === id).phase, 'planned');
+  await auto.tickAutomations(app, at + 20 * 60_000);
+  assert.equal(checks(slug).length, 0, 'a run the sleeping Mac missed was started');
+  await auto.tickAutomations(app, at + 1000);
+  assert.equal(checks(slug).length, 1, 'the run did not start at its time');
+  endCheck(slug);
+  await auto.tickAutomations(app, at + 2000);
+  assert.equal(checks(slug).length, 1, 'the same run went twice');
+  await auto.tickAutomations(app, at + 24 * 3600_000 + 1000);
+  assert.equal(checks(slug).length, 2, 'the next night did not run');
+  await inject('DELETE', `/api/automations/${id}`);
+});
+
+test('CK-929: the grooming of the backlog moves no task', async () => {
+  const at = new Date(2026, 9, 31, 3, 0).getTime();
+  const slug = project();
+  const id = (await arm(slug, { kind: 'schedule-groom', plan: { at: '03:00', day: 6 }, words: { run: 'Run the skill', groom: `Groom the backlog of ${slug} (grooming mode):` } })).json().id;
+  const b = await add(slug, 'an idea', 'backlog');
+  await auto.tickAutomations(app, at + 1000);
+  assert.equal(JSON.parse(rule(id).fires).length, 1, 'the grooming did not start');
+  assert.equal(db.prepare('SELECT status FROM tasks WHERE id = ?').get(b.id).status, 'backlog', 'a task moved');
+  await inject('DELETE', `/api/automations/${id}`);
+});
+
+test('CK-930: the summary tells what moved since the moment asked, without manual tasks and checks', async () => {
+  const slug = project();
+  const handed = await add(slug, 'handed');
+  const accepted = await add(slug, 'accepted');
+  const back = await add(slug, 'back');
+  const stuck = await add(slug, 'stuck');
+  const manual = await add(slug, 'by hand', 'todo', ['noclaude']);
+  const check = await add(slug, 'a check', 'todo', ['check']);
+  const since = Date.now() - 2000;
+  for (const x of [handed, accepted, back, stuck]) await move(x.key, 'doing');
+  const old = await add(slug, 'died long ago');
+  await move(old.key, 'doing');
+  db.prepare("INSERT INTO task_sessions (task_id, session_id, first_seen, last_seen) VALUES (?, 'a', datetime('now'), datetime('now'))").run(stuck.id);
+  db.prepare("INSERT INTO task_sessions (task_id, session_id, first_seen, last_seen) VALUES (?, 'b', '2020-01-01 00:00:00', '2020-01-01 00:00:00')").run(old.id);
+  db.prepare("INSERT INTO task_sessions (task_id, session_id, first_seen, last_seen) VALUES (?, 'c', datetime('now'), datetime('now'))").run(check.id);
+  await move(handed.key, 'review');
+  await move(accepted.key, 'review');
+  await inject('PATCH', `/api/tasks/${accepted.key}`, { status: 'done' });
+  await move(back.key, 'review');
+  await move(back.key, 'todo');
+  await move(manual.key, 'doing'); await move(manual.key, 'review');
+  await move(check.key, 'doing'); await move(check.key, 'review');
+  const s = await auto.awaySummary(since, [{ session: 's', claude: 'gone', tasks: [{ key: stuck.key, status: 'doing' }, { key: old.key, status: 'doing' }, { key: check.key, status: 'doing' }, { key: handed.key, status: 'review' }] }, { session: 't', claude: 'idle', tasks: [{ key: back.key, status: 'doing' }] }]);
+  const prefix = handed.key.split('-')[0];
+  const keys = (x) => x.tasks.map((t) => t.key).filter((k) => k.startsWith(`${prefix}-`)).sort();
+  assert.deepEqual(keys(s.handed), [handed.key], 'handed in');
+  assert.deepEqual(keys(s.accepted), [accepted.key], 'accepted');
+  assert.deepEqual(keys(s.returned), [back.key], 'returned');
+  assert.deepEqual(keys(s.stuck), [stuck.key], 'stuck');
+  assert.equal(s.stuck.tasks[0].title, 'stuck');
+  const later = await auto.awaySummary(Date.now() + 60_000, []);
+  assert.equal(keys(later.handed).length + keys(later.accepted).length + keys(later.returned).length, 0, 'moves before the moment asked are told');
+  assert.equal((await inject('GET', '/api/automations/summary')).statusCode, 400);
+  assert.equal((await inject('GET', '/api/automations/summary?since=x')).statusCode, 400);
+  assert.equal((await inject('GET', `/api/automations/summary?since=${since}`)).statusCode, 200);
+});
+
+test('CK-931: a CLAUDE.md past the norm gets a task in the backlog, once, and is not started', async () => {
+  const h = await import('../src/auto-health.js');
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'kb-heavy-')));
+  const small = realpathSync(mkdtempSync(join(tmpdir(), 'kb-small-')));
+  writeFileSync(join(dir, 'CLAUDE.md'), 'x'.repeat(40_001));
+  writeFileSync(join(small, 'CLAUDE.md'), 'x'.repeat(40_000));
+  const heavy = project(dir);
+  const fine = project(small);
+  const tasks = (slug) => db.prepare('SELECT t.* FROM tasks t JOIN projects p ON p.id = t.project_id WHERE p.slug = ?').all(slug);
+  let at = Date.now() + 1000;
+  await auto.tickAutomations(app, at);
+  assert.equal(tasks(heavy).length, 0, 'it looked with the switch off');
+  assert.equal((await inject('PUT', '/api/automations/extras', { health: 'yes' })).statusCode, 400);
+  const v = (await inject('PUT', '/api/automations/extras', { health: true })).json();
+  assert.equal(v.extras.health, true);
+  await auto.tickAutomations(app, at);
+  const made = tasks(heavy);
+  assert.equal(made.length, 1, 'the heavy file got no task');
+  assert.equal(made[0].status, 'backlog', 'the task was started, or not in the backlog');
+  assert.match(made[0].description, /CLAUDE\.md/);
+  assert.equal(tasks(fine).length, 0, 'a file at the norm got a task');
+  at += h.HEALTH_EVERY_MS + 1000;
+  await auto.tickAutomations(app, at);
+  assert.equal(tasks(heavy).length, 1, 'a second task beside the open one');
+  // the person cancelled it: not opened again; done with the file still heavy: opened again
+  db.prepare("UPDATE tasks SET status = 'cancelled' WHERE id = ?").run(made[0].id);
+  at += h.HEALTH_EVERY_MS + 1000;
+  await auto.tickAutomations(app, at);
+  assert.equal(tasks(heavy).length, 1, 'a task the person cancelled came back');
+  db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(made[0].id);
+  at += h.HEALTH_EVERY_MS + 1000;
+  await auto.tickAutomations(app, at);
+  assert.equal(tasks(heavy).length, 2, 'the file is still heavy after a task done');
+  await inject('PUT', '/api/automations/extras', { health: false });
+  for (const d of [dir, small]) rmSync(d, { recursive: true, force: true });
 });
 
 test('a project archived under a waiting rule takes the rule off; with nothing waiting a look does nothing', async () => {

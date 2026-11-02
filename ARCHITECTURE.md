@@ -8,7 +8,7 @@ How the board is built, for people changing its code. How to *use* the board is 
 These are deliberate and predate most of the features. Changes that break them need a good reason.
 
 - **Local-first.** One SQLite file on one machine. The server binds `127.0.0.1` and has no auth —
-  the machine is the trust boundary (the opt-in Wi-Fi door, `src/share.js`, admits the private network the computer is on). GitHub sync is optional and off until configured.
+  the machine is the trust boundary (the opt-in Wi-Fi door, `src/share.js`, admits whoever holds its key on the private network the computer is on). GitHub sync is optional and off until configured.
 - **No build step.** The frontend is vanilla ES modules served straight from `public/`. Edit a
   file, reload the page. No bundler, no transpiler, no framework.
 - **Three runtime dependencies** — Fastify 5, better-sqlite3, `@fastify/static`. Everything else is
@@ -42,7 +42,7 @@ These are deliberate and predate most of the features. Changes that break them n
 | `src/db.js` | opens the DB, runs migrations, exposes `db` and small kv/queue helpers |
 | `src/schema.sql` | DDL for a fresh install, replayed on every start (`CREATE TABLE IF NOT EXISTS`) |
 | `src/origin-guard.js` | rejects cross-origin and unexpected `Host` requests |
-| `src/share.js` + `src/qr.js` | Settings → Wi-Fi: an opt-in door that admits the private network (no secret in the address — a lost cookie used to lock a browser out; another site may only open the board as a page) and passes requests on to the loopback board; what stays the owner's (the computer's settings, windows on its screen) is refused to a guest twice — at the door by the decoded path and on the board by the route its router matched (`guestGuard`); the link's QR code |
+| `src/share.js` + `src/qr.js` | Settings → Wi-Fi: an opt-in door that admits the private network by a key (in the QR link or typed by hand on the door's page, so a browser that lost its pass is asked, not locked out; the browser keeps an HMAC of the key; plain HTTP: it keeps people out, it does not encrypt the traffic; another site may only open the board as a page) and passes requests on to the loopback board; what stays the owner's (the computer's settings, windows on its screen) is refused to a guest twice — at the door by the decoded path and on the board by the route its router matched (`guestGuard`); the link's QR code |
 | `src/bus.js` | in-process event bus + SSE connection ceiling |
 | `src/routes/tasks.js` | tasks, comments, checklists, attachments, links |
 | `src/routes/projects.js` | project registry, folders, categories, service status |
@@ -121,10 +121,12 @@ saves or deletes one from the board.
 ## Status model
 
 ```
-backlog → todo → prep → doing → deploy → review → done        (+ cancelled)
+backlog → todo → prep → doing → [ready →] deploy → review → done        (+ cancelled)
 ```
 
-The statuses model an agent's working loop, not a generic board. `prep` is study-before-code;
+The statuses model an agent's working loop, not a generic board. `ready` is off by default: with the
+switch of Settings → Statuses on (a project may say otherwise), a finished task stops there until the person
+says to ship it, and the server refuses a move into `deploy` past it, and `doing → review`. `prep` is study-before-code;
 `doing` and `deploy` are the only statuses where the work timer runs — and only while the task's Claude session is alive: a closed session stops it, a Claude back on the task starts it again (`src/work-clock.js`).
 
 Rules worth knowing before touching them:
@@ -335,7 +337,13 @@ project, and opens the open check's card instead while there is one.
 
 **Automations** (a section shown only while Settings → Claude Code switches them on) start that check without the
 press: a rule of a project says "once Claude has finished its work here, wait N minutes (3 by default) and check
-Review". A rule fires once and goes to the section's history. The server runs it (`src/automations.js`, a look every
+Review". A rule fires once and goes to the section's history, or, set to repeat, waits for the next batch: a repeating
+rule starts at most 10 checks a day, and at most 2 checks run on the board at once. Other kinds of rule start the next batch of To do once a project is finished, or run a
+check or the grooming of the backlog on a schedule. After eight hours of silence the board
+opens with a summary of what was handed in, accepted, returned or got stuck. Another switch opens a task in the backlog for a
+CLAUDE.md past its norm (`src/auto-health.js`). A switch of the section makes the
+board go on with interrupted sessions by itself (`src/auto-resume.js`): one a minute, at most 3 times in a row, never one
+that waits for the person. The server runs it (`src/automations.js`, a look every
 5 s), so the page may be closed. "Finished" is what opens ▶ of Review — no task of the project held by a Claude at work
 on it (`holdsCheck`) — after the project has had such work since the rule was set: a rule set on a quiet project
 waits for the next batch instead of checking what was already there. Nothing starts while something waits for the

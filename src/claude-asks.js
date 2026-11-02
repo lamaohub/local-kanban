@@ -56,11 +56,11 @@ export function taskOfSession(sid) {
   const focus = sessionWindows(sessionEvents(sid)).find((w) => w.to === null)?.task_id ?? null;
   const pick = `SELECT t.id, (p.prefix || '-' || t.task_no) AS key, p.slug AS project, t.status FROM tasks t JOIN projects p ON p.id = t.project_id`;
   if (focus !== null) {
-    const t = db.prepare(`${pick} WHERE t.id = ? AND t.status IN ('prep','doing','deploy','review')`).get(focus);
+    const t = db.prepare(`${pick} WHERE t.id = ? AND t.status IN ('prep','doing','ready','deploy','review')`).get(focus);
     if (t) return t;
   }
   return db.prepare(`${pick} JOIN task_sessions s ON s.task_id = t.id
-    WHERE s.session_id = ? AND t.status IN ('prep','doing','deploy','review') ORDER BY s.last_seen DESC, t.id DESC LIMIT 1`).get(sid) || null;
+    WHERE s.session_id = ? AND t.status IN ('prep','doing','ready','deploy','review') ORDER BY s.last_seen DESC, t.id DESC LIMIT 1`).get(sid) || null;
 }
 
 const publicShape = (a) => ({

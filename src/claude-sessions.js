@@ -1,4 +1,5 @@
 
+import { randomUUID } from 'node:crypto';
 import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { db } from './db.js';
@@ -9,7 +10,7 @@ export const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[
 export const HOST_SESSION_RE = /^local_[A-Za-z0-9-]{1,64}$/;
 
 // A write from a session counts as work on the task only while the task is in work or in review.
-const WORK_STATUSES = new Set(['prep', 'doing', 'deploy', 'review']);
+const WORK_STATUSES = new Set(['prep', 'doing', 'ready', 'deploy', 'review']);
 
 /** The session id kb sent with the request, or null. */
 export function requestSession(req) {
@@ -24,17 +25,19 @@ export function requestHostSession(req) {
 }
 
 /** Remember that the session worked on the task; nothing happens outside the working statuses.
-    `claim: false` — a note or a checkbox: a session the task already knows is refreshed, a new one is tied
-    only while no other session is tied to the task since it last came into work. A word left on somebody
-    else's task is not taking it over; a move of its status still is. */
+    `claim: false` — a note, a checkbox, an edit of a field: nothing changes while another session is the latest one
+    tied to the task since it last came into work, known to the task or not. A word left on somebody else's task is
+    not taking it over; a move of its status still is. */
 export function bindSession(taskId, status, sid, host = null, { claim = true } = {}) {
   if (!sid || !WORK_STATUSES.has(status)) return;
-  if (!claim && !db.prepare('SELECT 1 FROM task_sessions WHERE task_id = ? AND session_id = ?').get(taskId, sid)) {
+  if (!claim) {
     const work = [...WORK_STATUSES];
     const since = db.prepare(`SELECT created_at FROM task_events WHERE task_id = ? AND status NOT IN (${work.map(() => '?').join(',')})
       ORDER BY id DESC LIMIT 1`).get(taskId, ...work)?.created_at || '';
     // later than the move out of work: a note in the same second as that move is of the work before it
-    if (db.prepare('SELECT 1 FROM task_sessions WHERE task_id = ? AND last_seen > ?').get(taskId, since)) return;
+    const own = db.prepare('SELECT last_seen FROM task_sessions WHERE task_id = ? AND session_id = ?').get(taskId, sid)?.last_seen ?? '';
+    // the task is with the latest session of this round: only that one is refreshed by its word, a known one is not it
+    if (db.prepare('SELECT 1 FROM task_sessions WHERE task_id = ? AND session_id != ? AND last_seen > ? AND last_seen > ?').get(taskId, sid, since, own)) return;
   }
   db.prepare(`INSERT INTO task_sessions (task_id, session_id, host_session) VALUES (?, ?, ?)
     ON CONFLICT (task_id, session_id) DO UPDATE SET last_seen = datetime('now'),
@@ -133,6 +136,7 @@ export function tieLaunched(taskId, sid) {
 export function markBoardSession(sid) {
   db.prepare('INSERT OR IGNORE INTO board_sessions (session_id) VALUES (?)').run(sid);
 }
+export const ADOPT_TOKEN = randomUUID();
 export const isBoardSession = (sid) => Boolean(db.prepare('SELECT 1 FROM board_sessions WHERE session_id = ?').get(sid));
 
 const isFile = async (p) => { try { return (await stat(p)).isFile(); } catch { return false; } };

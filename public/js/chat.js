@@ -3,7 +3,7 @@ import { api, esc, ic, seg, tr } from './core.js';
 import { SHORT_MONTHS, copyText, resumeOnBoard, usageFmt } from './sse.js';
 import { matchKey, plural, setClaudeView } from './settings.js';
 import { refusalLine } from './unsaved.js';
-import { drawerIsFull, openDrawerFull, openLightbox, setDrawerFull, uploadAttachment } from './drawer.js';
+import { drawerIsFull, openDoc, openDrawerFull, openLightbox, setDrawerFull, uploadAttachment } from './drawer.js';
 import { NARROW, popLayer, pushLayer, styledConfirm } from './sidebar.js';
 import { MODELS, modelLabel, sameModel } from './chat-models.js';
 import { buildSelect } from './board.js';
@@ -17,7 +17,7 @@ const TURNS_STEP = 15;
 const STEP_KIND = {
   Bash: 'Runs', Read: 'Reads', Edit: 'Edits', MultiEdit: 'Edits', NotebookEdit: 'Edits', Write: 'Writes',
   Grep: 'Searches', Glob: 'Searches', Agent: 'Helper', Task: 'Helper', WebFetch: 'Web', WebSearch: 'Web',
-  Skill: 'Skill', AskUserQuestion: 'Asks',
+  Skill: 'Skill', AskUserQuestion: 'Asks', Workflow: 'Helper',
 };
 const drafts = new Map(); // task key → a message typed and not sent yet
 const draftImages = new Map();
@@ -74,8 +74,8 @@ export function dur(ms) {
   return m < 60 ? `${m} ${tr('min')}` : `${Math.floor(m / 60)} ${tr('h')} ${m % 60} ${tr('min')}`;
 }
 
-const HELPER_TOOLS = new Set(['Agent', 'Task']);
-const isHelper = (it) => HELPER_TOOLS.has(it.tool) || (it.tool === 'Skill' && it.running);
+const HELPER_TOOLS = new Set(['Agent', 'Task', 'Workflow']);
+const isHelper = (it) => HELPER_TOOLS.has(it.tool) || ((it.tool === 'Skill' || it.tool === 'SendMessage') && it.running);
 /** "06:04" of a moment the server sends (ISO), local time; '' for anything else. */
 function clockOf(iso) {
   const d = new Date(iso);
@@ -85,7 +85,7 @@ function clockOf(iso) {
 function stepRow(it, working = false) {
   const tail = it.running ? '' : [it.wrote ? timesWords(it.wrote, it.ms) : dur(it.ms), it.error ? '' : (it.ms !== undefined ? '✓' : '')].filter(Boolean).join(' ');
   const steps = it.helper ? `<span class="chat-step-n">${it.helper.steps} ${esc(plural(it.helper.steps, 'step', 'steps'))}</span>` : '';
-  const since = it.running ? clockOf(it.at) : '';
+  const since = it.running ? clockOf(it.since || it.at) : '';
   const bg = it.running ? `<span class="chat-bg">${working ? '<span class="chat-pulse"></span>' : ''}${esc(since ? `${tr('in the background since')} ${since}` : tr('in the background'))}</span>` : '';
   const what = it.pic ? `<button type="button" class="chat-step-t chat-pic" data-pic="${esc(it.pic)}" title="${esc(tr('Open the picture'))}">${ic('image', 12)}<span class="chat-pic-t">${esc(it.text)}</span></button>`
     : `<span class="chat-step-t">${esc(it.text)}</span>`;
@@ -96,9 +96,10 @@ function stepRow(it, working = false) {
     + (it.answer ? `<div class="chat-answer">↳ ${esc(it.answer)}</div>` : '');
 }
 
-/** What runs in the background in these turns: helpers and commands still going. */
-export function running(turns) {
-  const all = (turns || []).flatMap((t) => t.items.filter((it) => it.kind === 'tool' && it.running));
+const goingSteps = (d) => [...(d.going || []), ...(d.turns || []).flatMap((t) => t.items.filter((it) => it.kind === 'tool' && it.running))];
+/** What runs in the background: helpers and commands still going. */
+export function running(d) {
+  const all = goingSteps(d);
   return { helpers: all.filter(isHelper).length, commands: all.filter((it) => !isHelper(it)).length };
 }
 
@@ -226,6 +227,7 @@ export function turnFiles(items) {
     f.add += it.diff?.add || 0;
     f.del += it.diff?.del || 0;
     f.sure &&= Boolean(it.diff);
+    if (it.doc) f.doc = it.doc;
     by.set(it.text, f);
   }
   return [...by.values()];
@@ -242,8 +244,10 @@ function filesHTML(files, at, opened) {
     + `<span>${esc(tr('Files changed:'))} ${files.length}</span>${counts(add, del, files.every((f) => f.sure))}</button>`
     + (open ? `<div class="chat-unfold" data-of="${esc(id)}">` + files.map((f) => {
       const cut = f.file.lastIndexOf('/');
-      return `<div class="chat-file" title="${esc(f.file)}"><span class="chat-file-n">${esc(f.file.slice(cut + 1))}</span>`
-        + `<span class="chat-file-d">${esc(cut > 0 ? f.file.slice(0, cut) : '')}</span>${counts(f.add, f.del, f.sure)}</div>`;
+      const row = `<span class="chat-file-n">${esc(f.file.slice(cut + 1))}</span>`
+        + `<span class="chat-file-d">${esc(cut > 0 ? f.file.slice(0, cut) : '')}</span>${counts(f.add, f.del, f.sure)}`;
+      return f.doc ? `<button type="button" class="chat-file chat-file-doc" data-doc="${esc(f.doc)}" data-name="${esc(f.file.slice(cut + 1))}" title="${esc(tr('Read the file'))}">${row}</button>`
+        : `<div class="chat-file" title="${esc(f.file)}">${row}</div>`;
     }).join('') + '</div>' : '')
     + '</div>';
 }
@@ -285,7 +289,8 @@ export function turnHTML(t, { opened = new Set(), working = false, shot = null, 
     out += itemsHTML(t.items, t.at, { opened, working, live: working && Boolean(t.open) && !asking, pic });
     return `<div class="chat-turn" data-at="${esc(t.at)}">${out}</div>`;
   }
-  const last = t.items.at(-1)?.kind === 'text' ? t.items.at(-1) : null;
+  // background) folded all its text behind the bar, and the words on the screen went at the end of the turn
+  const last = t.items.findLast((it) => it.kind === 'text') || null;
   const said = (it) => it.kind === 'said' || answered(it); // the person's words stay in sight
   const log = t.items.filter((it) => it !== last && !said(it));
   const files = turnFiles(t.items);
@@ -315,6 +320,7 @@ export function localStamp(utc) {
   const two = (n) => String(n).padStart(2, '0');
   return `${d.getDate()} ${SHORT_MONTHS[d.getMonth()]} ${two(d.getHours())}:${two(d.getMinutes())}`;
 }
+const ASK_LEFT_LOOK_MS = 1500; // a form of the screen that went: the second look that gives its words back
 const AWAY_LOOK_MS = 5000; // a transcript not written yet (a Claude just started) is asked for again — nothing rings for it
 const LIT_LOOK_MS = 5000;
 const SENT_LOOK_MS = 1500;
@@ -322,7 +328,7 @@ const SENT_LOOK_MS = 1500;
 /** A step of the turn going on with no answer yet, or a helper at work: what Claude waits on — it writes nothing then. */
 const stepInHand = (d) => {
   const turn = d.turns?.at(-1);
-  return Boolean(turn?.open && turn.items.some((it) => it.kind === 'tool' && it.ms === undefined && !it.running)) || running(d.turns).helpers > 0;
+  return Boolean(turn?.open && turn.items.some((it) => it.kind === 'tool' && it.ms === undefined && !it.running)) || running(d).helpers > 0;
 };
 /** The moment the last line of a turn tells of: the transcript is silent from there on. 0 when there is none. */
 function lastMoment(turn) {
@@ -332,7 +338,7 @@ function lastMoment(turn) {
 
 export function workingLine(d, stuckSince = 0) {
   if (!(d.working || (d.send && d.state === 'busy'))) return '';
-  const { helpers, commands } = running(d.turns);
+  const { helpers, commands } = running(d);
   const turn = d.turns?.at(-1);
   const turnOn = Boolean(turn?.open);
   // the card's head) — it waits for the person; «Claude works» there had the owner ask it, and it said nothing ran
@@ -352,7 +358,7 @@ export function workingLine(d, stuckSince = 0) {
 export function liveHTML(d, stuckSince = 0) {
   const lit = workingLine(d, stuckSince);
   if (!lit) return '';
-  const going = (d.turns || []).flatMap((t) => t.items.filter((it) => it.kind === 'tool' && it.running));
+  const going = goingSteps(d);
   return `${going.length ? `<div class="chat-going">${going.map((it) => stepRow(it, true)).join('')}</div>` : ''}${lit}`;
 }
 
@@ -654,8 +660,14 @@ export function mountChat(box, { key = null, session = null, scroller = null, fu
     clearTimeout(c.helperTimer);
     if (lit) c.helperTimer = setTimeout(refresh, LIT_LOOK_MS);
     if (d.session && !d.away && d.turns.length) {
-      log.querySelectorAll('[data-code]').forEach((b) => { b.onclick = () => codeAction(c, b); });
+      log.querySelectorAll('[data-code]').forEach((b) => { b.onclick = (e) => { e.preventDefault(); codeAction(c, b); }; }); // a command inside a link: Copy does not follow it
       log.querySelectorAll('[data-shot]').forEach((b) => { b.onclick = () => openLightbox(b.dataset.shot); });
+      log.querySelectorAll('[data-doc]').forEach((b) => {
+        b.onclick = () => openDoc(b.dataset.name, async () => {
+          const r = await api('GET', `/api/tasks/${seg(c.key)}/chat/doc/${seg(b.dataset.doc)}?session=${encodeURIComponent(c.session)}`, undefined, { quiet: true });
+          return chatText(r.text);
+        }, (e) => refusalLine('The file could not be opened', e, tr));
+      });
       log.querySelectorAll('[data-pic]').forEach((b) => {
         b.onclick = (e) => { e.stopPropagation(); openLightbox(`/api/tasks/${seg(c.key)}/chat/picture/${seg(b.dataset.pic)}?session=${encodeURIComponent(c.session)}`); };
       });
@@ -785,6 +797,7 @@ export function mountChat(box, { key = null, session = null, scroller = null, fu
     grow();
     ready();
     c.refused = tr('The question is gone — answered in Claude\'s own window, or Claude stopped waiting. What you typed is back in the field.');
+    say(c.refused);
   }
   function answeredHere(a, body) {
     const key = c.key;
@@ -851,7 +864,14 @@ export function mountChat(box, { key = null, session = null, scroller = null, fu
     if (c.askId) { dropAsk(); setTimeout(() => { c.v = null; refresh(); }, ASK_GONE_MS); if (c.askFading) return; } // the form fades out first
     const on = Boolean(d.send && d.state === 'question' && (d.question || d.choice)) && !(Date.now() - (c.askGone || 0) < ASK_GONE_MS);
     ask.classList.toggle('hidden', !on);
-    if (!on) { keepTyped({ wait: Boolean(ask.querySelector('.ask-other')) }); ask.innerHTML = ''; c.choiceSig = null; return; }
+    if (!on) {
+      keepTyped({ wait: Boolean(ask.querySelector('.ask-other')) });
+      ask.innerHTML = '';
+      c.choiceSig = null;
+      // the words wait for a second look, and a Claude at its prompt rings nothing: this look must be asked for
+      if (c.screenLeft) { clearTimeout(c.leftTimer); c.leftTimer = setTimeout(() => { c.v = null; refresh(); }, ASK_LEFT_LOOK_MS); }
+      return;
+    }
     if (d.choice) { paintChoice(d.choice); return; }
     c.choiceSig = null;
     ask.classList.remove('form');
@@ -1080,6 +1100,7 @@ export function mountChat(box, { key = null, session = null, scroller = null, fu
     let pics = images();
     if ((!text && !pics.length) || !c.key || !c.data?.send) return;
     const key = c.key;
+    const sentKey = key;
     const sent = { text, images_n: pics.length, seen: new Set(userWords(c.data).map((w) => w.key)), at: Date.now(), qid: null };
     sentWords.set(key, [...(sentWords.get(key) || []), sent]);
     flyAway(text);
@@ -1092,6 +1113,7 @@ export function mountChat(box, { key = null, session = null, scroller = null, fu
     c.follow = true;
     paint();
     const back = () => {
+      const key = sent.moved || sentKey;
       sentWords.set(key, (sentWords.get(key) || []).filter((w) => w !== sent));
       // the field of the task on the page now — this chat's, or a column's of the same task when the card went elsewhere
       const shown = c.key === key ? c : [...mounted].find((o) => o.key === key);
@@ -1113,7 +1135,8 @@ export function mountChat(box, { key = null, session = null, scroller = null, fu
       r = await api('POST', `/api/tasks/${seg(key)}/chat`, { text, ...(pics.length ? { images: pics.map((p) => p.id) } : {}), ...(now ? { now: true } : {}) }, { quiet: true });
     } catch (e) {
       back();
-      if (key !== c.key) { refusedFor.set(key, refusalLine('Not sent', e, tr)); return; } // said when the person is back
+      const home = sent.moved || key;
+      if (home !== c.key) { refusedFor.set(home, refusalLine('Not sent', e, tr)); return; } // said when the person is back
       c.refused = refusalLine('Not sent', e, tr);
       note.textContent = c.refused;
       note.classList.remove('hidden');
@@ -1382,6 +1405,27 @@ export function mountChat(box, { key = null, session = null, scroller = null, fu
     paintImages();
     refresh();
   };
+  c.moveOn = (k, session) => {
+    if (k === c.key) return true;
+    if (images().length) return false;
+    // this field's words, not the task's draft: the card may show the old task, with words of its own
+    const words = input.value;
+    if (words && drafts.get(c.key) === words) drafts.delete(c.key);
+    if (words) drafts.set(k, intoField(drafts.get(k) || '', words));
+    const going = sentWords.get(c.key);
+    if (going) {
+      for (const w of going) w.moved = k; // refused later, they come back here (`back` in send)
+      sentWords.delete(c.key);
+      sentWords.set(k, [...(sentWords.get(k) || []), ...going]);
+    }
+    c.key = k;
+    c.asked = session; // a session picked in the chat's list is of the old task: asked of this one it is a 404
+    c.v = null;
+    const field = drafts.get(k) || '';
+    if (input.value !== field) { input.value = field; grow(); ready(); }
+    refresh();
+    return true;
+  };
   c.show = (on) => {
     const was = c.shown;
     c.shown = on;
@@ -1389,7 +1433,7 @@ export function mountChat(box, { key = null, session = null, scroller = null, fu
     if (on && (c.stale || !c.data)) refresh();
     if (was !== on && c.askId) renderAsks();
   };
-  c.destroy = () => { closeMenu(true); document.removeEventListener?.(FULL_EVENT, onFull); mounted.delete(c); sizes?.disconnect(); sc.removeEventListener('scroll', onScroll); document.removeEventListener?.('scroll', onSectionScroll, true); askWatch?.disconnect(); if (c.askId) { c.askId = null; renderAsks(); } clearTimeout(c.awayTimer); clearTimeout(c.helperTimer); clearTimeout(c.sentTimer); box.innerHTML = ''; };
+  c.destroy = () => { closeMenu(true); document.removeEventListener?.(FULL_EVENT, onFull); mounted.delete(c); sizes?.disconnect(); sc.removeEventListener('scroll', onScroll); document.removeEventListener?.('scroll', onSectionScroll, true); askWatch?.disconnect(); if (c.askId) { c.askId = null; renderAsks(); } clearTimeout(c.awayTimer); clearTimeout(c.helperTimer); clearTimeout(c.leftTimer); clearTimeout(c.sentTimer); box.innerHTML = ''; };
   mounted.add(c);
   input.value = drafts.get(key) || '';
   paint();

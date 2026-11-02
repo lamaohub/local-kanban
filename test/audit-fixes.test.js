@@ -26,7 +26,7 @@ test('CK-798: a checklist item typed and left at once goes to its own task — o
   const sent = [];
   const timers = [];
   const ctx = {
-    state: { drawerKey: 'DEMO-1' }, drawerChecklist: [{ id: 7, text: '' }], clSaveTimers: {}, clSending: new Set(),
+    state: { drawerKey: 'DEMO-1' }, drawerChecklist: [{ id: 7, text: '' }], clSaveTimers: {}, clSending: new Set(), clOnWay: new Map(), clInTurn: (k, go) => go(),
     api: async (method, url, body) => { sent.push([method, url, body.text]); },
     patchChecklistItem: (key, id, body) => ctx.api('PATCH', `/api/tasks/${key}/checklist/${id}`, body),
     seg: (s) => encodeURIComponent(String(s)), refusalText: () => ({}), sayRefused: () => {},
@@ -152,8 +152,8 @@ test('CK-809: the link lines are clipped below the column heads', () => {
   const board = code(read('js/board.js'));
   const draw = fnBody(board, 'export function drawLinks(');
   assert.match(draw, /const body = board\.querySelector\('\.col-body'\);/);
-  assert.match(draw, /<clipPath id="link-clip"><rect x="0" y="\$\{top\}"/, 'the lines run over the column heads again');
-  assert.match(draw, /<g clip-path="url\(#link-clip\)">\$\{html\}<\/g>/, 'the lines are not inside the clip');
+  assert.match(draw, /writeLines\(svg, lines, \{ y: top, /, 'the lines run over the column heads again');
+  assert.match(read('js/link-lines.js'), /<g clip-path="url\(#\$\{CLIP\}\)">/, 'the lines are not inside the clip');
 });
 
 test('CK-811: a start off the board shows no board skeleton and no task search', () => {
@@ -233,7 +233,7 @@ test('CK-792: on a phone the back gesture closes what stands over the card, then
     pushState(st) { pushed.push(st); this.state = st; }, replaceState(st) { this.state = st; }, back() {},
   };
   const ctx = {
-    history, NARROW: '(max-width: 760px)', drawerShown: () => true, watchLayers: () => {}, layersOpen: () => false,
+    history, NARROW: '(max-width: 760px)', drawerShown: () => true, watchLayers: () => {}, layersOpen: () => false, onPhone: () => false,
     closeTopLayer: () => (layers ? (layers -= 1, true) : false), closeDrawer: () => { closed += 1; },
     window: { addEventListener: (t, fn) => { if (t === 'popstate') pop = fn; } },
     document: { querySelector: (q) => (q === '.kbsel.open' && listOpen ? {} : null) }, closeOpenSelect: () => { listOpen = false; },

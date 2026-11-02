@@ -34,7 +34,7 @@ function projectValues(p) {
   const values = {
     name: (p.name || '').trim(), description: (p.description || '').trim(), category: p.category || 'Other',
     pinned: p.pinned ? 1 : 0, deploy_skill: (p.deploy_skill || '').trim() || null,
-    pm2_services: pm2.length ? JSON.stringify(pm2) : null,
+    pm2_services: pm2.length ? JSON.stringify(pm2) : null, ready_gate: p.ready_gate ?? null,
   };
   for (const field of Object.keys(FIELDS)) values[field] = (p[field] || '').trim() || null;
   return values;
@@ -46,7 +46,7 @@ function readProjectForm() {
   const values = {
     name: $('ps-name').value.trim(), description: $('ps-desc').value.trim(), category,
     pinned: $('ps-pinned').checked ? 1 : 0, deploy_skill: (selVal($('ps-skill')) || '').trim() || null,
-    pm2_services: pm2.length ? JSON.stringify(pm2) : null,
+    pm2_services: pm2.length ? JSON.stringify(pm2) : null, ready_gate: READY_VALUE[selVal($('ps-ready'))] ?? null,
   };
   for (const [field, id] of Object.entries(FIELDS)) values[field] = $(id).value.trim() || null;
   return values;
@@ -122,6 +122,10 @@ export async function renderProjectSettings(force) {
           <div class="kbsel" id="ps-skill"></div>
           <small class="ps-hint" id="ps-skill-hint">${tr('the skill Claude follows to ship this project; “deploy” is the shared one. A new one is created in Settings → Skills.')}</small>
         </div>
+        <div class="pp-field">${tr('Before shipping')}
+          <div class="kbsel" id="ps-ready"></div>
+          <small class="ps-hint">${tr('whether a finished task waits in Ready to ship for your word')}</small>
+        </div>
       </div>
     </div>
 
@@ -148,6 +152,7 @@ export async function renderProjectSettings(force) {
   $('ps-pm2').value = parsePm2Services(p.pm2_services).join(', ');
   $('ps-domain').value = p.domain || '';
   buildSkillSelect(p, null);
+  buildReadySelect(p);
   loadSkillOptions(p);
   buildCatSelect(cur, cats);
 
@@ -188,6 +193,11 @@ export function skillOptions(cur, list) {
   }))];
 }
 
+const READY_VALUE = { board: null, on: 1, off: 0 };
+function buildReadySelect(p) {
+  const value = p.ready_gate === 1 ? 'on' : p.ready_gate === 0 ? 'off' : 'board';
+  buildSelect($('ps-ready'), { value, options: [{ value: 'board', label: tr('as in Settings') }, { value: 'on', label: tr('wait for the word') }, { value: 'off', label: tr('ship right away') }] });
+}
 function buildSkillSelect(p, list) {
   const host = $('ps-skill');
   if (!host) return;

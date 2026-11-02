@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 let tmp, state, db, enqueue, drain, LABELS;
-const STATUSES = ['backlog', 'todo', 'prep', 'doing', 'deploy', 'review', 'done', 'cancelled'];
+const STATUSES = ['backlog', 'todo', 'prep', 'doing', 'ready', 'deploy', 'review', 'done', 'cancelled'];
 
 before(async () => {
   tmp = mkdtempSync(join(tmpdir(), 'kb-test-'));

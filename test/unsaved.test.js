@@ -197,6 +197,7 @@ test('the project page and the skill editor see a change typed into them, and on
   const box = { $: (id) => els[id] || null, changedFields, selVal: (host) => host.dataset.value, skillSel: null, psSnap: null, out: {} };
   vm.runInNewContext([
     project.slice(fieldsAt, project.indexOf('};', fieldsAt) + 2),
+    project.slice(project.indexOf('const READY_VALUE = {'), project.indexOf('};', project.indexOf('const READY_VALUE = {')) + 2),
     take(project, 'function readProjectForm('),
     take(project, 'export function projectSettingsDirty('),
     take(read('settings.js'), 'export function skillDirty('),
@@ -212,13 +213,16 @@ test('the project page and the skill editor see a change typed into them, and on
 
   assert.equal(box.out.project(), false, 'no project page is open');
   box.psSnap = { name: 'Board', description: 'desc', category: 'Other', pinned: 1, deploy_skill: null, pm2_services: null,
-    path: '/work/board', server: null, server_path: null, domain: null };
+    path: '/work/board', server: null, server_path: null, domain: null, ready_gate: null };
   Object.assign(els, {
     projset: el(), 'ps-name': el({ value: 'Board' }), 'ps-desc': el({ value: 'desc' }), 'ps-category': el({ dataset: { value: 'Other' } }),
-    'ps-category-new': el(), 'ps-pinned': el({ checked: true }), 'ps-skill': el({ dataset: { value: '' } }), 'ps-pm2': el(),
+    'ps-category-new': el(), 'ps-pinned': el({ checked: true }), 'ps-skill': el({ dataset: { value: '' } }), 'ps-ready': el({ dataset: { value: 'board' } }), 'ps-pm2': el(),
     'ps-path': el({ value: '/work/board' }), 'ps-server': el(), 'ps-spath': el(), 'ps-domain': el(),
   });
   assert.equal(box.out.project(), false, 'a project page filled from the project and not touched counts as unsaved');
+  els['ps-ready'].dataset.value = 'on';
+  assert.equal(box.out.project(), true, 'CK-894: the word of a project on shipping counts as saved');
+  els['ps-ready'].dataset.value = 'board';
   els['ps-name'].value = 'Board renamed';
   assert.equal(box.out.project(), true, 'a renamed project counts as saved: a new board version would reload the tab over it');
   els.projset.classList.contains = (c) => c === 'hidden';

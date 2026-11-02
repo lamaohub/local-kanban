@@ -155,7 +155,7 @@ test('the back gesture of a phone closes the card and stays on the page; ✕ tak
     closeTopLayer: () => { const top = layers.pop(); if (!top) return false; top(); return true; },
     closeDrawer: () => { shown = false; box.dropBack(); },
     document: { querySelector: () => null }, closeOpenSelect: () => {},
-    watchLayers: () => {}, layersOpen: () => false,
+    watchLayers: () => {}, layersOpen: () => false, onPhone: () => false,
   };
   box.globalThis = box;
   const at = drawer.indexOf("const CARD_STEP = 'kbCard';");

@@ -1,5 +1,6 @@
 
-import { $, ALL, ALL_STATUSES, api, DONE_LIMIT, esc, ic, LABEL_COLORS, LABEL_SELECTABLE, noteUnsaved, popoverPlacement, PRI_ICON, PRI_LEVELS, seg, state, tr } from './core.js';
+import { lineOutOfSight, writeLines } from './link-lines.js';
+import { $, ALL, ALL_STATUSES, readyInUse, statusesFor, api, DONE_LIMIT, esc, ic, LABEL_COLORS, LABEL_SELECTABLE, noteUnsaved, popoverPlacement, PRI_ICON, PRI_LEVELS, seg, state, tr } from './core.js';
 import { markKbCursor, openCardMenu, openDrawer, openDrawerNew, openMovePicker, setKbCursor, statusOptionList } from './drawer.js';
 import { columnComparator, DEFAULT_SORT, dropPatch, orderColumn, slotBefore, sortMode } from './order.js';
 import { inSearch } from './live-rules.js';
@@ -14,6 +15,7 @@ import { autoSlot } from './automations.js';
 import { paintAttention } from './attention.js';
 import { refusalLine } from './unsaved.js';
 import { localStore } from './store.js';
+import { SHIP_TITLES, SHIP_WORDS, notOnMain, showsShip } from './shipped-rules.js';
 
 function matchesSearch(t) {
   return inSearch(t, { search: state.search, applied: state.searchApplied, hits: state.searchHits });
@@ -93,10 +95,32 @@ export function repaintCheckButton() {
   if (btn) checkHead.appendChild(btn);
 }
 
+const SHIP_KEY = 'kb.ui.reviewNotMain';
+const SHIP_EVERY_MS = 30000;
+const shipFilter = () => localStore.getItem(SHIP_KEY) === '1';
+function setShipFilter(on) { try { localStore.setItem(SHIP_KEY, on ? '1' : '0'); } catch { /* the storage is off: the filter stays as it was */ } }
+let shipAsked = { slug: null, at: 0, flying: false };
+function askShipped() {
+  const now = Date.now();
+  if (shipAsked.flying || !state.tasks.some((t) => showsShip(t.status))) return;
+  if (shipAsked.slug === state.slug && now - shipAsked.at < SHIP_EVERY_MS) return;
+  shipAsked = { slug: state.slug, at: now, flying: true };
+  const asked = state.slug;
+  api('GET', `/api/shipped${asked === ALL ? '' : `?project=${encodeURIComponent(asked)}`}`, undefined, { quiet: true })
+    .then((r) => {
+      if (asked !== state.slug || JSON.stringify(r.tasks) === JSON.stringify(state.shipped)) return;
+      state.shipped = r.tasks;
+      renderBoard();
+    })
+    .catch(() => { /* the card says nothing: it is a hint, not a state of the task */ })
+    .finally(() => { shipAsked.flying = false; });
+}
+const gateHere = () => (state.slug === ALL ? state.projects.some((p) => p.ship_gate) : Boolean(state.projects.find((p) => p.slug === state.slug)?.ship_gate));
 function columnHead(key, tasks, mode, labels) {
   const head = document.createElement('div');
   head.className = 'col-head';
   head.innerHTML = `<span class="dot s-${key}"></span>${labels[key]} <span class="n">${tasks.length}</span>`;
+  if (key === 'ready' && !gateHere()) head.title = tr('The switch is off: the column goes once it is empty');
   if (tasks.length > 1 || mode !== DEFAULT_SORT) {
     const sort = document.createElement('button');
     sort.className = `btn-icon col-sort${mode !== DEFAULT_SORT ? ' on' : ''}`;
@@ -104,6 +128,14 @@ function columnHead(key, tasks, mode, labels) {
     sort.title = mode === DEFAULT_SORT ? tr('Sort the column') : tr(SORT_LABELS[mode]);
     sort.onclick = (e) => { e.stopPropagation(); openColSortMenu(sort, key); };
     head.appendChild(sort);
+  }
+  if (key === 'review' && (shipFilter() || tasks.some((t) => state.shipped[t.key]))) {
+    const ship = document.createElement('button');
+    ship.className = `btn-icon col-sort col-ship${shipFilter() ? ' on' : ''}`;
+    ship.innerHTML = ic('branch', 13);
+    ship.title = tr(shipFilter() ? 'Showing what is not on main: show all' : 'Show only what is not on main');
+    ship.onclick = (e) => { e.stopPropagation(); setShipFilter(!shipFilter()); renderBoard(); };
+    head.appendChild(ship);
   }
   if (CREATABLE.has(key)) {
     const add = document.createElement('button');
@@ -185,10 +217,12 @@ export function renderBoard() {
   const animate = prevCardIds.size > 0 && sameBoard;
   const labels = Object.fromEntries(ALL_STATUSES);
   const columns = ALL_STATUSES.map(([k]) => k)
-    .filter((k) => k !== 'cancelled' || state.tasks.some((t) => t.status === 'cancelled'));
+    .filter((k) => (k !== 'cancelled' || state.tasks.some((t) => t.status === 'cancelled'))
+      && (k !== 'ready' || readyInUse(state.slug) || state.tasks.some((t) => t.status === 'ready')));
   const plan = columns.map((key) => {
     const mode = colSort(key);
-    return { key, mode, tasks: orderColumn(state.tasks.filter((t) => t.status === key && matchesSearch(t)), mode, colOrderOpts(key)) };
+    const hidden = key === 'review' && shipFilter() ? (t) => !notOnMain(t, state.shipped) : () => false;
+    return { key, mode, tasks: orderColumn(state.tasks.filter((t) => t.status === key && matchesSearch(t) && !hidden(t)), mode, colOrderOpts(key)) };
   });
   const newIds = new Set(plan.flatMap((c) => c.tasks.map((t) => t.id)));
   const oldNodes = new Map();
@@ -222,6 +256,9 @@ export function renderBoard() {
       return node && node._kbSig === parts.sig ? node : cardEl(t, parts);
     });
     if (CREATABLE.has(key)) want.push(body.querySelector(':scope > .col-add-ghost') || columnGhost(key, labels));
+    // what left goes first: otherwise `ref` stands on it, and every card below it is moved one by one
+    const wanted = new Set(want);
+    for (const node of [...body.children]) if (!wanted.has(node)) node.remove();
     let ref = body.firstChild;
     for (const node of want) {
       if (node === ref) { ref = ref.nextSibling; continue; }
@@ -255,6 +292,7 @@ export function renderBoard() {
   prevCardIds = newIds;
   prevRenderSlug = state.slug;
 
+  askShipped();
   scheduleDrawLinks();
   markKbCursor();
   markSelection();
@@ -407,7 +445,7 @@ export function drawLinks() {
   const linesOn = getSetting('linkLines') !== false;
   const cardEls = new Map();
   for (const el of board.querySelectorAll('.card')) cardEls.set(Number(el.dataset.id), el);
-  let html = '';
+  const lines = [];
   for (const t of state.tasks) {
     for (const other of (t.linked_ids || [])) {
       const pair = t.id < other ? `${t.id}.${other}` : `${other}.${t.id}`;
@@ -422,6 +460,7 @@ export function drawLinks() {
       }
       const ra = elA.getBoundingClientRect();
       const rb = elB.getBoundingClientRect();
+      if (lineOutOfSight(ra, rb, br)) continue;
       const acx = (ra.left + ra.right) / 2 - br.left;
       const bcx = (rb.left + rb.right) / 2 - br.left;
       let ax, ay, bx, by, c1x, c1y, c2x, c2y;
@@ -440,15 +479,12 @@ export function drawLinks() {
         const k = Math.max(22, Math.min(70, Math.abs(bx - ax) * 0.3));
         c1x = ax; c1y = ay + k; c2x = bx; c2y = by + k;
       }
-      const d = `M ${ax} ${ay} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${bx} ${by}`;
-      html += `<path class="link-line" d="${d}"/>`;
+      lines.push([pair, `M ${ax} ${ay} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${bx} ${by}`]);
     }
   }
   const body = board.querySelector('.col-body');
   const top = body ? Math.max(0, body.getBoundingClientRect().top - br.top) : 0;
-  const lines = html && `<clipPath id="link-clip"><rect x="0" y="${top}" width="${br.width}" height="${Math.max(0, br.height - top)}"/></clipPath>`
-    + `<g clip-path="url(#link-clip)">${html}</g>`;
-  if (svg._kbLines !== lines) { svg._kbLines = lines; svg.innerHTML = lines; }
+  writeLines(svg, lines, { y: top, width: br.width, height: Math.max(0, br.height - top) });
 
   // projects» each frame (590 changes of the page per frame) made the scroll of a phone stutter
   for (const el of board.querySelectorAll('.card-link')) {
@@ -473,7 +509,7 @@ export const WORKING = new Set(['prep', 'doing', 'deploy']);
 export function taskIsNoclaude(t) { return isManual(t); }
 const CREATABLE = new Set(['backlog', 'todo']);
 const NO_DIRECT_FROM = new Set(['backlog', 'todo']);
-const NO_DIRECT_TO = new Set(['review', 'done']);
+const NO_DIRECT_TO = new Set(['ready', 'review', 'done']);
 
 export function moveBlocked(from, to, { manual = false, isNew = false } = {}) {
   if (isNew) return CREATABLE.has(to) ? null : tr('new tasks go to “Backlog” or “To do” only');
@@ -572,7 +608,7 @@ export async function multiAction(act, btn) {
   if (!tasks.length) return;
   if (act === 'clear') { clearSelection(); return; }
   if (act === 'status') {
-    const opts = ALL_STATUSES.map(([v, lab]) => {
+    const opts = statusesFor(state.slug, tasks.some((t) => t.status === 'ready') ? 'ready' : null).map(([v, lab]) => {
       const dis = tasks.every((t) => moveBlocked(t.status, v, { manual: taskIsNoclaude(t) }));
       return `<div class="cm-opt${dis ? ' disabled' : ''}" data-v="${v}"><span class="dot s-${v}"></span>${lab}</div>`;
     }).join('');
@@ -794,6 +830,7 @@ function cardParts(t) {
     + (atLimit(t) ? ' limited' : '');
   const draggable = taskIsNoclaude(t) || !DRAG_LOCKED.has(t.status);
   const pri = PRI_ICON[t.priority];
+  const ship = showsShip(t.status) ? state.shipped[t.key] : null;
   const linkedKeys = (t.linked_ids || []).map((id) => state.tasks.find((x) => x.id === id)?.key).filter(Boolean);
   const html = `
     ${t.pinned ? `<span class="card-pin" title="${esc(tr('needs attention'))}">${ic('pin', 12)}</span>` : ''}
@@ -805,6 +842,7 @@ function cardParts(t) {
     <div class="card-foot">
       ${liveBadge(t)}
       ${workTimer(t)}
+      ${ship ? `<span class="card-ship ship-${ship}" title="${esc(tr(SHIP_TITLES[ship]))}">${tr(SHIP_WORDS[ship])}</span>` : ''}
       ${stale ? `<span class="chip-stale" title="${tr('no movement — the chat is probably closed')}">${tr('stuck')} ${stale}${tr('h')}</span>` : ''}
       ${pri ? `<span class="pri ${pri[1]}" title="${esc(tr('priority:'))} ${pri[2]}">${pri[0]}</span>` : ''}
       ${t.labels.map(labelChip).join('')}

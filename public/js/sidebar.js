@@ -32,10 +32,21 @@ function sayProjectsFailed(e) {
     : 'The list of projects did not load: the server did not answer. The board tries again by itself in a few seconds.'))}</span><button type="button" class="btn-ghost board-note-retry">${esc(tr('Try now'))}</button>`;
   el.querySelector('button').onclick = () => { refresh().catch(() => {}); };
   box.appendChild(el);
+  // on a phone the sidebar is closed: the notice of the topbar says it where the eye is
+  const badge = $('load-badge');
+  if (badge) {
+    badge.textContent = tr('projects did not load');
+    badge.title = el.querySelector('span').textContent;
+    badge.onclick = () => { refresh().catch(() => {}); };
+    badge.classList.remove('hidden');
+    badge.dataset.projects = '1';
+  }
 }
 
 export async function loadProjects() {
   try { state.projects = await api('GET', '/api/projects'); } catch (e) { if (!e?.aborted) sayProjectsFailed(e); throw e; }
+  const badge = $('load-badge');
+  if (badge?.dataset.projects) { delete badge.dataset.projects; badge.onclick = null; badge.classList.add('hidden'); }
   try { state.folders = await api('GET', '/api/projects/folders'); } catch {  }
   try { state.categories = await api('GET', '/api/categories'); } catch {  }
   const openable = [ALL, DASH, NOW, REVIEW, DONE, AUTO, HEALTH, SETTINGS, HORIZON, CALENDAR, CHAOS].filter((s) => !HIDDEN_SECTIONS.includes(s));
@@ -164,8 +175,10 @@ function putScreenBack(screen) {
 function showLoadNotice(n) {
   const el = $('load-badge');
   if (!el) return;
+  if (!n && el.dataset.projects) return; // the tasks came, the list of projects still did not: that word stays
   el.classList.toggle('hidden', !n);
   if (!n) return;
+  delete el.dataset.projects;
   el.textContent = tr(n.label);
   el.title = tr(n.title);
   if (!el.onclick) el.onclick = () => retryLoad();
@@ -267,7 +280,7 @@ export function renderSidebar() {
     box.appendChild(el);
   }
 
-  const totalActive = state.projects.reduce((s, p) => s + (p.c_todo || 0) + (p.c_prep || 0) + (p.c_doing || 0) + (p.c_deploy || 0) + (p.c_review || 0), 0);
+  const totalActive = state.projects.reduce((s, p) => s + (p.c_todo || 0) + (p.c_prep || 0) + (p.c_doing || 0) + (p.c_ready || 0) + (p.c_deploy || 0) + (p.c_review || 0), 0);
   const allEl = document.createElement('div');
   allEl.className = 'proj proj-all' + (state.slug === ALL ? ' active' : '');
   allEl.innerHTML = `${navIc('grid')}<span class="proj-name">${tr('All projects')}</span>

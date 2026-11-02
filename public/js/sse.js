@@ -230,15 +230,15 @@ function realTransition(ev, to) {
   return !!prev && prev !== to;
 }
 function maybeReviewSound(ev) {
-  if (realTransition(ev, 'review')) playReviewSound();
+  if (realTransition(ev, 'review') || realTransition(ev, 'ready')) playReviewSound();
 }
 
 function maybeReviewNotify(ev) {
   if (!getSetting('notifyReview')) return;
   if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
-  if (!realTransition(ev, 'review')) return;
+  if (!realTransition(ev, 'review') && !realTransition(ev, 'ready')) return;
   try {
-    const notif = new Notification(tr('A task is ready for review'), {
+    const notif = new Notification(tr(ev.data.status === 'ready' ? 'A task waits for your word to ship' : 'A task is ready for review'), {
       body: `${ev.data.key} · ${ev.data.title || ''}`,
       icon: '/icon-192.png',
       tag: `kb-review-${ev.data.id}`,

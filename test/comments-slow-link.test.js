@@ -214,7 +214,8 @@ function sendForm() {
   const box = {
     $: (id) => els[id], state: { drawerKey: 'VV-1' }, seg: (s) => s, Map, Date: { now: () => box.now }, now: 1000, Infinity,
     api: (method, path, body) => new Promise((ok) => { posts.push({ body, ok }); }),
-    sayRefused: () => {}, queueComment: () => {}, commentDrafts: new Map(), autoGrow: () => {},
+    sayRefused: () => {}, queued: [], queueComment: (key, body, token) => box.queued.push(token), commentDrafts: new Map(), autoGrow: () => {},
+    tokens: 0, commentToken: () => `t${++box.tokens}`,
     arrived: [], commentArrived: (key, cm) => box.arrived.push(cm.id),
     shown: [], showOwnComment: (key, id) => box.shown.push(id),
   };
@@ -260,6 +261,24 @@ test('CK-841: a send that never answers does not lock the field of the task for 
   f.box.now += 15000; // the first one still hangs
   f.els['c-send'].onclick();
   assert.equal(f.posts.length, 2, 'a hung request keeps the person from ever sending a comment on the task');
+  assert.equal(f.posts[1].body.client_key, f.posts[0].body.client_key, 'CK-935: the same text sent again past the hold is a second comment');
+});
+
+test('CK-935: the queue gets the key of the first send; after an answer the same words are a new comment', async () => {
+  const f = sendForm();
+  f.box.api = (method, path, body) => { f.posts.push({ body }); return Promise.reject(Object.assign(new Error('Failed to fetch'), { offline: true })); };
+  f.els['c-input'].value = 'hello';
+  f.els['c-send'].onclick();
+  await settle();
+  assert.deepEqual(f.box.queued, [f.posts[0].body.client_key], 'the resend goes under another key: a lost answer gives two comments');
+  const g = sendForm();
+  g.els['c-input'].value = 'hello';
+  g.els['c-send'].onclick();
+  g.posts[0].ok({ id: 7 });
+  await settle();
+  g.els['c-input'].value = 'hello';
+  g.els['c-send'].onclick();
+  assert.notEqual(g.posts[1].body.client_key, g.posts[0].body.client_key, 'the person wrote the same words again on purpose');
 });
 
 test('CK-841: ⌘/Ctrl+Enter in a new task does nothing while the task is being created', () => {
@@ -296,7 +315,7 @@ test('CK-839: the edits go one at a time — an older answer cannot land over a 
   await other;
   // both PATCHes of the card's edits go through it
   const save = drawer.slice(drawer.indexOf('async function doAutosaveOnce('), drawer.indexOf('async function createTask('));
-  assert.match(save, /await editInTurn\(key, \(\) => api\('PATCH', `\/api\/tasks\/\$\{seg\(key\)\}`, body\)\)/, 'the autosave sends its edit beside the ones before it');
+  assert.match(save, /await editInTurn\(key, \(\) => api\('PATCH', `\/api\/tasks\/\$\{seg\(key\)\}`, withBase\(\)\)\)/, 'the autosave sends its edit beside the ones before it');
   const resend = drawer.slice(drawer.indexOf('async function resendTaskEdit('), drawer.indexOf('const unsentCreates = '));
   assert.match(resend, /await editInTurn\(key, \(\) => api\('PATCH', `\/api\/tasks\/\$\{seg\(key\)\}`, sent\)\)/, 'the resend of an edit races the autosave');
 });
@@ -342,7 +361,7 @@ test('CK-844: what did not reach the server is sent again by itself, less and le
 
 test('CK-839: an edit that never answers holds the next one of its task only for a while', async () => {
   assert.equal(TURN_WAIT_MS, 15000);
-  const inTurn = createTurns(30);
+  const inTurn = createTurns(400);
   const order = [];
   inTurn('VV-1', () => { order.push('hung'); return new Promise(() => {}); });
   const next = inTurn('VV-1', async () => { order.push('next'); return 'saved'; });

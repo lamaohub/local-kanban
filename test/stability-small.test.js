@@ -116,6 +116,8 @@ test('a broken keymap or setting of another kind reads as the default', async ()
   assert.equal(box.custom('search'), null, 'an entry that is not a binding counts');
   assert.equal(box.custom('newTask'), null, 'a binding without a key code counts');
   assert.equal(box.custom('deleteCard').code, 'KeyD', 'a good binding is lost');
+  store.set('kb.set.keymap', '{"newTask":{"code":""}}');
+  assert.equal(box.custom('newTask'), null, 'an empty key code counts, and the action has no key and no label');
   store.set('kb.set.theme', '7');
   assert.equal(box.get('theme'), 'light', 'a theme that is a number is not read as the default');
   store.set('kb.set.sound', 'false');

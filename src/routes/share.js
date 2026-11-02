@@ -1,6 +1,6 @@
 import { emit } from '../bus.js';
 import { isPreviewBoard } from '../config.js';
-import { isGuest, setShare, shareState } from '../share.js';
+import { isGuest, resetShare, setShare, shareState } from '../share.js';
 import { fromBoardPage } from './claude.js';
 
 export default async function shareRoutes(app) {
@@ -20,5 +20,10 @@ export default async function shareRoutes(app) {
     const st = await setShare(on);
     emit('share.updated', { on: st.on });
     return st;
+  });
+
+  app.post('/api/share/reset', (req, reply) => {
+    if (ownerOnly(req, reply)) return reply;
+    return resetShare();
   });
 }

@@ -12,9 +12,11 @@ export const TURNS_MAX = 200;
 const isObj = (x) => Boolean(x) && typeof x === 'object' && !Array.isArray(x);
 const INTERRUPTED = /^\[Request interrupted by user/;
 const HELPER_TOOLS = new Set(['Agent', 'Task']);
+const HELPER_LIVE_MS = 10 * 60_000;
+const WAKE_LOOK_MS = 2 * 3600_000;
 
-/** The end of background work Claude Code tells Claude about: {id, status, ms?, steps?} of the step that started it. */
 const NOTE_ID = /<tool-use-id>([^<\s]+)<\/tool-use-id>/;
+const NOTE_TASK = /<task-id>([^<\s]+)<\/task-id>/;
 const NOTE_STATUS = /<status>([^<\s]+)<\/status>/;
 export function notification(d) {
   let text = null;
@@ -27,9 +29,10 @@ export function notification(d) {
   }
   if (typeof text !== 'string' || !text.trimStart().startsWith('<task-notification>')) return null;
   const id = NOTE_ID.exec(text)?.[1];
-  if (!id) return null;
+  const task = NOTE_TASK.exec(text)?.[1];
+  if (!id && !task) return null;
   return {
-    id, status: NOTE_STATUS.exec(text)?.[1] || 'completed',
+    ...(id ? { id } : {}), ...(task ? { task } : {}), status: NOTE_STATUS.exec(text)?.[1] || 'completed',
     ...(Number.isFinite(usage?.durationMs) ? { ms: usage.durationMs } : {}),
     ...(Number.isFinite(usage?.toolUses) ? { steps: usage.toolUses } : {}),
   };
@@ -66,6 +69,20 @@ export function pictureOf(path) {
   const ext = /\.([a-z0-9]+)$/i.exec(path)?.[1]?.toLowerCase();
   return ext && PICTURE_TYPES[ext] ? path : null;
 }
+const EDIT_STEPS = new Set(['Write', 'Edit', 'MultiEdit']);
+export const DOC_MAX = 2 * 1024 * 1024; // a report, not a data dump: a window would hang on more
+export const isMarkdown = (path) => /\.(md|markdown)$/i.test(String(path));
+export function markdownOf(name, path) {
+  return EDIT_STEPS.has(name) && typeof path === 'string' && path.startsWith('/') && !path.includes('\0') && isMarkdown(path) ? path : null;
+}
+/** The Markdown file a step of this transcript changed — by the step's id; null when there is no such step. */
+export async function chatDoc(path, toolId) {
+  const c = path ? await itemsOf(path) : null;
+  const step = c?.items.find((it) => it.kind === 'tool' && it.id === toolId && it.markdown);
+  const done = step && c.items.find((it) => it.kind === 'result' && it.id === toolId);
+  return done && !done.error ? step.markdown : null;
+}
+
 /** The picture file a step of this transcript read — by the step's id; null when there is no such step. */
 export async function chatPicture(path, toolId) {
   const c = path ? await itemsOf(path) : null;
@@ -312,7 +329,8 @@ export function chatItems(d) {
     const shots = [];
     const said = [];
     // what Claude Code writes after a step is of the line's one result — with several, it is nobody's
-    const size = blocks.filter((b) => b?.type === 'tool_result').length === 1 ? editSize(d.toolUseResult) : null;
+    const single = blocks.filter((b) => b?.type === 'tool_result').length === 1;
+    const size = single ? editSize(d.toolUseResult) : null;
     for (const b of blocks) {
       if (b?.type === 'image') {
         images++;
@@ -330,7 +348,8 @@ export function chatItems(d) {
         const went = b.is_error ? null : wentBackground(d, b);
         const task = went || d.toolUseResult?.backgroundTaskId || /with ID: (\w+)/.exec(text)?.[1];
         const given = isObj(d.toolUseResult) && isObj(d.toolUseResult.answers) ? d.toolUseResult.answers : null;
-        out.push({ at, kind: 'result', id: b.tool_use_id, error: Boolean(b.is_error), text, ...(task ? { task: String(task) } : {}), ...(went !== null ? { bg: true } : {}), ...(size ? { diff: size } : {}), ...(given ? { given } : {}) });
+        const label = went !== null && single && isObj(d.toolUseResult) && typeof d.toolUseResult.summary === 'string' ? clip(d.toolUseResult.summary, 160) : '';
+        out.push({ at, kind: 'result', id: b.tool_use_id, error: Boolean(b.is_error), text, ...(task ? { task: String(task) } : {}), ...(went !== null ? { bg: true } : {}), ...(label ? { label } : {}), ...(size ? { diff: size } : {}), ...(given ? { given } : {}) });
       }
     }
     if (said.length || images) out.unshift({ at, kind: 'user', text: clip(said.join('\n\n')), ...(images ? { images } : {}), ...(shots.length ? { shots } : {}) });
@@ -341,7 +360,8 @@ export function chatItems(d) {
         const text = toolSummary(b.name, b.input || {});
         const asked = b.name === 'AskUserQuestion' ? askedOf(b.input) : null;
         const picture = b.name === 'Read' ? pictureOf(b.input?.file_path) : null;
-        if (text !== null) out.push({ at, kind: 'tool', id: b.id, tool: b.name, text, ...(inBackground(b.input) ? { bg: true } : {}), ...(asked?.length ? { asked } : {}), ...(picture ? { picture } : {}) });
+        const markdown = markdownOf(b.name, b.input?.file_path);
+        if (text !== null) out.push({ at, kind: 'tool', id: b.id, tool: b.name, text, ...(inBackground(b.input) ? { bg: true } : {}), ...(asked?.length ? { asked } : {}), ...(picture ? { picture } : {}), ...(markdown ? { markdown } : {}) });
         const stops = STOPS.has(b.name) ? b.input?.task_id ?? b.input?.shell_id : undefined;
         if (stops) out.push({ at, kind: 'halt', task: String(stops) });
       }
@@ -396,27 +416,46 @@ export function chatTurns(items) {
     }
     before = it.at;
   }
+  const runTime = (call, at) => (call.before || 0) + Math.max(0, at - (call.resumed ?? call.at));
+  const revive = (call, at) => {
+    call.before = (call.before || 0) + (call.ms || 0);
+    call.resumed = at;
+    call.running = true;
+    call.error = false;
+    delete call.ms;
+    delete call.steps;
+    delete call.ended;
+  };
   for (const it of items) {
-    const call = (it.kind === 'result' || it.kind === 'notified') && calls.get(it.id);
+    // pass, in the order of the transcript: a stop before a helper was brought back does not end the run after it
+    if (it.kind === 'halt') {
+      const stopped = byTask.get(it.task);
+      if (stopped?.running) { stopped.running = false; stopped.ms = runTime(stopped, it.at); }
+      continue;
+    }
+    const call = it.kind === 'notified' ? byTask.get(it.task) || calls.get(it.id) : it.kind === 'result' && calls.get(it.id);
     if (!call) continue;
     if (it.kind === 'notified') {
+      // Claude Code writes a notification when it takes it, with the moment it came: one from before the helper was
+      // brought back ended the run before, not this one
+      if (it.at < (call.resumed ?? -Infinity)) continue;
       call.running = false;
       call.error = it.status === 'failed';
-      call.ms = it.ms ?? Math.max(0, it.at - call.at);
+      call.ms = it.ms !== undefined ? (call.before || 0) + it.ms : runTime(call, it.at);
+      if (it.status === 'completed') call.ended = it.at;
       if (it.steps !== undefined) call.steps = it.steps;
       continue;
     }
     call.error = it.error;
-    if (it.bg && !call.bg) { call.bg = true; call.running = true; }
+    if (it.label) call.text = it.label;
+    const brought = it.bg && it.task ? byTask.get(it.task) : null;
+    if (brought) revive(brought, it.at);
+    else if (it.bg && !call.bg) { call.bg = true; call.running = true; }
     if (call.bg) { if (it.error) call.running = false; if (it.task) byTask.set(it.task, call); continue; } // launched only: its end comes as a notification
     call.ms = Math.max(0, it.at - call.at);
     if (it.diff && !it.error) call.diff = it.diff;
     if (call.tool === 'AskUserQuestion' && it.text) call.answer = it.text;
     if (call.tool === 'AskUserQuestion' && !it.error) { const qa = answersOf(call.asked, it.given, it.text); if (qa) call.answers = qa; }
-  }
-  for (const it of items) {
-    const call = it.kind === 'halt' && byTask.get(it.task);
-    if (call?.running) { call.running = false; call.ms = Math.max(0, it.at - call.at); }
   }
   const turns = [];
   let cur = null;
@@ -522,21 +561,30 @@ export async function transcriptChat(path, { turns = TURNS_DEFAULT } = {}) {
   const all = c.built;
   const n = Math.min(TURNS_MAX, Math.max(1, turns));
   const shown = all.slice(-n);
-  const wanted = new Set(shown.flatMap((t) => t.items.filter((it) => it.kind === 'tool' && HELPER_TOOLS.has(it.tool)).map((it) => it.id)));
+  const isHelper = (it) => it.kind === 'tool' && HELPER_TOOLS.has(it.tool);
+  // One that ended counts only for a while: reading every helper of a long session to see if it woke costs too much
+  const clock = Date.now();
+  const older = all.slice(0, Math.max(0, all.length - n)).flatMap((t) => t.items.filter((it) => isHelper(it) && (it.running || clock - (it.ended ?? 0) < WAKE_LOOK_MS)));
+  const wanted = new Set([...shown.flatMap((t) => t.items.filter(isHelper)), ...older].map((it) => it.id));
   let helpers = new Map();
   if (wanted.size) try { helpers = await helpersOf(path, wanted); } catch { /* a helper we cannot read is left out */ }
-  const out = shown.map((t) => ({
-    ...t,
-    at: new Date(t.at).toISOString(),
-    items: t.items.map(({ id, steps, asked, picture, ...it }) => {
-      const h = helpers.get(id);
-      // the steps Claude Code counted when the helper ended, else its transcript's
-      const helper = h || steps !== undefined ? { steps: steps ?? h.steps, ...(it.running && h?.now ? { now: h.now } : {}) } : null;
-      return { ...it, at: new Date(it.at).toISOString(), ...(helper ? { helper } : {}), ...(picture && !it.error && it.ms !== undefined ? { pic: id } : {}) };
-    }),
-  }));
+  const fresh = (id) => clock - (helpers.get(id)?.last ?? 0) < HELPER_LIVE_MS;
+  const stepOut = ({ id, steps, asked, picture, markdown, before, resumed, ended, ...it }) => {
+    const h = helpers.get(id);
+    // too). While it writes: one that woke and went with its Claude leaves no second end
+    const woke = !it.running && ended !== undefined && h?.last > ended && fresh(id);
+    if (woke) { it.running = true; delete it.ms; }
+    const since = it.running ? (woke ? ended : resumed) : undefined;
+    // the steps Claude Code counted when the helper ended, else its transcript's
+    const helper = h || steps !== undefined ? { steps: woke ? h.steps : steps ?? h.steps, ...(it.running && h?.now ? { now: h.now } : {}) } : null;
+    return { ...it, at: new Date(it.at).toISOString(), ...(since !== undefined ? { since: new Date(since).toISOString() } : {}), ...(helper ? { helper } : {}), ...(picture && !it.error && it.ms !== undefined ? { pic: id } : {}),
+      ...(markdown && !it.error && it.ms !== undefined ? { doc: id } : {}) };
+  };
+  const out = shown.map((t) => ({ ...t, at: new Date(t.at).toISOString(), items: t.items.map(stepOut) }));
+  // one that wrote nothing for a while is not counted: a Claude gone with the machine leaves no end of its helpers
+  const going = older.filter((it) => fresh(it.id)).map(stepOut).filter((it) => it.running);
   const waiting = c.waits.map((w) => ({ text: w.text, at: new Date(w.at).toISOString() }));
-  return { turns: out, earlier_n: Math.max(0, all.length - n), model: c.model || null, waiting };
+  return { turns: out, ...(going.length ? { going } : {}), earlier_n: Math.max(0, all.length - n), model: c.model || null, waiting };
 }
 
 export const chatHash = (o) => createHash('sha1').update(JSON.stringify(o)).digest('hex').slice(0, 20);

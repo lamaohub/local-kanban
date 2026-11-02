@@ -238,7 +238,7 @@ function card({ open = 'VV-1' } = {}) {
     els,
   };
   vm.runInNewContext([
-    'var drawerLocked = false; var drawerChecklist = [{ id: 5, text: "a", done: false }]; var clSaveTimers = {}; var clSending = new Set();',
+    'var drawerLocked = false; var drawerChecklist = [{ id: 5, text: "a", done: false }]; var clSaveTimers = {}; var clSending = new Set(); var clOnWay = new Map(); var clInTurn = (k, go) => go();',
     'const clUnsent = new Map(); let clNoteShown = false; const clQueueKey = (key, id) => `cl:${key}:${id}`;',
     take('function clNote('),
     take('function clSaved('),

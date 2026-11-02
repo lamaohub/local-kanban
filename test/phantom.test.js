@@ -1,5 +1,6 @@
 // types answers into it and stops it. Pinned here against a real tmux on a private socket, with a stand-in
 // for claude that logs where it runs, what it was given and every byte it reads.
+import { wholeAnswer } from '../public/js/term-delta.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -149,7 +150,7 @@ const ruleMatches = (rule, cmd) => {
 test('Claude inside the board moves a task through the working columns without asking and closes none', () => {
   assert.ok(ruleMatches('Bash(git log * main)', 'git log --oneline main') && ruleMatches('Bash(npm run *)', 'npm run'), 'the matcher is not the one of the docs');
   const free = (cmd) => phantom.BOARD_ALLOWED.some((r) => ruleMatches(r, cmd));
-  for (const st of ['backlog', 'todo', 'prep', 'doing', 'deploy', 'review']) assert.ok(free(`kb mv CK-12 ${st}`), `kb mv CK-12 ${st} asks`);
+  for (const st of ['backlog', 'todo', 'prep', 'doing', 'ready', 'deploy', 'review']) assert.ok(free(`kb mv CK-12 ${st}`), `kb mv CK-12 ${st} asks`);
   for (const st of ['done', 'dn', 'cancelled', 'cancel', 'c']) assert.ok(!free(`kb mv CK-12 ${st}`), `kb mv CK-12 ${st} went without asking`);
   for (const cmd of ['kb done CK-12', 'kb cancel CK-12', 'kb rm CK-12']) assert.ok(!free(cmd), `${cmd} went without asking`);
   for (const cmd of ['kb ls', 'kb take demo', 'kb review CK-12 "a note"']) assert.ok(free(cmd), `${cmd} asks`);
@@ -442,6 +443,12 @@ test('a look at a screen that has not changed is a short answer, and any look is
   assert.notEqual(changed.v, full.v);
   assert.match(changed.screen, /\? for shortcuts$/);
   assert.deepEqual(changed.links, full.links);
+  const delta = await look(`?seen=${full.v}&delta=1`);
+  assert.equal(delta.screen, undefined, 'the whole screen came again');
+  assert.equal(delta.delta.of, full.v);
+  const whole = wholeAnswer(delta, full, full.v);
+  assert.equal(whole.screen, (await look()).screen);
+  assert.ok((await look(`?seen=0123456789abcdef0123&delta=1`)).screen, 'a mark the board does not hold gets the whole screen');
 });
 
 test('an answer is typed as it is, an Enter goes apart from it, and several lines go in as one paste', { skip }, async () => {
@@ -1170,7 +1177,7 @@ test('the Terminal tab looks again only once its last look came back, and gets t
   assert.doesNotMatch(drawer, /setInterval\(pollTerminal/, 'a look goes out before the last one came back');
   assert.match(drawer, /async function termTick\(chain\) \{\n  await pollTerminal\(\);\n  if \(chain === termChain\) termSchedule\(TERM_POLL_MS, chain\);/,
     'the next look is not timed from the answer to the last one');
-  assert.match(drawer, /if \(termSeen\) q\.set\('seen', termSeen\);/, 'the card does not say which screen it has');
+  assert.match(drawer, /if \(termSeen\) \{ q\.set\('seen', termSeen\); q\.set\('delta', '1'\); \}/, 'the card does not say which screen it has');
   assert.match(drawer, /if \(r\.same\) return;\n  termSeen = r\.v \|\| null;\n  renderTerminal\(r\);/);
   // the card of another task starts with no screen and no `seen` of the last one — none of the three had a guard
   assert.match(drawer, /if \(n !== termReq \|\| key !== termKey \|\| key !== state\.drawerKey\) return;/, 'the screen of the last task is drawn in the card of the next');

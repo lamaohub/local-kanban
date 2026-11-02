@@ -1,3 +1,4 @@
+import { gateOfBoard, setGateOfBoard } from '../ready-gate.js';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, readdirSync, createReadStream, createWriteStream, existsSync, readFileSync, rmSync } from 'node:fs';
@@ -12,8 +13,8 @@ import { listBackups, backupNow, backupPath, backupState, ATTACH_MIRROR } from '
 import { inspectBackup, startPreview, stopPreview, currentPreview, UPLOAD_PREFIX } from '../restore.js';
 import { langOverride, ghOwnerEnv, ghRepoEnv, launchDryRun, PORT } from '../config.js';
 import { claudeWord, launchOptions, launchProblem, launchSpec, runLaunch } from '../launch.js';
-import { TMUX_COMMAND_MAX, boardProblem, folderTrusted, phantomAvailable, phantomPane, phantomSpec, phantomStop, runPhantom, taskTerminal, tmuxBin, tmuxCommandBytes } from '../phantom.js';
-import { freshTerminalSessions, isBoardSession, markBoardSession, markResumed, prepHolder, tieLaunched } from '../claude-sessions.js';
+import { TMUX_COMMAND_MAX, boardProblem, claudeAtPrompt, folderTrusted, lookedLately, markTaskless, phantomAvailable, phantomPane, phantomSpec, phantomStop, runPhantom, taskTerminal, tmuxBin, tmuxCommandBytes } from '../phantom.js';
+import { ADOPT_TOKEN, freshTerminalSessions, isBoardSession, markBoardSession, markResumed, prepHolder, tieLaunched } from '../claude-sessions.js';
 import { CHECK_LABEL, OPEN_CHECK, doneRules, isCheck, leadCheck } from '../review-check.js';
 import { liveTick, readRegistry } from '../claude-live.js';
 import { freeFolderFor, resolveProject } from './projects.js';
@@ -316,6 +317,21 @@ export default async function systemRoutes(app) {
   const uiVersion = () => frontVersion(join(ROOT_DIR, 'public'));
   app.get('/api/ui-version', () => ({ mtime: uiVersion() }));
 
+  // `left_n` — the tasks of the column in projects that do not wait: those the column goes without once they are gone
+  const flowView = () => ({
+    ready_gate: gateOfBoard(),
+    ready_n: db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE status = 'ready'").get().n,
+    left_n: db.prepare("SELECT COUNT(*) AS n FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.status = 'ready' AND COALESCE(p.ready_gate, ?) = 0").get(gateOfBoard() ? 1 : 0).n,
+  });
+  app.get('/api/flow', flowView);
+  app.put('/api/flow', (req, reply) => {
+    const on = req.body?.ready_gate;
+    if (typeof on !== 'boolean') return reply.code(400).send({ error: 'ready_gate: true or false' });
+    setGateOfBoard(on);
+    emit('project.updated', { flow: true });
+    return flowView();
+  });
+
   app.get('/api/about', async () => {
     const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
     const stat = (p) => { try { return statSync(p); } catch { return null; } };
@@ -495,6 +511,9 @@ export default async function systemRoutes(app) {
     }
     return null;
   };
+  const ROOM_TRIES = 8; // a task has few terminals: more means tmux did not close them
+  const restsAtPrompt = async (sid) => !lookedLately(sid) && !db.prepare(`SELECT 1 FROM task_sessions s JOIN tasks t ON t.id = s.task_id
+    WHERE s.session_id = ? AND t.status IN ('prep','doing','deploy') LIMIT 1`).get(sid) && (await claudeAtPrompt(sid)) === 'idle';
   const launchTasks = (keys, p) => {
     const tasks = (keys || []).map((k) => resolveTask(k));
     if (tasks.some((t) => !t)) return { code: 404, error: 'task not found' };
@@ -577,7 +596,13 @@ export default async function systemRoutes(app) {
       const running = [];
       const unsure = [];
       for (const t of tasks) {
-        const term = await taskTerminal(t.id, { strict: true });
+        let term = await taskTerminal(t.id, { strict: true });
+        // returned the task, the last round) makes room, or the fix waited for its terminal for up to six hours. Only the fix of
+        // an automation asks for it (`adopt` would not do: a resume sends that too), and never over a terminal being looked at
+        for (let i = 0; i < ROOM_TRIES && b.makeRoom === ADOPT_TOKEN && term?.session && !term.unknown && !term.dead && await restsAtPrompt(term.session); i += 1) {
+          await phantomStop(term.session);
+          term = await taskTerminal(t.id, { strict: true });
+        }
         if (term?.unknown) unsure.push(t.key); else if (term && !term.dead) running.push(t.key);
       }
       if (running.length) return reply.code(409).send({ error: `Claude of the board already works on ${running.join(', ')}`, running });
@@ -604,6 +629,7 @@ export default async function systemRoutes(app) {
         return reply.code(500).send({ error: failureReason(res.text, res.err.message) });
       }
       markBoardSession(sid);
+      if (b.noTasks === ADOPT_TOKEN) markTaskless(sid);
       const prep = moveLaunched(tasks, sid, 'board');
       await tieUnheld(tasks, sid, prep); // and the card of each task finds the terminal at once
       if (prep.length) liveTick();
@@ -620,7 +646,7 @@ export default async function systemRoutes(app) {
     // of a check (`kb done`) on a Claude that never worked on it
     const tied = tasks.length > 0 && db.prepare('SELECT COUNT(DISTINCT task_id) AS n FROM task_sessions WHERE session_id = ? AND task_id IN (SELECT value FROM json_each(?))')
       .get(sid, JSON.stringify(tasks.map((t) => t.id))).n === new Set(tasks.map((t) => t.id)).size;
-    if (!tied || !isBoardSession(sid)) return reply.code(404).send({ error: 'resume: no session of the board for these tasks', reason: 'no-session' });
+    if (!tied || !(isBoardSession(sid) || b.adopt === ADOPT_TOKEN)) return reply.code(404).send({ error: 'resume: no session of the board for these tasks', reason: 'no-session' });
     // one session, one start (acceptance): its two tasks show «Continue» each, the lock of the keys lets both presses
     // through, both see the terminal dead — and the second failed on tmux's «duplicate session» or stopped the fresh Claude
     if (launching.has(sid)) return reply.code(409).send({ error: `Claude of the board is starting on ${keys.join(', ')}`, running: keys });

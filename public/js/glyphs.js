@@ -119,7 +119,8 @@ export function glyphAt(jw, r, l, t) {
 }
 
 export const REPAINT_MS = 100;
-let canvas = null, ctx = null, cols = 0, rows = 0, cellW = 7.4, dpr = 1;
+export const RESIZE_QUIET_MS = 150;
+let canvas = null, ctx = null, cols = 0, rows = 0, cellW = 7.4, dpr = 1, sized = false, resizing = 0;
 let layers = []; // { canvas, ctx, base, T, h: Float32Array, lit: Float32Array, w }
 let pings = [], frame = 0, timer = 0, paintedAt = -Infinity, narrow = false, activeAt = 0;
 function next() {
@@ -173,8 +174,9 @@ function size() {
   rows = Math.ceil(innerHeight / CELL_H);
   narrow = innerWidth <= NARROW_PX;
   const w = cols + 4;
-  layers = LAYERS.map(() => {
-    const c = document.createElement('canvas');
+  sized = true;
+  layers = LAYERS.map((_, l) => {
+    const c = layers[l]?.canvas || document.createElement('canvas');
     c.width = Math.round(w * cellW * dpr);
     c.height = canvas.height;
     const x = c.getContext('2d');
@@ -183,6 +185,22 @@ function size() {
     return { canvas: c, ctx: x, base: 0, T: 0, w, h: new Float32Array((w + 1) * (rows + 1)), lit: new Float32Array(w * rows) };
   });
   paintedAt = -Infinity;
+}
+
+function release() {
+  sized = false;
+  if (canvas) canvas.width = canvas.height = 0;
+  for (const L of layers) L.canvas.width = L.canvas.height = 0;
+  layers = [];
+}
+
+function resized() {
+  clearTimeout(resizing);
+  resizing = setTimeout(() => {
+    resizing = 0;
+    sized = false;
+    wake();
+  }, RESIZE_QUIET_MS);
 }
 
 function readColors() {
@@ -284,7 +302,9 @@ function draw(now) {
 }
 
 function wake() {
-  if (frame || !running()) return;
+  if (!running()) return;
+  if (!sized) size();
+  if (frame) return;
   clock.resume(performance.now());
   next();
 }
@@ -300,7 +320,8 @@ function freeze() {
 function stop() {
   cancel();
   pings = [];
-  if (ctx) ctx.clearRect(0, 0, innerWidth, innerHeight);
+  clearTimeout(resizing);
+  release();
 }
 
 export function syncGlyphs() {
@@ -327,8 +348,8 @@ export function initGlyphs({ enabled } = {}) {
   document.body.prepend(canvas);
   ctx = canvas.getContext('2d');
   if (!ctx) { canvas.remove(); canvas = null; return; }
-  size();
-  addEventListener('resize', () => { size(); wake(); });
+  canvas.width = canvas.height = 0;
+  addEventListener('resize', resized);
   document.addEventListener('pointerdown', (e) => {
     if (e.button !== 0 || !isBackground(e.target)) return;
     pulse(e.clientX, e.clientY);

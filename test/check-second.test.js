@@ -133,7 +133,7 @@ test('the page says the warning of any change in the board\'s words, and only a 
   const at = core.indexOf('let warned = null;');
   assert.ok(at >= 0, 'the warning hook is gone from core.js');
   const end = core.indexOf('\n};\n', core.indexOf('export const api = async')) + 3;
-  const box = { reportError() {}, apiError: (m, x) => Object.assign(new Error(m), x), answer: null, JSON };
+  const box = { reportError() {}, apiError: (m, x) => Object.assign(new Error(m), x), answer: null, JSON, doorClosed: () => false };
   box.fetch = async () => ({ status: 200, ok: true, text: async () => JSON.stringify(box.answer) });
   const answerAt = core.indexOf('async function answerOf(');
   vm.runInNewContext(core.slice(answerAt, core.indexOf('\n}\n', answerAt) + 2), box);

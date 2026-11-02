@@ -105,16 +105,18 @@ export function createRetryQueue() {
 /** Comments that did not reach the server, per task and in the order typed, until the resend delivers them —
     the card shows them as not sent yet. The same text for the same task while it still waits is that comment
     again, not a second one: a second entry went out as a duplicate once the connection came back. */
+export function commentToken() { return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`; }
+
 export function createUnsentComments() {
   let seq = 0;
   const byKey = new Map();
   return {
     /** → { id, body, again } — again: this text already waits for this task, nothing new is queued */
-    add(key, body) {
+    add(key, body, token = commentToken()) {
       const list = byKey.get(key) || [];
       const same = list.find((c) => c.body === body);
       if (same) return { ...same, again: true };
-      const c = { id: ++seq, body };
+      const c = { id: ++seq, body, token };
       byKey.set(key, [...list, c]);
       return { ...c, again: false };
     },
@@ -146,6 +148,9 @@ const TASK_GONE = said('This task no longer exists — it was deleted.', 'the ta
 const CLAUDE_GONE = said('Claude of the board no longer runs on this task — nothing was sent.', 'Claude of the board no longer runs on this task', { claudeGone: true });
 const REFUSED = said('Not saved: the board did not accept it.', 'the board did not accept it');
 const KNOWN = [
+  [/^the project has no folder on this computer — set it in the project$/, 'the project has no folder on this computer'],
+  [/^the file is no longer there$/, 'the file is no longer on this computer'],
+  [/^the file is too large to show$/, 'the file is too large to show here'],
   [/^that category already exists$/, 'a section with this name already exists'],
   [/^category name: up to 40 characters$/, 'a section name is up to 40 characters'],
   [/^the ".*" category cannot be (renamed|deleted)$/, 'this section is built in — it cannot be renamed or deleted'],

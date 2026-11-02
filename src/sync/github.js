@@ -42,6 +42,7 @@ const GH_STATUS = [
   ['todo',      { ru: 'Сделать',    en: 'To do' },     'GRAY'],
   ['prep',      { ru: 'Подготовка', en: 'Prep' },      'PURPLE'],
   ['doing',     { ru: 'Делаю',      en: 'Doing' },     'YELLOW'],
+  ['ready',     { ru: 'Ждёт выкатки', en: 'Ready to ship' }, 'PINK'],
   ['deploy',    { ru: 'Деплою',     en: 'Deploying' }, 'BLUE'],
   ['review',    { ru: 'Проверяю',   en: 'Review' },    'ORANGE'],
   ['done',      { ru: 'Готово',     en: 'Done' },      'GREEN'],

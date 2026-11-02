@@ -312,3 +312,83 @@ test('pre-migrate rotation orders UTC names and local ones by the moment they st
     assert.ok(left.some((f) => !old.includes(f)), `${TZ}: the snapshot just taken was rotated away`);
   }
 });
+
+test('v9: an automations table without repeat gets it, its rules kept as one-shot', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'kb-mig-rep-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  migrateDir(dir);
+  const db = new Database(join(dir, 'kanban.db'));
+  const project = db.prepare("INSERT INTO projects (slug, name, prefix) VALUES ('p', 'P', 'P')").run().lastInsertRowid;
+  db.exec('DROP TABLE automations');
+  db.exec(`CREATE TABLE automations (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL DEFAULT 'finished-check', delay_s INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'armed', seen_work INTEGER NOT NULL DEFAULT 0,
+    ready_at INTEGER, words TEXT NOT NULL, launch TEXT NOT NULL DEFAULT '{}', created_at INTEGER NOT NULL, ended_at INTEGER,
+    task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL, error TEXT)`);
+  db.prepare("INSERT INTO automations (project_id, delay_s, words, created_at) VALUES (?, 180, '{}', 1)").run(project);
+  db.pragma('user_version = 8');
+  db.close();
+  migrateDir(dir);
+  const after = new Database(join(dir, 'kanban.db'));
+  t.after(() => after.close());
+  assert.ok(after.pragma('user_version', { simple: true }) >= 9);
+  const r = after.prepare('SELECT * FROM automations').get();
+  assert.equal(r.repeat, 0);
+  assert.equal(r.rearmed_at, null);
+  assert.equal(r.fires, '[]');
+  assert.equal(r.delay_s, 180);
+});
+
+test('v12: task_comments without client_key gets it, its comments kept', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'kb-mig-key-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  migrateDir(dir);
+  const db = new Database(join(dir, 'kanban.db'));
+  const project = db.prepare("INSERT INTO projects (slug, name, prefix) VALUES ('p', 'P', 'P')").run().lastInsertRowid;
+  const task = db.prepare("INSERT INTO tasks (project_id, task_no, title) VALUES (?, 1, 'T')").run(project).lastInsertRowid;
+  db.exec('DROP TABLE task_comments');
+  db.exec(`CREATE TABLE task_comments (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    author TEXT NOT NULL DEFAULT 'me', body TEXT NOT NULL, image TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')))`);
+  db.prepare("INSERT INTO task_comments (task_id, body) VALUES (?, 'kept')").run(task);
+  db.pragma('user_version = 11');
+  db.close();
+  migrateDir(dir);
+  const after = new Database(join(dir, 'kanban.db'));
+  t.after(() => after.close());
+  assert.ok(after.pragma('user_version', { simple: true }) >= 12);
+  const c = after.prepare('SELECT * FROM task_comments').get();
+  assert.equal(c.body, 'kept');
+  assert.equal(c.client_key, null);
+});
+
+test('v14: tasks take the status ready, every row and column kept, foreign keys intact', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'kb-mig-ready-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  migrateDir(dir);
+  const db = new Database(join(dir, 'kanban.db'));
+  const project = db.prepare("INSERT INTO projects (slug, name, prefix) VALUES ('p', 'P', 'P')").run().lastInsertRowid;
+  const task = db.prepare("INSERT INTO tasks (project_id, task_no, title, status, pinned, work_truncated) VALUES (?, 7, 'T', 'doing', 1, 3)").run(project).lastInsertRowid;
+  db.prepare("INSERT INTO task_comments (task_id, body) VALUES (?, 'kept')").run(task);
+  const old = db.prepare("SELECT sql FROM sqlite_master WHERE name = 'tasks'").get().sql.replace("'doing','ready','deploy'", "'doing','deploy'");
+  db.pragma('foreign_keys = OFF');
+  db.exec(`${old.replace(/CREATE TABLE tasks/, 'CREATE TABLE tasks_old')}; INSERT INTO tasks_old SELECT * FROM tasks; DROP TABLE tasks; ALTER TABLE tasks_old RENAME TO tasks;`);
+  db.prepare("ALTER TABLE projects DROP COLUMN ready_gate").run();
+  db.pragma('user_version = 12');
+  assert.throws(() => db.prepare("UPDATE tasks SET status = 'ready'").run(), /CHECK/);
+  db.close();
+  migrateDir(dir);
+  const after = new Database(join(dir, 'kanban.db'));
+  t.after(() => after.close());
+  after.pragma('foreign_keys = ON');
+  assert.ok(after.pragma('user_version', { simple: true }) >= 14);
+  const r = after.prepare('SELECT * FROM tasks').get();
+  assert.equal(r.task_no, 7);
+  assert.equal(r.pinned, 1);
+  assert.equal(r.work_truncated, 3);
+  assert.equal(after.prepare('SELECT ready_gate FROM projects').get().ready_gate, null);
+  after.prepare("UPDATE tasks SET status = 'ready'").run();
+  assert.equal(after.prepare('SELECT status FROM tasks').get().status, 'ready');
+  assert.deepEqual(after.prepare('PRAGMA foreign_key_check').all(), []);
+  after.prepare('DELETE FROM tasks').run();
+  assert.equal(after.prepare('SELECT COUNT(*) AS n FROM task_comments').get().n, 0, 'a comment outlived its task: the foreign key is gone');
+  assert.ok(after.prepare("SELECT 1 FROM sqlite_master WHERE name = 'idx_tasks_proj_no'").get(), 'the indexes did not come back');
+});

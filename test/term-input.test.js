@@ -20,6 +20,8 @@ test('the grey hint is for a Claude waiting for a word on a task whose code is b
     assert.equal(termSuggestion({ key: 'CK-1', status, activity: 'idle' }), null, `a task in ${status} is offered to go to Review`);
   }
   assert.equal(termSuggestion({ key: null, status: 'doing', activity: 'idle' }), null);
+  assert.match(termSuggestion({ key: 'CK-1', status: 'doing', activity: 'idle', gate: true }), /Ready to ship/, 'CK-894: the hint offers what the board would refuse');
+  assert.match(termSuggestion({ key: 'CK-1', status: 'deploy', activity: 'idle', gate: true }), /to Review/, 'from Deploying Review is the way on');
   assert.deepEqual([...HINT_STATUSES], ['doing', 'deploy']);
   assert.deepEqual([...HINT_ACTIVITY], ['idle', 'background']);
   assert.match(src('core.js'), /\n {2}'Move \{key\} to Review, so I can check it later': 'Переведи \{key\} в «Проверяю», чтобы я потом проверил',/, 'no Russian for the hint');

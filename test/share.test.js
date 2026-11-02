@@ -1,4 +1,4 @@
-// link and no cookie — a browser that lost one stayed out. Here the board is a stand-in that echoes what reached it.
+// echoes what reached it.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
 
-let tmp, board, share, door, app;
+let tmp, board, share, door, app, kvGet;
 const freePort = () => new Promise((resolve) => { const s = http.createServer().listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); }); });
 
 before(async () => {
@@ -25,6 +25,7 @@ before(async () => {
   });
   await new Promise((r) => board.listen(boardPort, '127.0.0.1', r));
   share = await import('../src/share.js');
+  ({ kvGet } = await import('../src/db.js'));
   const shareRoutes = (await import('../src/routes/share.js')).default;
   app = Fastify();
   await app.register(shareRoutes);
@@ -39,9 +40,10 @@ after(async () => {
   if (tmp) rmSync(tmp, { recursive: true, force: true });
 });
 
-function ask(path, { method = 'GET', headers = {}, body } = {}) {
+let pass = null; // the browser's pass: `name=value`, taken in the first test
+function ask(path, { method = 'GET', headers = {}, body, bare = false } = {}) {
   return new Promise((resolve, reject) => {
-    const req = http.request({ host: '127.0.0.1', port: door, path, method, agent: false, headers: { host: `127.0.0.1:${door}`, ...headers } }, (res) => {
+    const req = http.request({ host: '127.0.0.1', port: door, path, method, agent: false, headers: { host: `127.0.0.1:${door}`, ...(pass && !bare ? { cookie: pass } : {}), ...headers } }, (res) => {
       let text = '';
       res.on('data', (c) => { text += c; });
       res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, text, json: (() => { try { return JSON.parse(text); } catch { return null; } })() }));
@@ -59,26 +61,101 @@ async function boardLets(headers) {
   return refused === null;
 }
 
-test('closed until the owner opens it; then the plain address opens the board', async () => {
+const form = (k) => ({ method: 'POST', bare: true, body: `k=${encodeURIComponent(k)}`, headers: { 'content-type': 'application/x-www-form-urlencoded', origin: `http://127.0.0.1:${door}`, 'sec-fetch-site': 'same-origin' } });
+const urlOf = (st) => new URL(st.urls[0].url);
+const passOf = (r) => r.headers['set-cookie'][0].split(';')[0];
+
+test('closed until the owner opens it; the link of the QR code lets a browser in and it keeps a pass, not the key', async () => {
   await assert.rejects(ask('/'), /ECONNREFUSED/);
   const st = await share.setShare(true);
   assert.equal(st.on, true);
   assert.equal(st.port, door);
-  for (const u of st.urls) assert.equal(u.url, `http://${new URL(u.url).hostname}:${door}/`, 'no secret in the link');
+  assert.match(st.key, /^[0-9A-Z]{4}(-[0-9A-Z]{4}){3}$/);
+  const k = st.key.replaceAll('-', '');
+  for (const u of st.urls) assert.equal(new URL(u.url).searchParams.get('k'), k, 'the link does not carry the key');
+  const r = await ask(`/?k=${k}`, { bare: true });
+  assert.equal(r.status, 200);
+  assert.equal(r.headers['x-from'], undefined, 'the board was reached with the key in the address');
+  assert.match(r.text, /http-equiv="refresh" content="0;url=\/"/, 'the key stays in the address bar');
+  const cookie = r.headers['set-cookie'][0];
+  assert.match(cookie, /HttpOnly/);
+  assert.match(cookie, /SameSite=Lax/);
+  assert.ok(!cookie.includes(k), 'the key itself is kept in the browser');
+  assert.ok(cookie.startsWith(`kb_share_${door}=`), 'the cookie of one door logs out another (cookies ignore ports)');
+  pass = passOf(r);
   const page = await ask('/');
   assert.equal(page.status, 200);
   assert.equal(page.headers['x-from'], 'board');
-  assert.equal(page.headers['set-cookie'], undefined);
   assert.equal((await ask('/api/projects')).status, 200);
 });
 
-test('opened from a messenger or a camera (cross-site) — as a page only; an old link with ?k= opens too', async () => {
+test('a browser without the pass is asked for the key, and the key typed by hand lets it in', async () => {
+  const page = await ask('/', { bare: true });
+  assert.equal(page.status, 401);
+  assert.equal(page.headers['x-from'], undefined, 'the board was reached without the key');
+  assert.match(page.text, /<form method="post" action="\/door\/key">/);
+  assert.match(page.text, /<input name="k"/);
+  // a browser check found it: with `no-referrer` the form goes with `Origin: null`, and the door refused the key
+  assert.equal(page.headers['referrer-policy'], 'same-origin');
+  const api = await ask('/api/projects', { bare: true });
+  assert.equal(api.status, 401);
+  assert.equal(api.json.reason, 'share');
+  assert.equal((await ask('/app.js', { bare: true })).status, 401);
+  for (const m of ['POST', 'PATCH', 'DELETE']) assert.equal((await ask('/api/tasks/1', { method: m, bare: true })).status, 401, `${m} went past the key`);
+  assert.equal((await ask('/', { bare: true, headers: { cookie: `kb_share_${door}=forged` } })).status, 401);
+  share.clearRefusals();
+  const wrong = await ask('/door/key', form('AAAA-AAAA-AAAA-AAAA'));
+  assert.equal(wrong.status, 401);
+  assert.equal(wrong.headers['set-cookie'], undefined);
+  assert.match(wrong.text, /class="no"/, 'a wrong key says nothing');
+  assert.equal((await ask('/?k=wrong', { bare: true })).status, 401);
+  assert.deepEqual(share.refusalList().map((x) => [x.why, x.n]), [['key', 2]], 'a wrong key is not in «Turned away»');
+  const key = share.shareState().key;
+  for (const typed of [key, key.toLowerCase(), key.replaceAll('-', ' '), ` ${key} `]) {
+    const ok = await ask('/door/key', form(typed));
+    assert.equal(ok.status, 200, `«${typed}» did not open the door`);
+    assert.equal(passOf(ok), pass);
+  }
+  assert.equal(share.typedKey('oIl-'), '011', 'a letter that looks like a digit is not read as meant');
+  // the page of the door brings nothing of the board along, and a home-screen app is made from the manifest, asked for without cookies
+  assert.equal((await ask('/manifest.webmanifest', { bare: true })).headers['x-from'], 'board');
+  assert.equal((await ask('/manifest.webmanifest', { bare: true, method: 'POST' })).status, 401);
+  // a form of another site
+  assert.equal((await ask('/door/key', { ...form(key), headers: { 'content-type': 'application/x-www-form-urlencoded', origin: 'http://evil.example' } })).status, 403);
+  assert.equal((await ask('/door/key', { ...form(key), headers: { 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' } })).status, 403);
+});
+
+test('the page of the door remembers where the browser was going, and never leaves the door', async () => {
+  const key = share.shareState().key;
+  const asked = await ask('/?action=new', { bare: true });
+  assert.match(asked.text, /name="to" value="\/\?action=new"/, 'a home-screen shortcut lost its action');
+  const go = (to) => ask('/door/key', { ...form(key), body: `k=${encodeURIComponent(key)}&to=${encodeURIComponent(to)}` });
+  assert.match((await go('/?action=new')).text, /content="0;url=\/\?action=new"/);
+  for (const away of ['//evil.example/', '/\\evil.example/', 'http://evil.example/', '/\\/evil.example']) {
+    assert.doesNotMatch((await go(away)).text, /url=(\/\/|\/\\|http)/, `${away} led away`);
+  }
+  assert.doesNotMatch((await go('/?k=secret&view=dash')).text, /secret/, 'the key stays in the address');
+  assert.match((await ask(`/?view=dash&k=${key.replaceAll('-', '')}`, { bare: true })).text, /content="0;url=\/\?view=dash"/);
+  for (const free of ['/icon-192.png', '/icon-maskable-512.png', '/favicon.svg']) assert.equal((await ask(free, { bare: true })).headers['x-from'], 'board', free);
+  assert.equal((await ask('/app.js', { bare: true })).status, 401);
+});
+
+test('a key too long is not read', async () => {
+  await assert.rejects(ask('/door/key', form('x'.repeat(100000))).then((r) => { if (r.status !== 413) throw new Error('read'); throw new Error('socket hang up'); }), /socket hang up|ECONNRESET|EPIPE/);
+});
+
+test('opened from a messenger or a camera (cross-site) — as a page only, with the key in the link', async () => {
   const nav = { 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' };
-  const r = await ask('/?k=0GuzFFnF_aruNljPWDjBqA', { headers: nav });
+  const k = urlOf(share.shareState()).searchParams.get('k');
+  const r = await ask(`/?k=${k}`, { headers: nav, bare: true });
   assert.equal(r.status, 200);
-  assert.equal(r.headers['x-from'], 'board');
-  assert.equal(r.json.url, '/?k=0GuzFFnF_aruNljPWDjBqA'); // the board's page drops the parameter itself
-  assert.equal(await boardLets(r.json.headers), true, 'the board lets the opened page in too');
+  assert.match(r.text, /http-equiv="refresh"/);
+  assert.equal(passOf(r), pass);
+  const redirect = await ask(`//evil.example/?k=${k}`, { bare: true });
+  assert.doesNotMatch(redirect.text, /url=\/\/evil/, 'the link led away to another site');
+  const opened = await ask('/', { headers: nav });
+  assert.equal(opened.headers['x-from'], 'board');
+  assert.equal(await boardLets(opened.json.headers), true, 'the board lets the opened page in too');
   // another site's form, fetch or frame — refused
   assert.equal((await ask('/api/x', { method: 'POST', headers: { ...nav } })).status, 403);
   assert.equal((await ask('/api/x', { headers: { ...nav, 'sec-fetch-mode': 'cors', 'sec-fetch-dest': 'empty' } })).status, 403);
@@ -86,7 +163,7 @@ test('opened from a messenger or a camera (cross-site) — as a page only; an ol
 });
 
 test('passed on as from the board page, marked a guest, cookies not passed on', async () => {
-  const r = await ask('/api/x?y=1', { method: 'POST', headers: { cookie: 'a=1; kb_share_1=old', origin: `http://127.0.0.1:${door}`, 'sec-fetch-site': 'same-origin', referer: `http://127.0.0.1:${door}/`, 'x-kb-guest': '0', 'content-type': 'application/json' }, body: '{"a":1}' });
+  const r = await ask('/api/x?y=1', { method: 'POST', headers: { cookie: `a=1; ${pass}; kb_share_1=old`, origin: `http://127.0.0.1:${door}`, 'sec-fetch-site': 'same-origin', referer: `http://127.0.0.1:${door}/`, 'x-kb-guest': '0', 'content-type': 'application/json' }, body: '{"a":1}' });
   assert.equal(r.status, 200);
   assert.equal(r.headers['x-from'], 'board');
   const h = r.json.headers;
@@ -189,9 +266,35 @@ test('a guest is counted while connected', async () => {
   assert.ok(share.shareState().guests_n >= 1);
 });
 
+test('a new key: the old link, key and pass stop working, and everyone connected is out', async () => {
+  const before = share.shareState();
+  const oldLink = urlOf(before);
+  const stream = await new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port: door, path: '/api/events', agent: false, headers: { host: `127.0.0.1:${door}`, cookie: pass } }, resolve);
+    req.on('error', reject);
+    req.end();
+  });
+  const cut = new Promise((resolve) => { stream.on('close', resolve); stream.on('error', resolve); stream.resume(); });
+  const page = { origin: 'http://127.0.0.1:3100' };
+  assert.equal((await app.inject({ method: 'POST', url: '/api/share/reset', headers: { ...page, 'x-kb-guest': '1' } })).statusCode, 403, 'a guest changed the key');
+  assert.equal((await app.inject({ method: 'POST', url: '/api/share/reset' })).statusCode, 403, 'changed not from the board page');
+  assert.equal((await ask('/api/share/reset', { method: 'POST' })).status, 403, 'a guest changed the key through the door');
+  assert.equal(share.shareState().key, before.key);
+  const after = (await app.inject({ method: 'POST', url: '/api/share/reset', headers: page })).json();
+  assert.notEqual(after.key, before.key);
+  assert.notEqual(after.qr, before.qr, 'the QR code still shows the old key');
+  await cut;
+  assert.equal((await ask('/')).status, 401, 'the pass of the old key opens the door');
+  assert.equal((await ask(oldLink.pathname + oldLink.search, { bare: true })).status, 401, 'the old link opens the door');
+  pass = passOf(await ask('/door/key', form(after.key)));
+  assert.equal((await ask('/')).headers['x-from'], 'board');
+  // the same key after a restart of the board: in kv
+  assert.equal(kvGet('share.key'), after.key.replaceAll('-', ''));
+});
+
 test('only the owner, from the board page, sees the link and opens or closes the door', async () => {
   const guest = await app.inject({ method: 'GET', url: '/api/share', headers: { 'x-kb-guest': '1' } });
-  assert.deepEqual(guest.json(), { guest: true, on: true });
+  assert.deepEqual(guest.json(), { guest: true, on: true }, 'a guest reads the key');
   const owner = (await app.inject({ method: 'GET', url: '/api/share' })).json();
   assert.equal(owner.on, true);
   const page = { origin: 'http://127.0.0.1:3100', 'content-type': 'application/json' };
@@ -203,7 +306,7 @@ test('only the owner, from the board page, sees the link and opens or closes the
 
 test('a guest on the event stream is counted however long it is quiet', { timeout: 5000 }, async () => {
   const held = await new Promise((resolve) => {
-    const req = http.request({ host: '127.0.0.1', port: door, path: '/api/events', agent: false, headers: { host: `127.0.0.1:${door}` } }, (res) => res.once('data', () => resolve(res)));
+    const req = http.request({ host: '127.0.0.1', port: door, path: '/api/events', agent: false, headers: { host: `127.0.0.1:${door}`, cookie: pass } }, (res) => res.once('data', () => resolve(res)));
     req.end();
   });
   assert.ok(share.guestCount(Date.now() + 10 * share.GUEST_FRESH_MS) >= 1);

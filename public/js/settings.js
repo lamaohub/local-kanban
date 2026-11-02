@@ -1,7 +1,7 @@
 
 import { WORKING, buildSelect, drawLinks } from './board.js';
 import { syncGlyphs } from './glyphs.js';
-import { $, ALL_STATUSES, HEALTH, LANG, api, apiBlob, esc, fmtNum, ic, seg, smoothReload, state, tr } from './core.js';
+import { $, ALL, statusesFor, HEALTH, LANG, api, apiBlob, esc, fmtNum, ic, seg, smoothReload, state, tr } from './core.js';
 import { applyKeepDrawer, repaintWorkTabs } from './drawer.js';
 import { checkVersion, hasUnsavedInput, pendingReload } from './init.js';
 import { confirmDiscard, loadProjects, popLayer, pushLayer, renderSidebar, selectProject, setupPromptBlockHTML, styledAlert, styledConfirm, styledPrompt, wireSetupPrompt } from './sidebar.js';
@@ -99,7 +99,7 @@ function keyBinding(id) {
 export function customBinding(id) {
   const km = getSetting('keymap');
   const b = Object.hasOwn(km, id) ? km[id] : null;
-  return b && typeof b === 'object' && typeof b.code === 'string' ? b : null;
+  return b && typeof b === 'object' && typeof b.code === 'string' && b.code ? b : null;
 }
 export function matchKey(e, id) {
   const b = keyBinding(id);
@@ -145,7 +145,7 @@ function syncThemeColor() {
   if (bg) meta.setAttribute('content', bg);
 }
 
-const SM_SECTIONS = [['general', tr('General')], ['appearance', tr('Appearance')], ['app', tr('As an app')], ['share', 'Wi-Fi'], ['cats', tr('Sections')], ['claude', 'Claude Code'], ['skills', tr('Skills')], ['health', tr('Health')], ['archive', tr('Archived')], ['sync', tr('Sync')], ['errors', tr('Errors')], ['backups', tr('Backups')], ['keys', tr('Hotkeys')], ['about', tr('About')]];
+const SM_SECTIONS = [['general', tr('General')], ['appearance', tr('Appearance')], ['app', tr('As an app')], ['share', 'Wi-Fi'], ['cats', tr('Sections')], ['statuses', tr('Statuses')], ['claude', 'Claude Code'], ['skills', tr('Skills')], ['health', tr('Health')], ['archive', tr('Archived')], ['sync', tr('Sync')], ['errors', tr('Errors')], ['backups', tr('Backups')], ['keys', tr('Hotkeys')], ['about', tr('About')]];
 const leaveSkillEditor = async () => !skillDirty() || confirmDiscard();
 let settingsAsking = false;
 async function requestCloseSettings() {
@@ -408,6 +408,25 @@ async function renderSection(sec) {
       });
     };
     load();
+  } else if (sec === 'statuses') {
+    body.innerHTML = `<div class="sm-h">${tr('Statuses')}</div>`
+      + `<label class="set-row"><span class="set-lab">${tr('Wait for the word before shipping')}<small>${tr('a finished task stops in Ready to ship until you say to ship it; Ready to ship means it is not on main yet, Review that people have it')}</small></span><input type="checkbox" class="set-toggle" id="flow-gate"></label>`
+      + `<div class="kbh-note muted">${tr('A project can say otherwise in its settings.')}</div><div class="kbh-note" id="flow-note"></div>`;
+    const box = $('flow-gate');
+    const say = (v) => {
+      box.checked = v.ready_gate;
+      const left = v.ready_n ? `${tr('Waits in the column:')} ${v.ready_n}` : '';
+      $('flow-note').textContent = !v.ready_gate && v.left_n ? tr('The switch is off, and the tasks stay: the column goes once it is empty.') + ` ${left}` : left;
+    };
+    box.disabled = true;
+    try { say(await api('GET', '/api/flow', undefined, { quiet: true })); box.disabled = false; } catch { /* the row stays off and says nothing it does not know */ }
+    box.onchange = async () => {
+      const on = box.checked;
+      box.disabled = true;
+      try { say(await api('PUT', '/api/flow', { ready_gate: on })); await refresh(); }
+      catch (e) { box.checked = !on; $('flow-note').textContent = refusalLine('did not save', e, tr); }
+      box.disabled = false;
+    };
   } else if (sec === 'cats') {
     body.innerHTML = `<div class="sm-h">${tr('Sections')}<button class="btn-ghost" id="cat-add">${tr('＋ New section')}</button></div>`
       + `<div class="kbh-note muted">${tr('Sections group boards in the sidebar. A new name applies to every board in the section.')}</div>`
@@ -1389,7 +1408,7 @@ export function openStatusPicker(anchor, key, current) {
   const menu = document.createElement('div');
   menu.className = 'status-picker';
   menu.id = 'status-picker';
-  menu.innerHTML = ALL_STATUSES.map(([v, lab]) => {
+  menu.innerHTML = statusesFor(ALL, current).map(([v, lab]) => {
     const disabled = WORKING.has(v) && v !== current;
     return `<div class="sp-opt${v === current ? ' active' : ''}${disabled ? ' disabled' : ''}" data-v="${v}">`
       + `<span class="dot s-${v}"></span>${lab}</div>`;

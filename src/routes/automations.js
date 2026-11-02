@@ -1,6 +1,8 @@
 import { existsSync } from 'node:fs';
 import { resolveProject } from './projects.js';
-import { announce, armRule, automationsView, dropRule, ruleProblem, setAutomationsOn } from '../automations.js';
+import { announce, armRule, automationsView, awaySummary, dropRule, extrasProblem, ruleProblem, setAutomationsOn, setExtras } from '../automations.js';
+import { nowRuns } from '../claude-now.js';
+import { scalarQuery } from '../query-params.js';
 
 export default async function automationRoutes(app) {
   app.get('/api/automations', () => automationsView());
@@ -9,6 +11,22 @@ export default async function automationRoutes(app) {
     const on = req.body?.on;
     if (typeof on !== 'boolean') return reply.code(400).send({ error: 'on: true or false' });
     setAutomationsOn(on);
+    announce(true);
+    return automationsView();
+  });
+
+  app.get('/api/automations/summary', async (req, reply) => {
+    const q = scalarQuery(req.query, ['since']);
+    if (q.error) return reply.code(400).send({ error: q.error });
+    const since = Number(q.values.since);
+    if (!Number.isFinite(since) || since <= 0) return reply.code(400).send({ error: 'since: a moment in milliseconds' });
+    return awaySummary(since, (await nowRuns()).runs);
+  });
+
+  app.put('/api/automations/extras', (req, reply) => {
+    const problem = extrasProblem(req.body);
+    if (problem) return reply.code(400).send({ error: problem });
+    setExtras(req.body);
     announce(true);
     return automationsView();
   });

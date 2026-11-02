@@ -24,7 +24,9 @@ test('a step that read a picture is a button that opens it by the step', () => {
   const lightbox = readFileSync(new URL('../public/js/drawer.js', import.meta.url), 'utf8');
   const box = lightbox.slice(lightbox.indexOf('export function openLightbox('), lightbox.indexOf('\n}\n', lightbox.indexOf('export function openLightbox(')));
   assert.match(box, /img\.onerror = /, 'a picture that does not load leaves an empty window');
-  assert.match(box, /prefers-reduced-motion/, 'the picture window moves for one who asked for less motion');
+  assert.match(box, /popUp\(overlay, img\)/, 'the picture opens past the smooth way in');
+  const pop = lightbox.slice(lightbox.indexOf('function popUp('), lightbox.indexOf('\n}\n', lightbox.indexOf('function popUp(')));
+  assert.match(pop, /prefers-reduced-motion/, 'the picture window moves for one who asked for less motion');
 });
 
 test('the chat keeps its reader: at the end by their own scrolling, scrolled up by the turn in sight', () => {

@@ -1,3 +1,4 @@
+import { gateOfProject, skipsReady } from '../ready-gate.js';
 import { execFile } from 'node:child_process';
 import { writeFileSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -161,7 +162,7 @@ async function fullTask(t) {
   return { ...t, labels: JSON.parse(t.labels || '[]'), events, moves, links: taskLinks(t.id), attachments: taskAttachments(t.id), checklist: taskChecklist(t.id), commit_url: await commitUrlFor(t), sessions: await taskSessions(t.id), usage: await taskUsage(t.id), terminal: await taskTerminal(t.id) };
 }
 
-function planPatch(t, b, sid = null) {
+function planPatch(t, b, sid = null, { undone = false } = {}) {
   const updates = [];
   const values = [];
   let claim = null;
@@ -211,8 +212,12 @@ function planPatch(t, b, sid = null) {
       if (!mayReprep(t.id, sid)) return { code: 409, error: `${t.key} is already taken: it is in prep. To take a free task: kb take ${t.project}` };
       claim = unclaimedLaunch(t.id);
     }
-    if (!isManual(labels || t.labels) && ['backlog', 'todo'].includes(t.status) && ['review', 'done'].includes(b.status)) {
+    if (!isManual(labels || t.labels) && ['backlog', 'todo'].includes(t.status) && ['ready', 'review', 'done'].includes(b.status)) {
       return bad(`cannot go straight from "${t.status}" to "${b.status}" — it has to pass through the working statuses`);
+    }
+    // a check has nothing to ship, and words undone only put back what they moved
+    if (!undone && !isCheck({ labels: labels || t.labels }) && !isManual(labels || t.labels) && skipsReady(t.status, b.status) && gateOfProject(t.project_id)) {
+      return { code: 409, error: `${t.key} goes to ready first: this project ships on the person's word — kb mv ${t.key} ready, and deploy once they say so`, reason: 'ready-first' };
     }
     updates.push('status = ?'); values.push(b.status);
     if (b.status === 'done' && t.status !== 'done') updates.push("done_at = datetime('now')");
@@ -253,13 +258,13 @@ function commitPatch(t, b, { updates, values, labels, claim }, sid, host, launch
     else enqueue('set_status', f.id, snapshot(f));
   }
   if (claim && sid) claimLaunch(claim, sid);
-  bindSession(t.id, f.status, sid, host);
+  bindSession(t.id, f.status, sid, host, { claim: b.status !== undefined }); // an edit of a field takes nobody's task
   return f;
 }
 
 function afterPatch(t, b, fresh, { sid = null, undo = false } = {}) {
   const statusChanged = b.status !== undefined && b.status !== t.status;
-  if (statusChanged && b.status === 'review' && !undo) {
+  if (statusChanged && (b.status === 'review' || b.status === 'ready') && !undo) {
     attachGitStat(fresh, t.work_started_at || db.prepare("SELECT created_at FROM task_events WHERE task_id = ? AND status = 'doing' ORDER BY id DESC LIMIT 1").get(t.id)?.created_at);
   }
   kick();
@@ -300,6 +305,7 @@ function dropTyped(id) {
 for (const r of db.prepare('SELECT * FROM typed_backs').all()) {
   typedBack.set(r.task_id, { sid: r.session_id, event: r.event_id, at: r.at_ms, seconds: r.seconds, truncated: r.truncated, print: Promise.resolve(r.printed ? r.print : null) });
 }
+const COMMENT_KEY_MAX = 64;
 const WORK_IN = new Set(['prep', 'doing', 'deploy']); // a move into one of these from elsewhere is taking a task into work
 let SETTLE_MS = 5 * 60 * 1000;
 /** Tests: how long typed words wait for the session's next task. */
@@ -366,7 +372,7 @@ function undoTyped(back) {
       if (!t || t.status !== 'doing') continue;
       const e = db.prepare('SELECT id, created_at FROM task_events WHERE id = ?').get(m.event);
       if (!e || !untouched(t.id, m.sid, e)) continue; // read again: an await may have let a move in
-      const plan = planPatch(t, b, m.sid);
+      const plan = planPatch(t, b, m.sid, { undone: true });
       if (plan.error) continue;
       commitPatch(t, b, plan, m.sid, null, null, 'settled');
       db.prepare("UPDATE typed_moves SET kind = 'typed-undone' WHERE event_id = ?").run(m.event);
@@ -602,7 +608,7 @@ export default async function taskRoutes(app) {
     const plan = planPatch(t, b, sid);
     if (plan.error) { const { code, ...body } = plan; return reply.code(code).send(body); }
     const host = requestHostSession(req);
-    if (!plan.updates.length) { bindSession(t.id, t.status, sid, host); return { ...t, labels: JSON.parse(t.labels || '[]'), ...flag }; }
+    if (!plan.updates.length) { bindSession(t.id, t.status, sid, host, { claim: b.status !== undefined }); return { ...t, labels: JSON.parse(t.labels || '[]'), ...flag }; }
     const fresh = db.transaction(() => commitPatch(t, b, plan, sid, host))();
     afterPatch(t, b, fresh, { sid });
     const warning = secondCheck(t, fresh);
@@ -675,12 +681,17 @@ export default async function taskRoutes(app) {
       emit('task.comment', { task_id: t.id, key: t.key, project: t.project, comment: c, comments_n: commentsN(t.id) });
       return reply.code(201).send(c);
     }
-    const { body, author = 'me' } = req.body || {};
+    const { body, author = 'me', client_key: clientKey } = req.body || {};
     const badBody = badText(body, 'body');
     if (badBody) return reply.code(400).send({ error: badBody });
     if (!body || !String(body).trim()) return reply.code(400).send({ error: 'body required' });
-    const r = db.prepare('INSERT INTO task_comments (task_id, author, body) VALUES (?,?,?)')
-      .run(t.id, author === 'claude' ? 'claude' : 'me', String(body).trim());
+    if (clientKey !== undefined && (typeof clientKey !== 'string' || !clientKey || clientKey.length > COMMENT_KEY_MAX)) {
+      return reply.code(400).send({ error: `client_key must be a string of up to ${COMMENT_KEY_MAX} characters` });
+    }
+    const sent = clientKey && db.prepare('SELECT * FROM task_comments WHERE task_id = ? AND client_key = ?').get(t.id, clientKey);
+    if (sent) return reply.code(200).send(sent);
+    const r = db.prepare('INSERT INTO task_comments (task_id, author, body, client_key) VALUES (?,?,?,?)')
+      .run(t.id, author === 'claude' ? 'claude' : 'me', String(body).trim(), clientKey ?? null);
     const c = db.prepare('SELECT * FROM task_comments WHERE id = ?').get(r.lastInsertRowid);
     bindSession(t.id, t.status, requestSession(req), requestHostSession(req), { claim: false });
     enqueue('add_comment', t.id, { ...snapshot(t), comment_author: c.author, comment_body: c.body });

@@ -74,3 +74,28 @@ test('streams that stopped reading are dropped once all of them together hold to
     assert.ok(events.sseCount() < 6, 'twenty-four megabytes waited in the board for clients that read nothing');
   } finally { await closeAll(); events.setSseBufferMax(0); events.setSseTotalMax(0); }
 });
+
+test('review of CK-869: over the limit of all the streams it is the one with the most undelivered that goes', async () => {
+  events.setSseBufferMax(64 * 1024 * 1024);
+  events.setSseTotalMax(64 * 1024 * 1024);
+  try {
+    const reader = await stream();
+    const early = await stream();
+    const late = await stream();
+    early.sock.pause();
+    const BIG = 'x'.repeat(100_000);
+    let closed = false;
+    early.sock.once('close', () => { closed = true; });
+    for (let i = 0; i < 80; i++) { emit('task.comment', { body: BIG }); await tick(1); } // only `early` falls behind
+    late.sock.pause();
+    events.setSseTotalMax(1024 * 1024);
+    for (let i = 0; i < 40 && events.sseCount() === 3; i++) { emit('task.comment', { body: 'y' }); await tick(1); }
+    await tick(50);
+    assert.equal(events.sseCount(), 2, 'no stream was dropped');
+    early.sock.resume();
+    await tick(50);
+    const alive = [reader, late].every((x) => !x.sock.destroyed);
+    assert.ok(alive, 'a stream that held little went instead of the worst one');
+    assert.ok(closed || early.sock.destroyed || early.sock.readableEnded, 'the worst stream stayed');
+  } finally { await closeAll(); events.setSseBufferMax(0); events.setSseTotalMax(0); }
+});

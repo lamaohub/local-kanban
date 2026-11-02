@@ -134,7 +134,7 @@ Claude on it — the report stays on the card of the check.
 
 The server listens on **127.0.0.1 only** and has **no authentication**. The board is strictly local: your machine is the trust boundary. **Never expose the port to the network** (no reverse proxies, no `0.0.0.0`, no port forwarding). Third-party integrations should run on the same machine and talk to `127.0.0.1` (see [docs/API.md](docs/API.md)).
 
-The one exception is your own switch: **Settings → Wi-Fi** opens a separate door on the local network (port + 10, `KB_SHARE_PORT`) for people you show its QR code to. Only the link's secret lets anyone in, and with it a guest can do on the board everything you can — including talking to Claude on your computer. It is off by default; switching it off closes the door, a new link drops every guest.
+The one exception is your own switch: **Settings → Wi-Fi** opens a separate door on the local network (port + 10, `KB_SHARE_PORT`) for people you show its QR code to. Only its key lets anyone in: in the link of the QR code, or typed by hand when a browser has no link. With it a guest can do on the board everything you can — including talking to Claude on your computer. The connection is plain HTTP, so the key keeps people out but does not encrypt the traffic: switch the door off on a network of strangers. It is off by default; switching it off closes the door, a new key drops every guest.
 
 **The board holds no credentials.** A project can name an SSH host to deploy to, but neither a key
 nor a password is ever entered here: the board simply runs `ssh <host>`, and who you are, on which

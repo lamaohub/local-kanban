@@ -2,8 +2,9 @@
 export const HINT_STATUSES = new Set(['doing', 'deploy']);
 export const HINT_ACTIVITY = new Set(['idle', 'background']);
 
-export function termSuggestion({ key, status, activity }, tr = (s) => s) {
+export function termSuggestion({ key, status, activity, gate = false }, tr = (s) => s) {
   if (!key || !HINT_STATUSES.has(status) || !HINT_ACTIVITY.has(activity)) return null;
+  if (gate && status === 'doing') return tr('Move {key} to Ready to ship and wait for my word').replace('{key}', key);
   return tr('Move {key} to Review, so I can check it later').replace('{key}', key);
 }
 

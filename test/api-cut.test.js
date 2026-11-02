@@ -13,7 +13,7 @@ const constOf = (head) => { const at = core.indexOf(head); assert.ok(at >= 0, `$
 
 function page(answer) {
   const box = { reported: [], fetch: async () => answer(), Error, JSON, Object, String };
-  vm.runInNewContext(`const reportError = (scope, msg) => this.reported.push(msg); let warned = null;
+  vm.runInNewContext(`const reportError = (scope, msg) => this.reported.push(msg); let warned = null; const doorClosed = () => false;
 ${fnOf('export function apiError(')}${fnOf('async function answerOf(')}${constOf('export const api = async')}
 this.api = api;`, box);
   return box;

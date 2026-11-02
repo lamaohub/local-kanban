@@ -1,9 +1,11 @@
 
+import { wholeAnswer } from './term-delta.js';
 import { WORKING, buildSelect, canMoveTo, clearSelection, closeOpenSelect, colSort, labelChip, moveBlocked, revealCard, scheduleDrawLinks, selVal, selectTasks, selectedIds, setScrollToNewCardId, taskIsNoclaude } from './board.js';
-import { $, ALL, ALL_STATUSES, LABEL_COLORS, LABEL_SELECTABLE, PRI_LEVELS, TITLE_LABEL_WORDS, api, apiBlob, dropUnsaved, esc, ghSyncOn, ic, noteUnsaved, seg, state, tr } from './core.js';
+import { $, ALL, statusesFor, LABEL_COLORS, LABEL_SELECTABLE, PRI_LEVELS, TITLE_LABEL_WORDS, api, apiBlob, dropUnsaved, esc, ghSyncOn, ic, noteUnsaved, seg, state, tr } from './core.js';
 import { columnComparator, DEFAULT_SORT } from './order.js';
 import { mountChat } from './chat.js';
 import { getSetting, openSettingsModal, plural, setClaudeView } from './settings.js';
+import { onPhone } from './phone-rules.js';
 import { NARROW, closeTopLayer, currentProject, layersOpen, overlayLayer, popLayer, pushLayer, selectProject, styledAlert, styledConfirm, watchLayers } from './sidebar.js';
 import { SHORT_MONTHS, askUsageNow, autoGrow, claudeInfoHTML, copyText, onClaudeInfo, launchInClaude, openSessionInClaude, refresh, relTime, renderTimeline, resumeOnBoard, taskPromptText } from './sse.js';
 import { canRetry, changedFields, createTurns, createUnsentComments, createUnsentEdits, imageTooLarge, pullExternal, refusalLine, refusalText, resendDelay } from './unsaved.js';
@@ -72,7 +74,7 @@ function renderDrawerLabels() {
 
 const PRI_OPTIONS = [...PRI_LEVELS].reverse().map(([v, label]) => ({ value: String(v), label }));
 export function statusOptionList(current, isNew, allowDirect) {
-  return ALL_STATUSES.map(([v, label]) => ({
+  return statusesFor(drawerTask?.project ?? state.slug, current).map(([v, label]) => ({
     value: v, label, dot: v,
     disabled: Boolean(moveBlocked(current, v, { manual: allowDirect, isNew })),
   }));
@@ -321,8 +323,8 @@ setInterval(refreshCommentTimes, 30000);
 document.addEventListener('visibilitychange', refreshCommentTimes);
 
 const unsentComments = createUnsentComments();
-export function queueComment(key, body) {
-  const c = unsentComments.add(key, body);
+export function queueComment(key, body, token) {
+  const c = unsentComments.add(key, body, token);
   noteUnsaved(c.again ? null : () => resendComment(key, c.id), `comment:${key}:${c.id}`);
   paintUnsent(key);
 }
@@ -331,7 +333,7 @@ async function resendComment(key, id) {
   if (!c) return; // the person took it back
   let sent;
   try {
-    sent = await api('POST', `/api/tasks/${seg(key)}/comments`, { body: c.body, author: 'me' });
+    sent = await api('POST', `/api/tasks/${seg(key)}/comments`, { body: c.body, author: 'me', client_key: c.token });
   } catch (e) {
     // refused (the task is gone): it will never go — the retry queue drops it too
     if (!canRetry(e)) { unsentComments.done(key, id); paintUnsent(key); }
@@ -403,6 +405,7 @@ function showWorkTab(tab) {
   const tabs = $('d-tabs');
   const has = (x) => !tabs.classList.contains('hidden') && Boolean(tabs.querySelector(`[data-tab="${x}"]`));
   const cur = has(tab) ? tab : tab === 'terminal' && has('chat') ? 'chat' : tab === 'chat' && has('terminal') ? 'terminal' : 'comments';
+  cardTab = cur;
   tabs.querySelectorAll('.dr-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === cur));
   $('comments-block').classList.toggle('hidden', cur !== 'comments');
   $('work-block').classList.toggle('hidden', cur !== 'chat');
@@ -413,6 +416,7 @@ function showWorkTab(tab) {
 
 export function hideWorkTabs() {
   workKey = null;
+  tabsFor = null;
   termKey = null;
   termInfo = null;
   termSeen = null;
@@ -426,6 +430,8 @@ export function hideWorkTabs() {
 export const claudeView = () => (getSetting('chatView') === 'chat' ? 'chat' : 'terminal');
 let chatTab = false; // the open card has the Chat tab
 let tabsTask = null; // {key, sessions, status, terminal} the tabs were drawn for — to draw them again on the switch
+let tabsFor = null;
+let cardTab = 'comments'; // the tab on screen
 function renderWorkTabs(t) {
   const term = t.terminal || null;
   const asTerm = Boolean(term) && claudeView() === 'terminal';
@@ -445,7 +451,12 @@ function renderWorkTabs(t) {
   $('d-tabs').querySelectorAll('.dr-btn').forEach((b) => { b.onclick = () => { saveTab(b.dataset.tab); showWorkTab(b.dataset.tab); }; });
   $('d-tabs').classList.remove('hidden');
   const claude = asTerm ? 'terminal' : 'chat';
-  const want = term && (termOpenNext === t.key || (WORKING.has(t.status) && (!term.dead || term.interrupted))) ? claude : savedTab();
+  const opening = tabsFor !== t.key;
+  tabsFor = t.key;
+  const asked = Boolean(term) && termOpenNext === t.key;
+  const onTerm = asked || (Boolean(term) && WORKING.has(t.status) && (!term.dead || term.interrupted));
+  const want = asked ? claude : asTerm ? (onTerm ? claude : savedTab()) : opening ? 'comments' : cardTab;
+  cardTab = want;
   termOpenNext = null;
   if (asTerm) {
     renderTerminal({ session: term.session, dead: term.dead, exit: term.exit, interrupted: term.interrupted, screen: termScreen ?? '' });
@@ -487,6 +498,7 @@ let termBarTimer = null;
 const TERM_BAR_MS = 900;
 let termTimer = null;
 let termChain = 0;
+let termBase = null;
 let termSeen = null;
 let termReq = 0;
 let termOpenNext = null;
@@ -568,11 +580,16 @@ async function pollTerminal() {
   const cols = termWinOf && termWinOf === termInfo?.session ? termCols() : null;
   const q = new URLSearchParams();
   if (cols) q.set('cols', cols);
-  if (termSeen) q.set('seen', termSeen);
+  if (termSeen) { q.set('seen', termSeen); q.set('delta', '1'); }
   const qs = q.toString();
   let r;
   try { r = await api('GET', `/api/tasks/${seg(key)}/terminal${qs ? `?${qs}` : ''}`, undefined, { quiet: true }); } catch { return; }
   if (n !== termReq || key !== termKey || key !== state.drawerKey) return;
+  if (!r.same) {
+    r = wholeAnswer(r, termBase, termSeen);
+    if (!r) { termSeen = null; return; } // not against what this card has: the next look gets it whole
+    termBase = r;
+  }
   r = heldScreen(r);
   if (r.same) return;
   termSeen = r.v || null;
@@ -868,7 +885,8 @@ async function termImage(input, keyOf, blob, key = keyOf()) {
 }
 
 export function setTermHint(input, task) {
-  const hint = termSuggestion(task, tr) || '';
+  const gate = Boolean(state.projects.find((p) => p.prefix && task.key?.startsWith(`${p.prefix}-`))?.ship_gate);
+  const hint = termSuggestion({ ...task, gate }, tr) || '';
   const base = tr('Answer Claude…');
   const shown = hint ? `${hint} — Tab` : base;
   if (input.dataset.hint === hint && input.placeholder === shown) return;
@@ -991,6 +1009,8 @@ function renderAttachments(list) {
 
 let drawerChecklist = [];
 const clSaveTimers = {};
+const clInTurn = createTurns(); // saves of one item go one at a time: a late answer must not meet the answer of a later save
+const clOnWay = new Map(); // id → how many saves of its text have not answered
 const clSending = new Set();
 const CL_TRASH = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2.5 4h11M6.5 4V2.8a.8.8 0 0 1 .8-.8h1.4a.8.8 0 0 1 .8.8V4M5 4l.5 9a1 1 0 0 0 1 .95h3a1 1 0 0 0 1-.95L12 4M6.7 6.5v5M9.3 6.5v5" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>';
 
@@ -1061,7 +1081,8 @@ function paintChecklistItem(item) {
 
 export function applyChecklist(key, list) {
   if (!Array.isArray(list) || key !== state.drawerKey) return;
-  const mine = new Set([...Object.keys(clSaveTimers), ...clSending].map(String));
+  const waits = [...clUnsent.values()].filter((j) => j.key === key && j.body.text !== undefined).map((j) => j.id);
+  const mine = new Set([...Object.keys(clSaveTimers), ...clSending, ...waits].map(String));
   const focused = document.activeElement?.closest?.('#d-checklist .cl-item')?.dataset.id;
   if (focused) mine.add(String(focused));
   const local = new Map(drawerChecklist.map((c) => [String(c.id), c]));
@@ -1087,7 +1108,7 @@ function clSaved(key, id, body) {
   const k = clQueueKey(key, id);
   const job = clUnsent.get(k);
   if (job) {
-    for (const f of Object.keys(body)) if (job.body[f] === body[f]) delete job.body[f];
+    for (const f of Object.keys(body)) delete job.body[f]; // what reached the server is newer than what waits, as with `supersede`
     if (!Object.keys(job.body).length) { clUnsent.delete(k); dropUnsaved(k); }
   }
   if (clNoteShown && key === state.drawerKey && !clUnsent.size) clNote(null);
@@ -1149,8 +1170,13 @@ function scheduleChecklistSave(id, text) {
   clearTimeout(clSaveTimers[id]?.timer);
   const send = async () => {
     delete clSaveTimers[id];
-    clSending.add(String(id));
-    try { await patchChecklistItem(key, id, { text }); } finally { clSending.delete(String(id)); }
+    const k = String(id);
+    clSending.add(k);
+    clOnWay.set(k, (clOnWay.get(k) || 0) + 1);
+    try { await clInTurn(k, () => patchChecklistItem(key, id, { text })); } finally {
+      const left = clOnWay.get(k) - 1;
+      if (left) clOnWay.set(k, left); else { clOnWay.delete(k); clSending.delete(k); }
+    }
   };
   clSaveTimers[id] = { timer: setTimeout(send, 450), send };
 }
@@ -1184,12 +1210,7 @@ async function deleteChecklistItem(id) {
 }
 
 const BOX_MS = 200;
-export function openLightbox(url) {
-  const overlay = document.createElement('div');
-  overlay.className = 'lightbox';
-  overlay.innerHTML = `<img src="${esc(url)}" alt="">`;
-  const img = overlay.querySelector('img');
-  img.onerror = () => { img.replaceWith(Object.assign(document.createElement('div'), { className: 'lightbox-none', textContent: tr('The picture could not be opened') })); };
+function popUp(overlay, inner) {
   const still = () => !overlay.animate || globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
   const ease = { duration: BOX_MS, easing: 'cubic-bezier(.2, .7, .2, 1)' };
   const leave = async () => {
@@ -1200,12 +1221,33 @@ export function openLightbox(url) {
     return true;
   };
   const close = overlayLayer(overlay, { backdrop: false, confirmClose: leave });
-  overlay.onclick = close;
   document.body.appendChild(overlay);
   if (!still()) {
     overlay.animate([{ opacity: 0 }, { opacity: 1 }], ease);
-    img.animate([{ opacity: 0, transform: 'scale(.94)' }, { opacity: 1, transform: 'none' }], ease);
+    inner.animate([{ opacity: 0, transform: 'scale(.94)' }, { opacity: 1, transform: 'none' }], ease);
   }
+  return close;
+}
+export function openLightbox(url) {
+  const overlay = document.createElement('div');
+  overlay.className = 'lightbox';
+  overlay.innerHTML = `<img src="${esc(url)}" alt="">`;
+  const img = overlay.querySelector('img');
+  img.onerror = () => { img.replaceWith(Object.assign(document.createElement('div'), { className: 'lightbox-none', textContent: tr('The picture could not be opened') })); };
+  overlay.onclick = popUp(overlay, img);
+}
+export function openDoc(name, read, refused) {
+  const overlay = document.createElement('div');
+  overlay.className = 'lightbox doc-over';
+  overlay.innerHTML = `<div class="doc-box" role="dialog" aria-label="${esc(name)}"><div class="doc-head"><span class="doc-name">${esc(name)}</span>`
+    + `<button type="button" class="btn-icon doc-close" aria-label="${esc(tr('Close'))}" title="${esc(tr('Close'))}">✕</button></div>`
+    + `<div class="doc-body chat-claude" tabindex="0"><div class="muted">${esc(tr('Loading…'))}</div></div></div>`;
+  const body = overlay.querySelector('.doc-body');
+  const close = popUp(overlay, overlay.firstElementChild);
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
+  overlay.querySelector('.doc-close').onclick = close;
+  body.focus({ preventScroll: true }); // the arrows and the space read the file at once
+  read().then((html) => { body.innerHTML = html; }, (e) => { body.textContent = refused(e); });
 }
 
 async function deleteAttachment(attId) {
@@ -1631,7 +1673,8 @@ function leaveSmoothly() {
 const CARD_STEP = 'kbCard';
 let backing = false;
 function holdBack() {
-  if (history.state?.[CARD_STEP] || !globalThis.matchMedia?.(NARROW).matches) return;
+  // a phone on its side is wider than NARROW and still has the back gesture
+  if (history.state?.[CARD_STEP] || !(globalThis.matchMedia?.(NARROW).matches || onPhone())) return;
   history.pushState({ [CARD_STEP]: true }, '');
 }
 function dropBack() {
@@ -1663,6 +1706,7 @@ export function closeDrawer() {
   closeDrawerMenu();
   closeReturnPop();
   state.drawerKey = null;
+  commentsRead = null; // a read that hangs must not stand in for the read of the card opened again
   renderAsks();
   drawerStatus = null;
   timelineStatus = null;
@@ -1683,6 +1727,7 @@ export function closeDrawer() {
   $('d-project').classList.add('hidden');
   stopTermPoll();
   cardChat?.show(false);
+  tabsFor = null;
   markSelectedCard();
   if (getSetting('keepDrawer')) { $('drawer').classList.remove('hidden'); $('drawer').classList.add('is-empty'); $('drawer-id').textContent = ''; }
   else $('drawer').classList.add('hidden');
@@ -2113,7 +2158,7 @@ export function openCardMenu(e, t) {
   function wireBack() { menu.querySelector('[data-back]').onclick = (ev) => { ev.stopPropagation(); renderMain(); }; }
   function renderSub(kind) {
     if (kind === 'status') {
-      menu.innerHTML = backRow + ALL_STATUSES.map(([v, lab]) => {
+      menu.innerHTML = backRow + statusesFor(t.project, t.status).map(([v, lab]) => {
         const dis = Boolean(moveBlocked(t.status, v, { manual: taskIsNoclaude(t) }));
         return `<div class="cm-opt${v === t.status ? ' active' : ''}${dis ? ' disabled' : ''}" data-v="${v}"><span class="dot s-${v}"></span>${lab}</div>`;
       }).join('');
@@ -2492,7 +2537,9 @@ async function doAutosaveOnce() {
     const body = 'description' in patch && drawerSnapshot ? { ...patch, description_base: descBaseOf(key) } : patch;
     if ('description' in body) descSending.set(key, patch.description);
     let saved;
-    try { saved = await editInTurn(key, () => api('PATCH', `/api/tasks/${seg(key)}`, body)); }
+    // an earlier save that failed never reached the server: its base, not its text, is what this one starts from
+    const withBase = () => ('description_base' in body && queuedBase.has(key) ? { ...body, description_base: queuedBase.get(key) } : body);
+    try { saved = await editInTurn(key, () => api('PATCH', `/api/tasks/${seg(key)}`, withBase())); }
     catch (e) {
       if (canRetry(e) && 'description' in body && !queuedBase.has(key)) queuedBase.set(key, body.description_base);
       if (canRetry(e)) queueTaskEdit(key, patch);
@@ -2514,6 +2561,7 @@ async function doAutosaveOnce() {
     } finally {
       if ('description' in body) descSent(key, patch.description, body.description_base);
     }
+    if ('description' in body) queuedBase.delete(key); // the description got there: nothing waits from that base
     if (key === state.drawerKey) showSaveNote(null);
     if (unsentEdits.supersede(key, Object.keys(patch))) dropUnsaved(`task:${key}`);
     const { description: mine, ...rest } = patch;

@@ -21,7 +21,7 @@ export function createLink({
   let helloAt = 0;
   let helloTimer = null;
   let opened = false; // a follower got its first «open»
-  let state = { up: false, since: now(), refused: false };
+  let state = { up: null, since: now(), refused: false }; // null: not known yet — the first failure is a change to say
 
   const post = (msg) => { if (role === 'leader' && channel) { try { channel.postMessage(msg); } catch { /* the channel is closed */ } } };
   const setState = (next) => {

@@ -9,6 +9,7 @@ Every task lives in a local SQLite database behind the `kb` CLI. GitHub (issues 
 Tasks are addressed by key: `TIC-3` (project prefix + number). Case does not matter.
 
 Statuses: `backlog` → `todo` → `prep` → `doing` → `deploy` → `review` → `done` (+ `cancelled`). Blocked is a flag.
+`ready` (between `doing` and `deploy`) exists where `kb info` says "ships on the word": see step 4.
 `prep` is where you study the task before writing code (reading CLAUDE.md, reading files). The work timer does NOT run there — only `doing` and `deploy` count as work. `kb take` puts a task in `prep`; the moment you start writing code, run `kb mv <key> doing`.
 
 ## Commands
@@ -40,7 +41,7 @@ kb show <key>                 # details + checklist + issue + comments: the last
                               # "… N more comments not printed" = the rest are
                               # on the board — nothing is dropped silently.
 kb add <proj> "title" [-d "desc"] [-p high|med|low] [-s todo]   # goes to backlog by default!
-kb mv <key> todo|prep|doing|deploy|review   # never done/cancelled: those are kb done / kb cancel
+kb mv <key> todo|prep|doing|ready|deploy|review   # never done/cancelled: those are kb done / kb cancel
 kb done <key> · kb cancel <key> · kb pri <key> high|med|low|none
 kb lbl <key> +bug -ui         # labels: bug docs duplicate enhancement ui feature security noclaude ask …
                               # noclaude = done by hand (without Claude) → counted separately on the dashboard;
@@ -153,7 +154,10 @@ for each. Use `kb take X` only when asked to "work through project X" without sp
    (`… (#A, #B)`), or the "revert the hunk → commit → restore it" trick; with 3+ interleaved
    changes, slice the full diff into per-issue patch files and apply them with `git apply`,
    committing in between.
-4. If the project has a `deploy_skill`: `kb mv <key> deploy` → run the deployment with that skill →
+4. If `kb info` says "ships on the word": after the commit `kb mv <key> ready` and stop there — the deployment waits for the
+   human's word; the board refuses `deploy` from anywhere but `ready`, and `doing` → `review`. Once they say so, go on as
+   below. Nothing to ship after all: `kb review` from `ready`.
+   If the project has a `deploy_skill`: `kb mv <key> deploy` → run the deployment with that skill →
    step 5. Without a deploy_skill, go straight to step 5. Take the skill from `deploy_skill_path`
    in `kb info` (if the skill is not in the available list, just read its SKILL.md at that path).
    The generic `deploy` skill ships with the board (`skills/deploy/`) and works purely off

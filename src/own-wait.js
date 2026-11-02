@@ -37,6 +37,9 @@ export const inBackground = (input) => input?.run_in_background === true || inpu
 
 const MOVED = /^Command did not complete within [^\n]*? and was moved to the background \(ID: (\w+)\)/;
 const FORKED = /^Skill "[^"\n]{1,200}" launched \(forked execution, running in the background\)/;
+const ASYNC_AGENT = /^Async agent launched successfully\.(?:[^\n]*\nagentId: (\w+))?/;
+const WORKFLOW = /^Workflow launched in background\. Task ID: (\w+)/;
+const RESUMED = /^\{"success":true,"message":"Resuming agent [^"\n]*","resumedAgentId":"(\w+)"/;
 const isObj = (x) => Boolean(x) && typeof x === 'object' && !Array.isArray(x);
 /** Whether the answer `b` (a tool_result of the transcript line `d`) says its step runs on in the background: the id of
     that work ('' when the answer names none), or null. What Claude Code writes after a step is read only when the line
@@ -47,12 +50,16 @@ export function wentBackground(d, b) {
   if (isObj(r)) {
     if (typeof r.backgroundTaskId === 'string' && r.backgroundTaskId) return r.backgroundTaskId;
     if (r.status === 'forked' && r.background === true) return typeof r.agentId === 'string' ? r.agentId : '';
+    if (r.status === 'async_launched') return String(r.agentId || r.taskId || '');
+    if (typeof r.resumedAgentId === 'string' && r.resumedAgentId) return r.resumedAgentId;
     return null;
   }
   const c = b?.content;
   const text = typeof c === 'string' ? c : Array.isArray(c) ? c.filter((x) => x?.type === 'text').map((x) => String(x.text ?? '')).join('\n') : '';
   const moved = MOVED.exec(text);
   if (moved) return moved[1];
+  const launched = ASYNC_AGENT.exec(text) || WORKFLOW.exec(text) || RESUMED.exec(text);
+  if (launched) return launched[1] || '';
   return FORKED.test(text) ? '' : null;
 }
 const TURN_LINES = new Set(['assistant', 'user', 'system']);
@@ -85,13 +92,13 @@ export function ownWaitIn(lines) {
   };
   const launched = new Map(); // tool_use id → {at, task}
   const steps = new Map();
-  const stopped = new Set();  // background task ids Claude stopped itself
+  const stopped = new Map();  // background task id Claude stopped itself → the line of its last stop
   for (let i = from + 1; i < parsed.length; i += 1) {
     const d = parsed[i].d;
     if (!d || d.isSidechain || !Array.isArray(d.message?.content)) continue;
     for (const b of d.message.content) {
       if (d.type === 'assistant' && b?.type === 'tool_use') {
-        if (STOPS.has(b.name)) stopped.add(String(b.input?.task_id ?? b.input?.shell_id ?? ''));
+        if (STOPS.has(b.name)) stopped.set(String(b.input?.task_id ?? b.input?.shell_id ?? ''), i);
         if (!b.id) continue;
         const service = b.name === 'Bash' && isService(b.input?.command);
         if (!inBackground(b.input)) { steps.set(b.id, { at: i, service }); continue; }
@@ -99,7 +106,7 @@ export function ownWaitIn(lines) {
         launched.set(b.id, { at: i, task: null });
       } else if (d.type === 'user' && b?.type === 'tool_result' && launched.has(b.tool_use_id)) {
         const text = typeof b.content === 'string' ? b.content : JSON.stringify(b.content ?? '');
-        launched.get(b.tool_use_id).task = d.toolUseResult?.backgroundTaskId || /with ID: (\w+)/.exec(text)?.[1] || null;
+        launched.get(b.tool_use_id).task = wentBackground(d, b) || /with ID: (\w+)/.exec(text)?.[1] || null;
       } else if (d.type === 'user' && b?.type === 'tool_result' && steps.has(b.tool_use_id)) {
         const task = wentBackground(d, b);
         const step = steps.get(b.tool_use_id);
@@ -107,9 +114,10 @@ export function ownWaitIn(lines) {
       }
     }
   }
-  // its notification (or the one Claude Code queued while the turn went on) names the work that ended
-  const running = [...launched].filter(([id, { at, task }]) => !(task && stopped.has(task))
-    && !parsed.slice(at + 1).some((p) => p.raw.includes(`<tool-use-id>${id}</tool-use-id>`)));
+  // its notification (or the one Claude Code queued while the turn went on) names the work that ended — by the step, or
+  // it stopped, not for one started after it
+  const running = [...launched].filter(([id, { at, task }]) => !(task && stopped.get(task) > at)
+    && !parsed.slice(at + 1).some((p) => p.raw.includes(`<tool-use-id>${id}</tool-use-id>`) || (task && p.raw.includes(`<task-id>${task}</task-id>`))));
   if (!running.length) return { own: false };
   return { own: true, at: turnEnd(Math.max(...running.map(([, l]) => l.at))) };
 }
