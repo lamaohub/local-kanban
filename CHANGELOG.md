@@ -8,6 +8,26 @@ version it goes out as and opens an empty one again. Released sections are histo
 
 ## [Unreleased]
 
+## [2.0.0-beta.4]
+
+### Added
+
+- Health: a CLAUDE.md past a norm has «Fix» — it opens the task to shrink the file, with the docs of Claude Code, and starts Claude on it at once; while a Claude works in the project's folder, or a task of the project is in work, the button says what holds it and starts nothing.
+
+### Fixed
+
+- `kb note` and `kb review` send their note with a key, so a retry after a lost answer finds the note already written instead of adding a second one.
+- **Wi-Fi: a guest no longer sees where the project's notes and deploy skill lie on the owner's disk.**
+- The commit line of a card no longer shows a foreign pull request with the same number or the newest commit of another task.
+- A card in Ready to ship says «waiting for you» when its Claude waits there for your word, with no second sound for it.
+- A Claude that got one of its helpers back and waits for the next no longer reads as waiting for you.
+- A group action or a drag the board refused says which tasks did not change and why, instead of putting cards back without a word; a refused title or description no longer holds the rest of the card's edit.
+- Automations: a rule waits for the board to read the terminals after a restart before it starts a check, a pause after a refused start outlives a restart, words that cannot reach Claude stop after three tries, a card says when the board could not tell Claude to go on, and a limit line wrapped in the middle of its time keeps am/pm.
+- Going on with interrupted work: tmux too slow to answer no longer uses up the tries of a session, and a card the board could not set going says what held it.
+- On a Mac the board starts git and its other programs by their full path: a bare name was a short-lived process for every folder of PATH in front of it, and their stream held the start of tmux for seconds. The tests of tmux no longer fail beside the test of the mark «on main», the suite runs in 55 s instead of 92, and a release runs it at once again.
+- The chat keeps words with pictures you sent while Claude worked: they vanished from it the moment Claude took them.
+- A terminal tmux is slow to answer about no longer reads as «Not running», nor its chat as «does not run inside the board»: the screen and its state stay until tmux answers.
+
 ## [2.0.0-beta.3]
 
 ### Fixed

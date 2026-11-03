@@ -16,6 +16,7 @@ import { snapshotFile } from '../file-snapshot.js';
 import { closeFinishedTerminals } from '../phantom.js';
 import { snapshot } from '../task-shape.js';
 import { kick } from '../sync/worker.js';
+import { bin } from '../bin-path.js';
 
 const DEFAULT_CATEGORY = 'Other';
 const LOCKED_CATEGORIES = new Set([DEFAULT_CATEGORY, 'Local']);
@@ -136,7 +137,7 @@ async function remoteStats() {
 
 function localPm2Stats() {
   return new Promise((resolve, reject) => {
-    execFile('pm2', ['jlist'], { timeout: 8000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
+    execFile(bin('pm2'), ['jlist'], { timeout: 8000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
       if (err) {
         return reject(new Error(err.code === 'ENOENT'
           ? 'no status source configured: local pm2 was not found and KB_PANEL_URL is not set'
@@ -379,6 +380,16 @@ export default async function projectRoutes(app) {
     })
       .filter((d) => d.exists || d.name === 'CLAUDE.md');
     const skill = p.deploy_skill ? skillInfo(p.deploy_skill) : null;
+    // carries the owner's user name and folders, and a guest cannot edit these files anyway (OWNER_ONLY)
+    if (isGuest(req)) {
+      return {
+        path: null,
+        path_exists: Boolean(p.path && existsSync(p.path)),
+        paths_hidden: true,
+        docs: docs.map((d) => ({ ...d, path: null })),
+        skill: skill && { ...skill, path: null, real_path: null, generic: p.deploy_skill === GENERIC_DEPLOY_SKILL },
+      };
+    }
     return {
       path: p.path || null,
       path_exists: Boolean(p.path && existsSync(p.path)),
@@ -399,10 +410,11 @@ export default async function projectRoutes(app) {
     if (!path) return reply.code(400).send({ error: 'unknown document' });
     let buf;
     try { buf = readFileSync(path); } catch { return reply.code(404).send({ error: 'the file is not there' }); }
+    const guest = isGuest(req);
     return {
       name: req.params.name,
-      path,
-      real_path: docRealPath(path),
+      path: guest ? null : path,
+      real_path: guest ? null : docRealPath(path),
       text: buf.subarray(0, DOC_MAX_BYTES).toString('utf8'),
       truncated: buf.length > DOC_MAX_BYTES,
     };
@@ -462,7 +474,7 @@ export default async function projectRoutes(app) {
     const dir = join(localRoot(), name);
     if (existsSync(dir)) return reply.code(409).send({ error: `folder ${name} already exists in ${localRoot()}` });
     try {
-      await new Promise((resolve, reject) => execFile('git', ['clone', '--', url, dir], {
+      await new Promise((resolve, reject) => execFile(bin('git'), ['clone', '--', url, dir], {
         timeout: 180000,
         env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '', SSH_ASKPASS: '' },
       }, (err, _out, serr) => (err ? reject(new Error(String(serr || err.message).slice(0, 300))) : resolve())));
@@ -477,7 +489,7 @@ export default async function projectRoutes(app) {
     if (!/^[\w.@][\w.@-]*$/.test(server)) return reply.code(400).send({ error: 'server: an ssh alias or host, no options or spaces' });
     if (/["'`;|&$\\]/.test(path)) return reply.code(400).send({ error: 'path: invalid characters' });
     if (/[\x00-\x1f]/.test(path)) return reply.code(400).send({ error: 'path: control characters are not allowed' });
-    const sshRun = (cmd) => new Promise((resolve) => execFile('ssh',
+    const sshRun = (cmd) => new Promise((resolve) => execFile(bin('ssh'),
       ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', '--', server, cmd],
       { timeout: 20000 }, (err, out, serr) => resolve({ err, out: String(out || '').trim(), serr: String(serr || '').trim() })));
     const dirCheck = await sshRun(`test -d "${path}" && echo yes`);
@@ -501,7 +513,7 @@ export default async function projectRoutes(app) {
     if (path && /["'`;|&$\\]/.test(path)) return reply.code(400).send({ error: 'path: invalid characters' });
     if (/[\x00-\x1f]/.test(path)) return reply.code(400).send({ error: 'path: control characters are not allowed' });
     const cmd = path ? `test -d "${path}" && echo dir || echo nodir` : 'echo ok';
-    const res = await new Promise((done) => execFile('ssh',
+    const res = await new Promise((done) => execFile(bin('ssh'),
       ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', '--', server, cmd],
       { timeout: 20000 }, (err, out, serr) => done({ err, out: String(out || '').trim(), serr: String(serr || '').trim() })));
     if (res.err) {

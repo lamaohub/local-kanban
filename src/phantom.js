@@ -156,6 +156,8 @@ export async function runPhantom(spec) {
   return go();
 }
 
+/** The refusal of a request about a terminal tmux did not answer about (reason `tmux-slow`) — said alike everywhere. */
+export const TMUX_SLOW = 'tmux did not answer in time — try again';
 const pane = (sid) => `=${sessionName(sid)}:`; // `=` — this very session, not one whose name starts so
 
 const STATE_FORMAT = '#{pane_dead}|#{pane_dead_status}|#{window_width}|#{pane_pid}|#{pid}|#{pane_dead_signal}';
@@ -189,7 +191,7 @@ export async function phantomState(sid) {
   return nudgeLostExit(sid, await readState(sid), () => readState(sid));
 }
 
-const NO_PANE = /can't find (session|window|pane)|no server running|error connecting to|tmux is not installed/i;
+const NO_PANE = /can't find (session|window|pane)|no current target|no server running|error connecting to|tmux is not installed/i;
 /** phantomState for the question "is the board's terminal of this session gone": null only on tmux's own word that
     there is no such session (or no tmux server at all); a tmux that did not answer gives `{dead: false, unknown: true}`. */
 export async function phantomPane(sid) {
@@ -252,7 +254,7 @@ export async function phantomView(sid, lines = SCREEN_LINES) {
   const r = await tmux(['list-panes', '-t', pane(sid), '-F', STATE_FORMAT], mark,
     ['capture-pane', '-p', '-S', `-${lines}`, '-t', pane(sid)], mark,
     ['capture-pane', '-p', '-J', '-S', `-${lines}`, '-t', pane(sid)]);
-  if (r.err) return null;
+  if (r.err) return NO_PANE.test(`${r.text} ${r.err.message}`) || SERVER_GONE.test(r.text) ? null : { dead: false, unknown: true };
   const [state, screen, joined] = r.out.split(`${cut}\n`);
   if (joined === undefined) return null;
   const st = await nudgeLostExit(sid, paneState(state), () => readState(sid));
@@ -607,13 +609,14 @@ export function paceOnScreen(screen) {
 }
 
 const LIMIT_HIT = /\b(?:usage|5-hour|weekly|session|opus|sonnet|plan) limit reached|\bhit your (?:[\w-]+ )?limit/i;
-// "resets 12:50am", "resets at 3pm", "resets Oct 9 at 10am", "resets Oct 9, 10am"
-const LIMIT_RESETS = /resets?(?: at)? ((?:[a-z]{3,9} \d{1,2},? (?:at )?)?\d{1,2}(?::\d{2})?\s?(?:am|pm)?)/i;
+// joined with a space, and a line torn inside the time («12:» / «50am», «12:50a» / «m» at a width of 45) read «12» or «12:50»
+// with no am/pm — the words then waited for the wrong half of the day. A space may stand anywhere in the time.
+const LIMIT_RESETS = /resets?(?: at)? ((?:[a-z]{3,9} \d{1,2},? (?:at )?)?)(\d(?: ?\d)?(?: ?: ?\d ?\d)?(?: ?[ap] ?m\b)?)/i;
 export function limitOnScreen(screen) {
   const under = underPromptBox(screen);
   if (!under || !LIMIT_HIT.test(under)) return null;
-  const at = LIMIT_RESETS.exec(under)?.[1];
-  return { resets: at ? at.replace(/\s+/g, ' ').replace(/ (am|pm)$/i, '$1') : null };
+  const m = LIMIT_RESETS.exec(under);
+  return { resets: m ? `${m[1].replace(/\s+/g, ' ')}${m[2].replace(/\s+/g, '')}` : null };
 }
 export async function boardLook() {
   const none = { live: [], questions: [], background: [], over: [], limited: [] };
@@ -668,14 +671,14 @@ export function startTerminalSweep() {
 }
 
 /** The board's session that works on a task: the newest one the board started and tmux still has — or null.
-    `screen` — with what its screen shows (`screen`, `links`), in the same call to tmux. `strict` — a tmux that did
-    not answer is no answer: `{session, unknown: true}` instead of going on to the next session. */
-export async function taskTerminal(taskId, { screen = false, strict = false } = {}) {
+    `screen` — with what its screen shows (`screen`, `links`), in the same call to tmux. A tmux that did not answer is
+    no answer: `{session, unknown: true}` instead of going on to the next session. */
+export async function taskTerminal(taskId, { screen = false } = {}) {
   if (!tmuxBin()) return null;
   const rows = db.prepare(`SELECT s.session_id FROM task_sessions s JOIN board_sessions b ON b.session_id = s.session_id
     WHERE s.task_id = ? ORDER BY s.last_seen DESC, s.first_seen DESC LIMIT 5`).all(taskId);
   for (const r of rows) {
-    const st = screen ? await phantomView(r.session_id) : strict ? await phantomPane(r.session_id) : await phantomState(r.session_id);
+    const st = screen ? await phantomView(r.session_id) : await phantomPane(r.session_id);
     if (st?.unknown) return { session: r.session_id, unknown: true };
     if (st) {
       return { session: r.session_id, dead: st.dead, ...(st.dead ? { exit: st.exit, interrupted: endedBySignal(st) } : {}), cols: st.cols,

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { db, ghOwner, ghRepo } from './db.js';
 import { repoHttpsBase } from './repo-base.js';
+import { bin } from './bin-path.js';
 
 const KEEP_MS = 30_000;
 const MAIN_SCAN = 3000;   // commits of main read: older ones are long shipped
@@ -16,7 +17,7 @@ const KEY_LIST = /^[^\p{L}\p{N}]*(?:and|\u0438)?[^\p{L}\p{N}]*$/iu; // what stan
 
 function git(path, args, env = {}) {
   return new Promise((done) => {
-    execFile('git', ['-C', path, ...args], { timeout: GIT_MS, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0', ...env } },
+    execFile(bin('git'), ['-C', path, ...args], { timeout: GIT_MS, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0', ...env } },
       (err, out) => done(err ? null : out));
   });
 }
@@ -54,6 +55,16 @@ export function placeOf(t, main, side, onMain) {
   const mine = (c) => t.words.some((w) => c.words.has(w));
   if (t.branch === 'ahead' || side.some((c) => mine(c) && !onMain(c))) return 'branch';
   return t.branch === 'in' || main.some(mine) || side.some(mine) ? 'main' : 'none';
+}
+
+export const STAT_FORMAT = `%H%n%ct%n%s%n%B${SEP}`;
+export function statCommit(out, words, { issue = null, since = null, known = null } = {}) {
+  const commits = parseLog(out, known); // `tip` holds the commit time here
+  const own = commits.find((c) => words.some((w) => c.words.has(w)));
+  if (own || issue || since == null) return own?.hash || null;
+  const head = commits[0];
+  if (!head || Number(head.tip) < since || ownKeys(head.subject, known).length || /^Merge /.test(head.subject)) return null;
+  return head.hash;
 }
 
 export function branchesOf(key, names) {

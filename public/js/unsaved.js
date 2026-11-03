@@ -234,6 +234,8 @@ const KNOWN = [
   [/^the project has no folder on this computer — the command would run/, 'the project has no folder on this computer — set it in the project, or copy the command'],
   [/^the terminal did not open/, 'the terminal did not open — copy the command instead; the details are in Settings → Errors'],
   [/^a guest starts Claude inside the board only$/, 'a guest starts Claude only inside the board'],
+  [/^the project has no CLAUDE\.md of its own$/, 'the project has no CLAUDE.md of its own any more'],
+  [/^tmux did not answer in time — try again$/, 'tmux did not answer in time — try again in a few seconds'],
   [/^unknown labels: /, 'this board has no such label'],
 ];
 export function refusalText(e) {

@@ -12,6 +12,7 @@ import { taskOfSession } from './claude-asks.js';
 import { waitsOwnWork } from './own-wait.js';
 import { syncClocks } from './work-clock.js';
 import { breakNow, breakState, recoverDue, settleBreak } from './api-break.js';
+import { bin } from './bin-path.js';
 
 const KNOWN = new Set(['busy', 'waiting', 'idle']);
 const STATUS_AS = { shell: 'background' };
@@ -28,7 +29,7 @@ const startSeen = new Map(); // `${pid} ${procStart}` → {same, at}
     null — ps did not run. */
 export function processStarts(pids) {
   return new Promise((resolve) => {
-    execFile('ps', ['-o', 'pid=,lstart=', '-p', pids.join(',')], { env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' }, timeout: 3000 }, (err, out) => {
+    execFile(bin('ps'), ['-o', 'pid=,lstart=', '-p', pids.join(',')], { env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' }, timeout: 3000 }, (err, out) => {
       if (err && typeof err.code !== 'number') { resolve(null); return; } // no ps, or it hung
       const starts = new Map(); // ps exits 1 when none of the pids runs; what it did print still counts
       for (const line of String(out || '').split('\n')) {
@@ -69,6 +70,7 @@ export async function readRegistry(isAlive = alive, startsOf = processStarts) {
       pid: d.pid,
       alive: isAlive(d.pid),
       since: Number(d.statusUpdatedAt || d.updatedAt) || null,
+      cwd: typeof d.cwd === 'string' ? d.cwd : null,
       procStart: typeof d.procStart === 'string' ? d.procStart : null,
     }]);
   }
@@ -137,7 +139,7 @@ export async function liveTasks(isAlive = alive, paneOf = undefined, limitedNow 
   const rows = db.prepare(`SELECT t.id, (p.prefix || '-' || t.task_no) AS key, p.slug AS project, p.name AS project_name, t.title, t.status,
       s.session_id, s.last_seen
     FROM task_sessions s JOIN tasks t ON t.id = s.task_id JOIN projects p ON p.id = t.project_id AND p.archived = 0
-    WHERE t.status IN ('prep','doing','deploy')
+    WHERE t.status IN ('prep','doing','ready','deploy') -- CK-949: in Ready to ship its Claude waits for the word to ship
     ORDER BY t.id, s.last_seen DESC, s.session_id`).all();
   const waiting = waitingLaunches();
   if (!rows.length && !waiting.size) return [];
@@ -167,7 +169,9 @@ export async function liveTasks(isAlive = alive, paneOf = undefined, limitedNow 
       if (!focusOf.has(r.session_id)) {
         focusOf.set(r.session_id, sessionWindows(sessionEvents(r.session_id)).find((w) => w.to === null)?.task_id ?? null);
       }
-      if (focusOf.get(r.session_id) !== r.id) continue; // the session is on another task of its batch
+      // its Claude, on no other task, waits in it for the word to ship
+      const focus = focusOf.get(r.session_id);
+      if (focus !== r.id && !(focus === null && r.status === 'ready')) continue;
     }
     const since = handedOff ? null : registry.get(r.session_id)?.since ?? null;
     if (claude === 'gone' && !endedOf.has(r.session_id)) endedOf.set(r.session_id, await boardPaneEnded(r.session_id, paneOf));
@@ -175,7 +179,7 @@ export async function liveTasks(isAlive = alive, paneOf = undefined, limitedNow 
     let broke = null;
     if (claude === 'idle') {
       const brk = await brokeOf(r.session_id);
-      if (brk) broke = breakState(r.session_id, brk, { board: isBoardSession(r.session_id), task: r.id });
+      if (brk) broke = breakState(r.session_id, brk, { board: isBoardSession(r.session_id) && r.status !== 'ready', task: r.id });
       // review: only Claude's own words end the chain — the board's «go on» last (not answered yet, the registry a look
       // behind) would reset its tries, and a network that stays down would get «go on» every 15 s for good
       else if (brk === null) settleBreak(r.session_id);
@@ -231,7 +235,7 @@ async function activeProjects(isAlive, alive, bg, ov) {
   if (!alive.size) return [];
   const reg = await readRegistry(isAlive);
   const holds = new Set(db.prepare(`SELECT DISTINCT s.session_id FROM task_sessions s JOIN tasks t ON t.id = s.task_id
-    WHERE t.status IN ('prep','doing','deploy')`).all().map((r) => r.session_id));
+    WHERE t.status IN ('prep','doing','ready','deploy')`).all().map((r) => r.session_id));
   const sids = [...alive].filter((sid) => {
     const how = worksPastTasks(reg.get(sid), bg.has(sid), undefined, ov.has(sid));
     return how === 'busy' || (how && !holds.has(sid));

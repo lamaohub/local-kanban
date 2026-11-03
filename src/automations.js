@@ -312,7 +312,17 @@ const FIX_WORDS = {
   en: { sent: (n) => `The check returned the task: the board started the fix (round ${n} of ${FIX_ROUNDS}), the remark is in the comments above.`, out: `The check returned the task again, and ${FIX_ROUNDS} rounds of fixing are over: it waits for you.` },
 };
 const FIX_RETRY_MS = 5 * 60_000;
-const fixWait = new Map(); // rule id → when a refused start of a fix is tried again
+const FIX_WAIT_KEY = 'automations.fixWait';
+const fixWait = {
+  get(id) { try { return (JSON.parse(kvGet(FIX_WAIT_KEY) || '{}') || {})[id] || 0; } catch { return 0; } },
+  set(id, at) {
+    let map = {};
+    try { map = JSON.parse(kvGet(FIX_WAIT_KEY) || '{}') || {}; } catch { /* starts anew */ }
+    for (const [k, v] of Object.entries(map)) if (v < Date.now()) delete map[k]; // passed pauses go
+    map[id] = at;
+    kvSet(FIX_WAIT_KEY, JSON.stringify(map));
+  },
+};
 /** → whether Claude was started on what the rule's check returned. */
 async function fixReturned(app, rule, slug, since, now) {
   let rounds = {};
@@ -483,6 +493,8 @@ export async function tickAutomations(app, now = Date.now()) {
   const rules = db.prepare(`SELECT a.*, p.slug FROM automations a JOIN projects p ON p.id = a.project_id AND p.archived = 0
     WHERE a.state = 'armed' ORDER BY a.id`).all();
   if (!rules.length) { phases.clear(); if (archived) announce(); return; } // most boards: nothing to look at every 5 s
+  // pause ran out while the board was down started a check over a question
+  if (!screensKnown()) { if (archived) announce(); return; }
   const on = automationsOn();
   const live = Object.fromEntries(currentLive().map((t) => [t.id, { claude: t.claude }]));
   const questions = new Set(currentQuestions().map((q) => q.id));

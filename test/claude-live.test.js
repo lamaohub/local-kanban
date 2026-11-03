@@ -172,7 +172,7 @@ test('the card applies task.live to its badges and the board is not re-read for 
   assert.match(sse, /if \(ev\.type === 'task\.live'\) \{[^\n]*applyLive\(ev\.data\?\.tasks\)[^\n]*return; \}/,
     'task.live would fall into the queue and refresh the whole board');
   const board = readFileSync(new URL('../public/js/board.js', import.meta.url), 'utf8');
-  assert.match(board, /const b = l && WORKING\.has\(t\.status\) && LIVE_BADGE\[/,
+  assert.match(board, /const b = l && \(WORKING\.has\(t\.status\) \|\| t\.status === 'ready'\) && LIVE_BADGE\[/,
     'a badge would show on cards that are not in work');
 });
 
@@ -252,4 +252,35 @@ this.loadLive = loadLive; this.event = () => { liveEvents++; };`, box);
   await late;
   assert.deepEqual(applied, [[]], 'an answer older than the events was applied');
   assert.equal(rang.length, 0, 'a question already closed rang from an old answer');
+});
+
+// sessions left it out, and its card had no «waiting for you». The dashboard lists the column on its own (waiting.ready),
+// and the page rang on the move there: the end of that turn does not ring again.
+test('a task in Ready to ship has the state of its Claude, and the dashboard does not list it twice', async () => {
+  const move = (key, status) => app.inject({ method: 'PATCH', url: `/api/tasks/${key}`, headers: { 'x-claude-session': S2 }, payload: { status } });
+  assert.equal((await move('LV-3', 'ready')).statusCode, 200);
+  try {
+    reg('202.json', { pid: 202, sessionId: S2, status: 'idle', statusUpdatedAt: 7000 });
+    const got = (await live.liveTasks(aliveOnly(101, 202))).find((x) => x.key === 'LV-3');
+    assert.deepEqual([got?.claude, got?.status], ['idle', 'ready'], 'a task in Ready to ship has no state of its Claude');
+    await live.refreshLive(aliveOnly(101, 202));
+    const d = (await app.inject({ method: 'GET', url: '/api/dashboard' })).json();
+    assert.equal(d.waiting.claude.some((x) => x.key === 'LV-3'), false, 'listed under Claude as well as under Ready to ship');
+  } finally {
+    await move('LV-3', 'doing');
+  }
+});
+
+test('the end of a turn rings for a task in work, not for one in Ready to ship', () => {
+  const sse = readFileSync(new URL('../public/js/sse.js', import.meta.url), 'utf8');
+  const a = sse.indexOf('function maybeWaitingAlert(');
+  const rang = [];
+  const box = { playReviewSound: () => rang.push('sound'), getSetting: () => false, tr: (s) => s };
+  vm.createContext(box);
+  vm.runInContext(`${sse.slice(a, sse.indexOf('\n}\n', a) + 2)}\nthis.ring = maybeWaitingAlert;`, box);
+  const turn = (status) => [{ id: 1, key: 'LV-1', status, claude: 'idle', from: 'busy' }];
+  assert.equal(box.ring(turn('ready')).size, 0, 'the move to Ready to ship rang already');
+  assert.equal(box.ring(turn('doing')).size, 1);
+  assert.equal(box.ring([{ id: 1, key: 'LV-1', status: 'ready', claude: 'limit', from: 'busy' }]).size, 1, 'a stop at the limit is news anyway');
+  assert.equal(rang.length, 2);
 });

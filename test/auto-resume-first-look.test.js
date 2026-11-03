@@ -65,3 +65,4 @@ test('nothing is typed before the first look is over, and what it saw holds the 
   await auto.tickAutomations({}, NOW + 2000);
   assert.deepEqual(told, [FREE], 'what the first look saw did not hold the words, or the look never went');
 });
+

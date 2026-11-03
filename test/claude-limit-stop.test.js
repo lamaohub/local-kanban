@@ -56,6 +56,13 @@ test('the stop at the limit and its reset are read off the lines under the input
   assert.equal(phantom.limitOnScreen(SCREEN.replace('⚠ Usage limit reached · limit resets', 'Context limit reached · /compact or /clear').replace('12:50am · ', '')), null);
   assert.deepEqual(phantom.limitOnScreen(SCREEN.replace('Usage limit reached · limit resets', 'Weekly limit reached ∙ resets Oct 9 at').replace('12:50am', '10am')), { resets: 'Oct 9 at 10am' });
   assert.deepEqual(phantom.limitOnScreen(SCREEN.replace('Usage limit reached · limit resets', "You've hit your weekly limit · resets")), { resets: '12:50am' });
+  for (const [a, b] of [['resets 12:', '50am · clau.de'], ['resets 12:50a', 'm · clau.de'], ['resets 1', '2:50am · clau.de'], ['resets 12:50', 'am · clau.de']]) {
+    const torn = SCREEN.replace('  ⚠ Usage limit reached · limit resets\n  12:50am · clau.de/wrap-up ·', `  ⚠ Usage limit reached · limit ${a}\n  ${b}`);
+    assert.notEqual(torn, SCREEN);
+    assert.deepEqual(phantom.limitOnScreen(torn), { resets: '12:50am' }, `${a} | ${b}`);
+  }
+  assert.deepEqual(phantom.limitOnScreen(SCREEN.replace('12:50am', '14:00')), { resets: '14:00' }, 'a time with no am/pm stays as it is');
+  assert.deepEqual(phantom.limitOnScreen(SCREEN.replace('limit resets', 'resets Oct 9,').replace('12:50am', '10 am')), { resets: 'Oct 9, 10am' });
   assert.equal(phantom.limitOnScreen('Claude said: the usage limit reached its peak.\n' + `${'─'.repeat(45)}\n❯ \n${'─'.repeat(45)}\n  ⏵⏵ auto mode on`), null,
     'words of Claude above the box are taken for the stop');
 });

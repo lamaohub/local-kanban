@@ -278,7 +278,7 @@ test('the page: at work in the background is a badge of its own, waits for nobod
   assert.match(nowJs, /else if \(run\.claude === 'background'\) parts\.push\(tr\('working in the background'\)\)/, 'the task a Claude in the background is on does not say so');
   assert.match(read('style.css'), /\.term-state\.live\.calm::after \{ display: none; \}/, 'the dot of a Claude that is not at work pulses');
   const dash = readFileSync(new URL('../src/routes/dashboard.js', import.meta.url), 'utf8');
-  assert.match(dash, /claude: currentLive\(\)\.filter\(\(x\) => !\['busy', 'starting', 'unsent'\]\.includes\(x\.claude\)(?: && x\.broke !== 'retrying')?\)/, 'Waiting for you lists a Claude at work on a turn');
+  assert.match(dash, /claude: currentLive\(\)\.filter\(\(x\) => (?:x\.status !== 'ready' && )?!\['busy', 'starting', 'unsent'\]\.includes\(x\.claude\)(?: && x\.broke !== 'retrying')?\)/, 'Waiting for you lists a Claude at work on a turn');
 });
 
 // turn over: the owner's IS-25 asked for tokens and waited, the card said "working", nothing rang. The turn's end is the

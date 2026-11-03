@@ -1,10 +1,11 @@
 import { execFile } from 'node:child_process';
+import { bin } from './bin-path.js';
 
 const cache = new Map();
 const TTL = 5 * 60 * 1000;
 
 const gitOut = (args) => new Promise((resolve) =>
-  execFile('git', args, { timeout: 3000 }, (err, out) => resolve(err ? null : String(out).trim())));
+  execFile(bin('git'), args, { timeout: 3000 }, (err, out) => resolve(err ? null : String(out).trim())));
 
 export function forgetRepoBase(path) {
   if (path) cache.delete(path);

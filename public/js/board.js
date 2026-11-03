@@ -13,7 +13,7 @@ import { columnCheck, reviewGroups } from './review-rules.js';
 import { heldWhy, startCheckIn } from './review.js';
 import { autoSlot } from './automations.js';
 import { paintAttention } from './attention.js';
-import { refusalLine } from './unsaved.js';
+import { refusalLine, refusalText } from './unsaved.js';
 import { localStore } from './store.js';
 import { SHIP_TITLES, SHIP_WORDS, notOnMain, shipAsker, showsShip } from './shipped-rules.js';
 import { boardColumns } from './ready-rules.js';
@@ -586,10 +586,27 @@ function renderMultiPanel() {
     + `<button class="multi-clear" data-act="clear">${tr('Clear selection')}</button>`;
   box.querySelectorAll('[data-act]').forEach((b) => { b.onclick = () => multiAction(b.dataset.act, b); });
 }
-async function multiPatchEach(bodyFor) {
+export function refusedManyText(head, refused, t = tr) {
+  const by = new Map();
+  for (const { key, e } of refused) {
+    const why = t(refusalText(e).reason);
+    by.set(why, [...(by.get(why) || []), key]);
+  }
+  const keys = (ks) => (ks.length > 6 ? `${ks.slice(0, 6).join(', ')} +${ks.length - 6}` : ks.join(', '));
+  const lines = [...by].map(([why, ks]) => `${keys(ks)}: ${why}`);
+  return lines.length === 1 ? `${t(head)} — ${lines[0]}` : `${t(head)}:\n${lines.join('\n')}`;
+}
+function sayRefusedMany(head, refused) {
+  if (refused.length) styledAlert(refusedManyText(head, refused));
+}
+async function multiPatchEach(bodyFor, head = 'Not saved') {
   const tasks = selectedTaskList();
-  for (const t of tasks) { try { await api('PATCH', `/api/tasks/${seg(t.key)}`, bodyFor(t), { quiet: true }); } catch {  } }
+  const refused = [];
+  for (const t of tasks) {
+    try { await api('PATCH', `/api/tasks/${seg(t.key)}`, bodyFor(t), { quiet: true }); } catch (e) { refused.push({ key: t.key, e }); }
+  }
   await refresh();
+  sayRefusedMany(head, refused);
 }
 function renderMultiSub(title, optsHTML, onPick) {
   const box = $('drawer-multi');
@@ -608,7 +625,7 @@ export async function multiAction(act, btn) {
     }).join('');
     renderMultiSub(tr('Move to status'), opts, async (o) => {
       if (o.classList.contains('disabled')) return;
-      await multiPatchEach(() => ({ status: o.dataset.v }));
+      await multiPatchEach(() => ({ status: o.dataset.v }), 'Not moved');
       renderMultiPanel();
     });
     return;
@@ -779,7 +796,7 @@ const LIVE_BADGE = {
 function liveBadge(t) {
   if (hasAsk(t.id)) return `<span class="card-live live-wait live-ask" title="${esc(tr('Claude is waiting for your answer — open the card'))}"><span class="live-dot"></span>${tr('needs your answer')}</span>`;
   const l = state.live[t.id];
-  const b = l && WORKING.has(t.status) && LIVE_BADGE[l.claude === 'gone' && l.interrupted ? 'interrupted'
+  const b = l && (WORKING.has(t.status) || t.status === 'ready') && LIVE_BADGE[l.claude === 'gone' && l.interrupted ? 'interrupted'
     : l.claude === 'idle' && l.broke ? (l.broke === 'retrying' ? 'brokeRetrying' : 'brokeStuck') : l.claude];
   if (!b) return '';
   const until = l.claude === 'limit' && l.resets ? ` · ${tr('until')} ${esc(l.resets)}` : '';
@@ -938,10 +955,12 @@ async function onDrop(e, status, body) {
   }
   dropPh.remove();
   try {
-    await api('PATCH', `/api/tasks/${seg(id)}`, patch);
+    await api('PATCH', `/api/tasks/${seg(id)}`, patch, { quiet: true });
   } catch (e) {
     renderBoard();
-    if (e?.offline) noteUnsaved(() => api('PATCH', `/api/tasks/${seg(id)}`, patch).then(refresh));
+    if (e?.offline) { noteUnsaved(() => api('PATCH', `/api/tasks/${seg(id)}`, patch).then(refresh)); return; }
+    sayRefusedMany('Not moved', [{ key: t.key, e }]);
+    await refresh();
     return;
   }
   await refresh();
@@ -976,12 +995,15 @@ async function onDropGroup(e, status, body) {
 
   dropPh.remove();
   dropSends = true;
+  const failed = [];
   for (let i = 0; i < movable.length; i++) {
     if (fixedOrder && movable[i].status === status) continue;
-    await api('PATCH', `/api/tasks/${seg(movable[i].id)}`, fixedOrder ? { status } : { status, position: prev + step * (i + 1) });
+    try { await api('PATCH', `/api/tasks/${seg(movable[i].id)}`, fixedOrder ? { status } : { status, position: prev + step * (i + 1) }, { quiet: true }); }
+    catch (e) { failed.push({ key: movable[i].key, e }); }
   }
   clearSelection();
   await refresh();
+  sayRefusedMany('Not moved', failed);
 }
 
 export function buildSelect(host, opts) {

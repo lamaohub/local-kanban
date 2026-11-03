@@ -7,9 +7,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
 import { notOnMain, shipAsker, showsShip, SHIP_WORDS } from '../public/js/shipped-rules.js';
+import { bin } from '../src/bin-path.js';
+// start of tmux in the tests beside this file for 10 s and more
+const GIT = bin('git');
 
 let app, tmp, repo, db, forgetShipped, pid, n = 0;
-const git = (...a) => execFileSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@example.invalid', ...a], { cwd: repo, encoding: 'utf8', stdio: 'pipe' }).trim();
+const git = (...a) => execFileSync(GIT, ['-c', 'user.name=test', '-c', 'user.email=test@example.invalid', ...a], { cwd: repo, encoding: 'utf8', stdio: 'pipe' }).trim();
 const commit = (message, file = `f${(n += 1)}`) => { writeFileSync(join(repo, file), String(n)); git('add', '-A'); git('commit', '-q', '-m', message); return git('rev-parse', 'HEAD'); };
 const task = (no, status = 'review', extra = {}) => db.prepare('INSERT INTO tasks (project_id, task_no, title, status, labels, gh_issue_number) VALUES (?, ?, ?, ?, ?, ?)')
   .run(pid, no, 'T', status, extra.labels || '[]', extra.issue ?? null).lastInsertRowid;

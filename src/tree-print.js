@@ -2,10 +2,11 @@ import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { bin } from './bin-path.js';
 
 // GIT_OPTIONAL_LOCKS=0: `git status` would otherwise take the index lock and break a `git add` Claude runs right then
 const git = (path, args) => new Promise((resolve) => {
-  execFile('git', ['-C', path, ...args], { encoding: 'buffer', timeout: 10_000, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } },
+  execFile(bin('git'), ['-C', path, ...args], { encoding: 'buffer', timeout: 10_000, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } },
     (err, out) => resolve(err ? null : out));
 });
 

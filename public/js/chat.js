@@ -125,10 +125,10 @@ const codeBtn = (what, icon, label) => `<button type="button" class="chat-code-b
 // a block left open (cut off, or its fence missing) is not a command to run: its end is not known; nor is one longer than
 const RUN_MAX = 8000;
 const codeTools = (lang, closed, code = '') => `<span class="chat-code-tools">${codeBtn('copy', 'copy', 'Copy')}${closed && SHELL_LANGS.includes(lang) && code.length <= RUN_MAX ? codeBtn('run', 'terminal', 'Run in a Terminal window') : ''}</span>`;
-function itemHTML(it) {
+function itemHTML(it, shot = null) {
   if (answered(it)) return answersHTML(it.answers);
   return it.kind === 'stop' ? `<div class="chat-sep">${esc(tr('Stopped'))}</div>`
-    : it.kind === 'said' ? `<div class="chat-user chat-mid"><div class="chat-bubble">${esc(it.text)}</div></div>`
+    : it.kind === 'said' ? wordsHTML(it.text, it.images, it.shots, shot, ' chat-mid')
       : `<div class="chat-claude">${chatText(it.text, codeTools)}</div>`;
 }
 const CODE_DONE_MS = 1400; // the ✓ a button shows after it did its work
@@ -204,11 +204,11 @@ function runHTML(steps, id, open, { working, now = null, pic = null }) {
     + `${failed ? `<span class="chat-x">✗ ${failed}</span>` : ''}${ic('chevron', 11)}${thumb}</button>`
     + (open ? `<div class="chat-unfold chat-runbox" data-of="${esc(id)}">${steps.map((s) => stepRow(s, working)).join('')}</div>` : '');
 }
-function itemsHTML(items, at, { opened, working, fold = true, live = false, pic = null }) {
+function itemsHTML(items, at, { opened, working, fold = true, live = false, pic = null, shot = null }) {
   let out = '';
   const runs = runsOf(items);
   runs.forEach((r, i) => {
-    if (r.it) { out += itemHTML(r.it); return; }
+    if (r.it) { out += itemHTML(r.it, shot); return; }
     if (!fold) { out += r.steps.map((s) => stepRow(s, working)).join(''); return; }
     const id = `${at}|${i}`;
     // Claude calls tools side by side: the one still unanswered may be any of the run's, not its last
@@ -265,28 +265,29 @@ export function carryOpened(turns, opened) {
 }
 const SHOT_W = 220; // a thumbnail of the person's picture at most (.chat-shot img)
 const SHOT_H = 160;
+function wordsHTML(text, images, shotList, shot, cls = '') {
+  const shots = shot && shotList?.length ? shotList : [];
+  // as many «[Image #N]» as pictures shown leave the words — the rest stay with the «📎» that counts them
+  let strip = shots.length;
+  const words = strip ? String(text || '').replace(/\[Image #\d+\]\s*/g, (x) => (strip-- > 0 ? '' : x)).trim() : text;
+  const unseen = (images || 0) - shots.length; // a picture the board cannot show is still counted
+  const pics = shots.length ? `<div class="chat-shots">${shots.map((x) => {
+    // the place is kept before the picture decodes: a thumbnail growing late pushed the turn being read
+    const k = x.w > 0 && x.h > 0 ? Math.min(1, SHOT_W / x.w, SHOT_H / x.h) : 0;
+    const size = k ? ` width="${Math.max(1, Math.round(x.w * k))}" height="${Math.max(1, Math.round(x.h * k))}"` : '';
+    return `<button type="button" class="chat-shot" data-shot="${esc(shot(x.ref))}" title="${esc(tr('Open the picture'))}"><img src="${esc(shot(x.ref))}" alt=""${size} decoding="async"></button>`;
+  }).join('')}</div>` : '';
+  const bubble = words || unseen > 0 ? `<div class="chat-bubble">${esc(words || '')}${unseen > 0 ? `<span class="chat-img">${ic('attach', 11)} ${unseen}</span>` : ''}</div>` : '';
+  return `<div class="chat-user${cls}${pics ? ' has-shots' : ''}">${pics}${bubble}</div>`;
+}
 export function turnHTML(t, { opened = new Set(), working = false, shot = null, pic = null, asking = false } = {}) {
   let out = '';
   if (t.compact) out += `<div class="chat-sep">${esc(tr('The conversation was compacted'))}</div>`;
-  if (t.user || t.images) {
-    const shots = shot && t.shots?.length ? t.shots : [];
-    // as many «[Image #N]» as pictures shown leave the words — the rest stay with the «📎» that counts them
-    let strip = shots.length;
-    const words = strip ? String(t.user || '').replace(/\[Image #\d+\]\s*/g, (x) => (strip-- > 0 ? '' : x)).trim() : t.user;
-    const unseen = (t.images || 0) - shots.length; // a picture the board cannot show is still counted
-    const pics = shots.length ? `<div class="chat-shots">${shots.map((x) => {
-      // the place is kept before the picture decodes: a thumbnail growing late pushed the turn being read
-      const k = x.w > 0 && x.h > 0 ? Math.min(1, SHOT_W / x.w, SHOT_H / x.h) : 0;
-      const size = k ? ` width="${Math.max(1, Math.round(x.w * k))}" height="${Math.max(1, Math.round(x.h * k))}"` : '';
-      return `<button type="button" class="chat-shot" data-shot="${esc(shot(x.ref))}" title="${esc(tr('Open the picture'))}"><img src="${esc(shot(x.ref))}" alt=""${size} decoding="async"></button>`;
-    }).join('')}</div>` : '';
-    const bubble = words || unseen > 0 ? `<div class="chat-bubble">${esc(words || '')}${unseen > 0 ? `<span class="chat-img">${ic('attach', 11)} ${unseen}</span>` : ''}</div>` : '';
-    out += `<div class="chat-user${pics ? ' has-shots' : ''}">${pics}${bubble}</div>`;
-  }
+  if (t.user || t.images) out += wordsHTML(t.user, t.images, t.shots, shot);
   const worked = t.ms ? `${esc(tr('Worked for'))} ${esc(dur(t.ms) || `${Math.round(t.ms / 1000)} ${tr('s')}`)}` : esc(tr('Done'));
   if (!barred(t)) {
     // a step waiting on a question or a permission is not run — Claude waits for the person (`asking`)
-    out += itemsHTML(t.items, t.at, { opened, working, live: working && Boolean(t.open) && !asking, pic });
+    out += itemsHTML(t.items, t.at, { opened, working, live: working && Boolean(t.open) && !asking, pic, shot });
     return `<div class="chat-turn" data-at="${esc(t.at)}">${out}</div>`;
   }
   // background) folded all its text behind the bar, and the words on the screen went at the end of the turn
@@ -303,11 +304,11 @@ export function turnHTML(t, { opened = new Set(), working = false, shot = null, 
       .filter(Boolean).map((x) => `<span class="chat-chip">${x}</span>`).join('');
     out += `<button type="button" class="chat-done${open ? ' open' : ''}" data-fold="${esc(id)}" aria-expanded="${open}">${ic('chevron', 11)}${ic('check', 11)}<span class="chat-done-t">${worked}</span>`
       + `<span class="chat-chips">${failed ? `<span class="chat-chip chat-x">✗ ${failed}</span>` : ''}${chips}</span></button>`;
-    if (open) out += `<div class="chat-log-in chat-unfold" data-of="${esc(id)}">${itemsHTML(log, t.at, { opened, working, fold: false })}</div>`;
+    if (open) out += `<div class="chat-log-in chat-unfold" data-of="${esc(id)}">${itemsHTML(log, t.at, { opened, working, fold: false, shot })}</div>`;
   } else {
     out += `<div class="chat-worked">${ic('check', 11)} ${worked}</div>`;
   }
-  out += t.items.filter(said).map(itemHTML).join('');
+  out += t.items.filter(said).map((it) => itemHTML(it, shot)).join('');
   if (files.length) out += filesHTML(files, t.at, opened);
   if (last) out += itemHTML(last);
   return `<div class="chat-turn" data-at="${esc(t.at)}">${out}</div>`;

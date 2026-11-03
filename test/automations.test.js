@@ -48,6 +48,7 @@ before(async () => {
   await app.register((await import('../src/routes/automations.js')).default);
   await app.ready();
   auto.setAutomationsOn(true);
+  await (await import('../src/claude-live.js')).refreshLive(undefined, async () => ({ live: [], questions: [], background: [], over: [], limited: [] }));
 });
 
 after(async () => {
@@ -578,6 +579,9 @@ test('CK-934: a restart of the board loses no words, and a limit line that stays
 const STOPPED = 'automations.resume.stopped';
 const keptNow = () => JSON.parse(db.prepare('SELECT value FROM kv WHERE key = ?').get(STOPPED)?.value || '{}');
 const boardNotes = (id) => db.prepare("SELECT COUNT(*) AS n FROM task_comments WHERE task_id = ? AND author = 'board'").get(id).n;
+// the notes are read in English: the board's language is set for the read, and the default (Russian) comes back after
+const inEnglish = async (fn) => { db.prepare("INSERT OR REPLACE INTO kv (key, value) VALUES ('ui.lang', 'en')").run(); try { return await fn(); } finally { db.prepare("DELETE FROM kv WHERE key = 'ui.lang'").run(); } };
+const lastNote = (id) => db.prepare("SELECT body FROM task_comments WHERE task_id = ? AND author = 'board' ORDER BY id DESC LIMIT 1").get(id)?.body ?? '';
 const statusOf = (key) => db.prepare("SELECT t.status FROM tasks t JOIN projects p ON p.id = t.project_id WHERE p.prefix || '-' || t.task_no = ?").get(key).status;
 let resumeCases = 0;
 async function resumeCase() {
@@ -627,6 +631,34 @@ test('a start refused or failed leaves no record behind', async () => {
   c.run.claude = 'idle';
   await c.r.tickResume(app, T0 + 4 * MIN);
   assert.equal(c.told.length, 0, 'words went to a Claude the board never brought back');
+  await resumeOff(c.r);
+});
+
+test('a start refused because tmux was slow takes no try, up to five of them; another refusal counts at once', async () => {
+  const slow = await resumeCase();
+  let calls = 0;
+  const tmuxSlow = { inject: async () => { calls += 1; return { statusCode: 409, body: JSON.stringify({ error: 'tmux did not answer in time — try again', reason: 'tmux-slow' }) }; } };
+  for (let i = 0; i < 12; i += 1) await slow.r.tickResume(tmuxSlow, T0 + i * MIN);
+  assert.equal(calls, 8, 'five slow answers forgiven, then three tries — and no more');
+  await resumeOff(slow.r);
+  const other = await resumeCase();
+  calls = 0;
+  const refused = { inject: async () => { calls += 1; return { statusCode: 409, body: JSON.stringify({ error: 'no folder', reason: 'no-folder' }) }; } };
+  for (let i = 0; i < 6; i += 1) await other.r.tickResume(refused, T0 + i * MIN);
+  assert.equal(calls, 3, 'a refusal that is not tmux was forgiven');
+  await resumeOff(other.r);
+});
+
+test('a record given up on says what held the words', async () => {
+  const c = await resumeCase();
+  await c.r.tickResume(app, T0);
+  c.run.claude = 'idle';
+  c.deps.fieldEmpty = async () => null; // tmux does not answer
+  await c.r.tickResume(app, T0 + 2 * MIN);
+  assert.equal(keptNow()[c.sid]?.held_by, 'tmux', 'the record does not keep what held it');
+  await inEnglish(() => c.r.tickResume(app, T0 + 11 * MIN));
+  assert.equal(keptNow()[c.sid], undefined);
+  assert.match(lastNote(c.task.id), /\(tmux did not answer\)$/);
   await resumeOff(c.r);
 });
 
@@ -753,10 +785,28 @@ test('words of a resume are for the minutes after it, not for a day later', asyn
   const c = await resumeCase();
   await c.r.tickResume(app, T0);
   c.run.claude = 'idle';
-  await c.r.tickResume(app, T0 + 26 * 3600_000);
+  await inEnglish(() => c.r.tickResume(app, T0 + 26 * 3600_000));
   assert.equal(c.told.length, 0, 'the words went 26 hours after the start');
   assert.equal(keptNow()[c.sid], undefined, 'the record stayed');
-  assert.equal(boardNotes(c.task.id), 0);
+  assert.equal(boardNotes(c.task.id), 1, 'the record was given up on in silence');
+  assert.match(lastNote(c.task.id), /could not tell Claude to go on/);
+  await resumeOff(c.r);
+});
+
+test('words of the limit failing again and again are given up on, and the card says so', async () => {
+  const c = await resumeCase();
+  Object.assign(c.run, { claude: 'limit', resets: '3pm', ended: undefined });
+  const at = new Date(2026, 10, 2, 10, 0).getTime();
+  await c.r.tickResume(app, at, { limited: true });
+  c.run.claude = 'idle';
+  let tries = 0;
+  c.deps.say = async () => { tries += 1; return { err: new Error('tmux') }; };
+  const late = new Date(2026, 10, 2, 16, 0).getTime();
+  await inEnglish(async () => { for (let i = 0; i < 6; i += 1) await c.r.tickResume(app, late + i * MIN); });
+  assert.equal(tries, 3, 'the words were typed again every minute for good');
+  assert.equal(keptNow()[c.sid], undefined);
+  assert.equal(boardNotes(c.task.id), 1);
+  assert.match(lastNote(c.task.id), /limit has reset, but the board could not/);
   await resumeOff(c.r);
 });
 
@@ -891,6 +941,9 @@ test('CK-928: a start refused spends no round and is tried again', async () => {
   db.prepare('UPDATE projects SET path = ? WHERE slug = ?').run(folder, slug);
   await auto.tickAutomations(app, Date.now() + 60_000);
   assert.equal(rule(id).rounds, '{}', 'tried again at once, every look');
+  const restarted = await import('../src/automations.js?restart=ck948');
+  await restarted.tickAutomations(app, Date.now() + 90_000);
+  assert.equal(rule(id).rounds, '{}', 'a restart in the pause tried at once, sooner than the page said');
   await auto.tickAutomations(app, Date.now() + 6 * 60_000);
   assert.equal(JSON.parse(rule(id).rounds)[task.id].n, 1, 'never tried again');
   assert.equal(rule(id).error, null);

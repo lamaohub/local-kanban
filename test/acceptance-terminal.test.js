@@ -47,6 +47,7 @@ process.stdin.setRawMode(true); process.stdin.resume();
   const { ghState } = await import('../src/sync/worker.js');
   ghState.available = false; ghState.lastCheck = Date.now() + 1e9;
   auto = await import('../src/automations.js');
+  await (await import('../src/claude-live.js')).refreshLive(undefined, async () => ({ live: [], questions: [], background: [], over: [], limited: [] }));
   phantom = await import('../src/phantom.js');
   app = Fastify();
   const { PORT } = await import('../src/config.js');

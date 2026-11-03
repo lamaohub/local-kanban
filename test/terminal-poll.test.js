@@ -137,3 +137,17 @@ test('a delta made against another screen is not drawn, and the next look gets t
   assert.equal(c.kinds[2], 'whole');
   assert.equal(c.box.drawn.screen, c.box.term.screen);
 });
+
+// over a Claude at work), and the next answer goes on from the same screen
+test('a look tmux did not answer is not drawn — the card keeps what it shows', async () => {
+  const c = terminalCard(screenOf(`${history()}\nstatus 0`));
+  await c.look();
+  const had = c.box.drawn;
+  c.box.tamper = () => ({ session: 's', unknown: true });
+  await c.look();
+  assert.equal(c.box.drawn, had, 'a silence of tmux was drawn as a terminal that is not running');
+  c.box.tamper = null;
+  c.box.term = screenOf(`${history()}\nstatus 1`);
+  await c.look();
+  assert.equal(c.box.drawn.screen, c.box.term.screen);
+});

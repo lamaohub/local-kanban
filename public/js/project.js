@@ -227,7 +227,7 @@ async function renderDocs(p) {
   const row = (opts) => `<div class="ps-doc${opts.missing ? ' ps-doc-missing' : ''}">
       <span class="ps-doc-ic">${ic(opts.icon, 13)}</span>
       <span class="ps-doc-name">${esc(opts.title)}${opts.tag ? `<span class="ps-doc-tag">${esc(opts.tag)}</span>` : ''}</span>
-      <span class="ps-doc-path" title="${esc(opts.path || '')}">${esc(opts.path || tr('not there'))}</span>
+      <span class="ps-doc-path" title="${esc(opts.path || '')}">${esc(opts.path || (info.paths_hidden ? '' : tr('not there')))}</span>
       <span class="ps-doc-act">
         ${opts.missing ? '' : `<button class="btn-icon ps-doc-open" data-open="${esc(opts.open)}" title="${tr('Open')}">${ic('eye', 13)}</button>`}
         ${opts.path ? `<button class="btn-icon ps-doc-copy" data-copy="${esc(opts.path)}" title="${tr('Copy the path')}">${ic('copy', 13)}</button>` : ''}

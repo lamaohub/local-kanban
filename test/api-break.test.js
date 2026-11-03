@@ -196,6 +196,24 @@ test('a card in work says its answer broke off — read off the transcript, not 
   assert.equal(brk.breakChain(S1), undefined, 'and ends the chain');
 });
 
+// (goOn): `retrying` there would never end — the break is the person's at once
+test('a broken answer of the board\'s Claude in Ready to ship calls the person', async () => {
+  const file = join(claude, 'projects', '-demo', `${S1}.jsonl`);
+  writeFileSync(file, [PROMPT, SAID, BROKE, END, ''].join('\n'));
+  writeFileSync(join(claude, 'sessions', '101.json'), JSON.stringify({ pid: 101, sessionId: S1, status: 'idle', statusUpdatedAt: 4000 }));
+  brk.settleBreak(S1);
+  const move = (status) => app.inject({ method: 'PATCH', url: '/api/tasks/AB-1', headers: { 'x-claude-session': S1 }, payload: { status } });
+  assert.equal((await move('ready')).statusCode, 200);
+  try {
+    const got = (await live.liveTasks((pid) => pid === 101, async () => ({ dead: false }), new Map(), new Set(), new Set(), async () => false))
+      .find((x) => x.key === 'AB-1');
+    assert.deepEqual([got?.status, got?.claude, got?.broke], ['ready', 'idle', 'stuck'], 'the card said «going on» where nobody goes on');
+  } finally {
+    brk.settleBreak(S1);
+    await move('doing');
+  }
+});
+
 /* ── the page ─────────────────────────────────────────────────────────────────── */
 const pub = (f) => readFileSync(new URL(`../public/${f}`, import.meta.url), 'utf8');
 const take = (src, head) => { const at = src.indexOf(head); assert.ok(at >= 0, head); return src.slice(at, src.indexOf('\n}\n', at) + 2); };
@@ -240,6 +258,9 @@ test('the card and the list of what waits tell a broken answer apart', () => {
   assert.match(badge({ claude: 'idle', broke: 'retrying' }), /live-busy[^>]*>.*connection lost · going on/);
   assert.match(badge({ claude: 'idle', broke: 'stuck', background: true }), /live-wait" title="The connection to the API broke off[^"]*did not go on[^"]*">.*answer broke off/);
   assert.match(badge({ claude: 'idle' }), /waiting for you/);
+  const on = (status) => { box.state.live = { 7: { claude: 'idle' } }; return box.run({ id: 7, status }); };
+  assert.match(on('ready'), /waiting for you/, 'a card in Ready to ship has no badge of its Claude');
+  assert.equal(on('review'), '');
 
   const src = pub('js/attention.js').replace(/^import .*$/gm, '').replace(/^export /gm, '');
   const page = { state: { live: {

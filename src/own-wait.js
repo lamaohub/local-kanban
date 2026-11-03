@@ -64,10 +64,6 @@ export function wentBackground(d, b) {
 }
 const TURN_LINES = new Set(['assistant', 'user', 'system']);
 
-/** From the raw lines of a transcript's end (oldest first): whether Claude waits for background work of its own —
-    {own: true, at: ms of the end of the turn that started it}; {own: false} otherwise; null — no turn start among the
-    lines (the turn is longer than what was read). The turns looked at: the last one, and back from it through the turns
-    the person started (a question asked meanwhile does not end the wait), down to one a notification woke. */
 export function ownWaitIn(lines) {
   const parsed = [];
   for (const raw of lines) {
@@ -90,17 +86,20 @@ export function ownWaitIn(lines) {
     }
     return null;
   };
+  const deeper = woken(parsed[from].d);
   const launched = new Map(); // tool_use id → {at, task}
   const steps = new Map();
   const stopped = new Map();  // background task id Claude stopped itself → the line of its last stop
-  for (let i = from + 1; i < parsed.length; i += 1) {
+  for (let i = deeper ? 0 : from + 1; i < parsed.length; i += 1) {
     const d = parsed[i].d;
     if (!d || d.isSidechain || !Array.isArray(d.message?.content)) continue;
     for (const b of d.message.content) {
       if (d.type === 'assistant' && b?.type === 'tool_use') {
         if (STOPS.has(b.name)) stopped.set(String(b.input?.task_id ?? b.input?.shell_id ?? ''), i);
         if (!b.id) continue;
-        const service = b.name === 'Bash' && isService(b.input?.command);
+        const helper = b.name !== 'Bash';
+        if (i < from && !helper) continue; // before the woken turn: helpers only
+        const service = !helper && isService(b.input?.command);
         if (!inBackground(b.input)) { steps.set(b.id, { at: i, service }); continue; }
         if (service) continue;
         launched.set(b.id, { at: i, task: null });

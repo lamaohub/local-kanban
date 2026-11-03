@@ -681,6 +681,49 @@ test('a picture the person sent shows in the chat: by its line and place, of thi
   db.prepare('DELETE FROM task_sessions WHERE session_id = ?').run(SID5);
 });
 
+// the chat dropped them as soon as Claude took them, and the owner sent the same words three times
+test('words with pictures sent while Claude worked stay in its turn, their pictures served', async () => {
+  const SID6 = '66666666-8888-4888-8888-666666666666';
+  const U = '55555555-eeee-4eee-8eee-555555555555';
+  const png = Buffer.from('89504e470d0a1a0a0000000d494844520000032000000190080600000000', 'hex');
+  const img = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: png.toString('base64') } };
+  const words = '[Image #8] [Image #9]look at what I found';
+  const path = join(claude, 'projects', '-chat', `${SID6}.jsonl`);
+  writeFileSync(path,
+    user(1, 'Fix it') + said(2, 'On it.')
+    + line({ type: 'queue-operation', operation: 'enqueue', timestamp: at(3), content: words })
+    + line({ type: 'queue-operation', operation: 'remove', timestamp: at(4), content: words, reason: 'absorbed_mid_turn' })
+    + line({ type: 'attachment', uuid: U, timestamp: at(3), attachment: { type: 'queued_command', prompt: [{ type: 'text', text: words }, img, img], imagePasteIds: [8, 9], commandMode: 'prompt', origin: { kind: 'human' }, humanTurn: true } })
+    + said(5, 'Both fit.'));
+  const other = db.prepare('SELECT id FROM tasks WHERE task_no = 2').get().id;
+  db.prepare("INSERT INTO task_sessions (task_id, session_id, first_seen, last_seen) VALUES (?, ?, '2026-10-22 10:00:00', '2026-10-22 10:00:11')").run(other, SID6);
+  const r = (await app.inject({ method: 'GET', url: `/api/tasks/CH-2/chat?session=${SID6}` })).json();
+  assert.equal(r.turns.length, 1, 'words sent mid-turn started a turn of their own');
+  const mid = r.turns[0].items.find((it) => it.kind === 'said');
+  assert.ok(mid, 'the words with pictures were dropped from the chat');
+  assert.deepEqual([mid.text, mid.images, mid.shots], [words, 2, [{ ref: `${U}.0`, w: 800, h: 400 }, { ref: `${U}.1`, w: 800, h: 400 }]]);
+  assert.deepEqual(r.waiting || [], [], 'words taken still wait');
+  const res = await app.inject({ method: 'GET', url: `/api/tasks/CH-2/chat/image/${U}.1?session=${SID6}` });
+  assert.equal(res.statusCode, 200, res.body);
+  assert.deepEqual(res.rawPayload, png);
+  // a notification as blocks is a notification, not the person's words
+  const note = '<task-notification><tool-use-id>t9</tool-use-id><status>completed</status></task-notification>';
+  assert.equal(chat.chatItems({ type: 'attachment', timestamp: at(9), attachment: { type: 'queued_command', prompt: [{ type: 'text', text: note }] } })[0].kind, 'notified');
+  // the page draws them in the turn, with their thumbnails and without «[Image #N]»
+  const vm = await import('node:vm');
+  const src = readFileSync(new URL('../public/js/chat.js', import.meta.url), 'utf8').replace(/^import [\s\S]*?;$/gm, '').replace(/^export /gm, '');
+  const box = {
+    esc: (x) => String(x), tr: (x) => x, ic: () => '', plural: (n, a, b) => (n === 1 ? a : b), seg: (x) => x, refusalLine: () => '',
+    chatText: (s) => String(s), questionAsk: () => null, askBlock: () => null, renderAsks: () => {}, SHORT_MONTHS: [], document: { addEventListener: () => {} }, setTimeout, clearTimeout, modelLabel: () => '', sameModel: () => false, MODELS: [], drawerIsFull: () => false, setDrawerFull: () => {}, openDrawerFull: () => {}, setClaudeView: () => {}, pushLayer: () => {}, popLayer: () => {}, styledConfirm: async () => false, copyText: async () => true, plainLabel: (x) => String(x),
+  };
+  vm.runInNewContext(`${src}\nthis.turnHTML = turnHTML;`, box);
+  for (const t of [r.turns[0], { ...r.turns[0], open: true }]) {
+    const html = box.turnHTML(t, { shot: (ref) => `/shot/${ref}`, working: Boolean(t.open) });
+    assert.ok(html.includes(`/shot/${U}.1`) && html.includes('chat-mid') && !html.includes('[Image #'), html);
+  }
+  db.prepare('DELETE FROM task_sessions WHERE session_id = ?').run(SID6);
+});
+
 // sends them so — as PNG; a thumbnail without its size grew when it decoded), a JPEG turned by its EXIF has its sides
 // swapped; a picture over PICTURE_MAX is neither offered nor served; a line half-written when the board indexed the
 // transcript is found once it is whole; a transcript written anew (shorter) is indexed anew

@@ -17,14 +17,19 @@ export const RESUME_LAUNCH = 'automations.resume.launch';
 const CHAINS_KEY = 'automations.resume.chains';
 export const RESUME_TRIES = 3;
 export const RESUME_EVERY_MS = 60_000;
+const SLOW_TRIES = 5;
 const CHAIN_FORGET_MS = 3 * 3600_000; // a session that broke again this long after the last try starts a chain of its own
 const WORKING = new Set(['prep', 'doing', 'deploy']);
 const ASKS_PERSON = new Set(['AskUserQuestion', 'ExitPlanMode']);
 const own = { host: `127.0.0.1:${PORT}` };
 
 const WORDS = {
-  ru: { resumed: 'Доска продолжила прерванную сессию сама.', told: 'Лимит сброшен: доска попросила Claude продолжить.', go: 'Доска: лимит подписки сбросился. Продолжай с того места, где остановился.', goOn: 'Доска: сессия была прервана. Продолжай с того места, где остановился.' },
-  en: { resumed: 'The board went on with the interrupted session by itself.', told: 'The limit has reset: the board told Claude to go on.', go: 'The board: the subscription limit has reset. Go on from where you stopped.', goOn: 'The board: the session was interrupted. Go on from where you stopped.' },
+  ru: { resumed: 'Доска продолжила прерванную сессию сама.', told: 'Лимит сброшен: доска попросила Claude продолжить.', go: 'Доска: лимит подписки сбросился. Продолжай с того места, где остановился.', goOn: 'Доска: сессия была прервана. Продолжай с того места, где остановился.',
+    upResume: 'Доска подняла прерванную сессию, но попросить Claude продолжить не смогла: он ждёт у приглашения.', upLimit: 'Лимит сброшен, но попросить Claude продолжить доска не смогла: он ждёт у приглашения.',
+    why: { tmux: 'tmux не отвечал', field: 'в поле Claude что-то набрано', err: 'слова не дошли до терминала', state: 'Claude так и не встал у приглашения' } },
+  en: { resumed: 'The board went on with the interrupted session by itself.', told: 'The limit has reset: the board told Claude to go on.', go: 'The board: the subscription limit has reset. Go on from where you stopped.', goOn: 'The board: the session was interrupted. Go on from where you stopped.',
+    upResume: 'The board brought the interrupted session back but could not tell Claude to go on: it waits at its prompt.', upLimit: 'The limit has reset, but the board could not tell Claude to go on: it waits at its prompt.',
+    why: { tmux: 'tmux did not answer', field: "something is typed in Claude's field", err: 'the words did not reach the terminal', state: 'Claude never stood at its prompt' } },
 };
 const say = () => WORDS[uiLang() === 'en' ? 'en' : 'ru'];
 
@@ -94,11 +99,12 @@ function chains(now) {
   return map;
 }
 function noted(map, sid, now) {
-  map[sid] = { n: (map[sid]?.n || 0) + 1, at: now };
+  map[sid] = { ...map[sid], n: (map[sid]?.n || 0) + 1, at: now };
   kvSet(CHAINS_KEY, JSON.stringify(map));
 }
 
 const SAY_WAIT_MS = 10 * 60_000; // a Claude brought back with no words by then, or a field that stays full: the next chain's business
+const SAY_TRIES = 3;
 const LIMIT_GRACE_MS = 2 * 60_000; // past the moment the limit line names: the line may stay on the screen after the reset
 const LINE_BACK_MS = 6 * 3600_000; // a line first seen after its moment names that moment, not the same hour tomorrow
 const STOPPED_KEY = 'automations.resume.stopped';
@@ -106,6 +112,14 @@ const stopped = new Map(); // sid → {key, why, at, held?}: a board Claude to b
 try { for (const [sid, v] of Object.entries(JSON.parse(kvGet(STOPPED_KEY) || '{}') || {})) stopped.set(sid, v); } catch { /* starts anew */ }
 const keepStopped = () => kvSet(STOPPED_KEY, JSON.stringify(Object.fromEntries(stopped)));
 const forget = (sid) => { stopped.delete(sid); keepStopped(); };
+function giveUp(sid, was) {
+  forget(sid);
+  const t = resolveTask(was.key);
+  const why = was.held_by ? say().why[was.held_by.split(':')[0]] : '';
+  logError('server', 'automations', `gave up telling ${was.key} to go on (${was.why}): ${was.held_by || 'no look got that far'}`, sid);
+  if (t) boardNote(t.id, `${was.why === 'limit' ? say().upLimit : say().upResume}${why ? ` (${why})` : ''}`);
+}
+const heldBy = (was, what) => { if (was.held_by !== what) { was.held_by = what; keepStopped(); } };
 let lastLook = 0;
 /** Tests start clean. */
 export function resetResume() { stopped.clear(); keepStopped(); lastLook = 0; }
@@ -147,12 +161,12 @@ export async function tickResume(app, now, { waiting = new Set(), limited = fals
     if (!was) continue;
     const late = now - was.at > SAY_WAIT_MS;
     // the words of a resume belong to the minutes after it: a day later they would start work nobody expects
-    if (was.why === 'resume' && late) { forget(r.session); continue; }
+    if (was.why === 'resume' && late) { giveUp(r.session, was); continue; }
     if (r.claude === 'limit') {
       // too early it stops at the limit again; the chain of tries holds how many times
       const at = resetAfter(r.resets, was.at - LINE_BACK_MS);
       if (at === null || now < at + LIMIT_GRACE_MS || !chainAllows(map[r.session], now)) continue;
-    } else if (r.claude !== 'idle') { if (late) forget(r.session); continue; }
+    } else if (r.claude !== 'idle') { if (late) forget(r.session); else heldBy(was, `state:${r.claude}`); continue; }
     const t = resolveTask(was.key);
     // a question open, the person took it up meanwhile, or the task left work (words would move it back, sayToTerminal): the
     // words of the board are not for it (an Enter would answer)
@@ -165,13 +179,20 @@ export async function tickResume(app, now, { waiting = new Set(), limited = fals
       const empty = await deps.fieldEmpty(r.session);
       return empty === true ? (await deps.say(t, r.session, was.why === 'limit' ? say().go : say().goOn)) ?? {} : { field: empty };
     });
-    if (said.field === null) continue; // tmux did not answer: the next look
+    if (said.field === null) { heldBy(was, 'tmux'); continue; } // tmux did not answer: the next look
     if (said.field === false) {
+      was.held_by = 'field';
       was.held ??= now; // from here, not from `at`: a record of the limit is hours old by the reset
-      if (now - was.held > SAY_WAIT_MS) forget(r.session); else keepStopped();
+      if (now - was.held > SAY_WAIT_MS) giveUp(r.session, was); else keepStopped();
       continue;
     }
-    if (said.err || said.refused) { logError('server', 'automations', `the words of ${was.key} did not reach Claude: ${said.refused || said.err?.message || said.err}`, r.session); continue; }
+    if (said.err || said.refused) {
+      logError('server', 'automations', `the words of ${was.key} did not reach Claude: ${said.refused || said.err?.message || said.err}`, r.session);
+      was.failed = (was.failed || 0) + 1;
+      was.held_by = 'err';
+      if (was.failed >= SAY_TRIES) giveUp(r.session, was); else keepStopped();
+      continue;
+    }
     forget(r.session);
     if (was.why === 'limit') { noted(map, r.session, now); boardNote(t.id, say().told); } else boardNote(t.id, say().resumed);
     return;
@@ -197,7 +218,16 @@ export async function tickResume(app, now, { waiting = new Set(), limited = fals
     try {
       res = await app.inject({ method: 'POST', url: '/api/launch', headers: own, payload: { mode: 'board', resume: r.session, adopt: ADOPT_TOKEN, project: project.slug, keys, ...launch } });
     } catch (e) { forget(r.session); logError('server', 'automations', `resume of ${r.session}: ${e.message}`); return; }
-    if (res.statusCode >= 300) { forget(r.session); logError('server', 'automations', `resume of ${keys.join(', ')}: ${res.statusCode} ${res.body.slice(0, 200)}`); }
+    if (res.statusCode >= 300) {
+      forget(r.session);
+      logError('server', 'automations', `resume of ${keys.join(', ')}: ${res.statusCode} ${res.body.slice(0, 200)}`);
+      let reason = null;
+      try { reason = JSON.parse(res.body)?.reason; } catch { /* not ours */ }
+      if (reason === 'tmux-slow' && (map[r.session].slow || 0) < SLOW_TRIES) {
+        map[r.session] = { ...map[r.session], n: map[r.session].n - 1, slow: (map[r.session].slow || 0) + 1 };
+        kvSet(CHAINS_KEY, JSON.stringify(map));
+      }
+    }
     return;
   }
 }

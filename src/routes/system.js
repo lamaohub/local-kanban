@@ -13,7 +13,7 @@ import { listBackups, backupNow, backupPath, backupState, ATTACH_MIRROR } from '
 import { inspectBackup, startPreview, stopPreview, currentPreview, UPLOAD_PREFIX } from '../restore.js';
 import { langOverride, ghOwnerEnv, ghRepoEnv, launchDryRun, PORT } from '../config.js';
 import { claudeWord, launchOptions, launchProblem, launchSpec, runLaunch } from '../launch.js';
-import { TMUX_COMMAND_MAX, boardProblem, claudeAtPrompt, folderTrusted, lookedLately, markTaskless, phantomAvailable, phantomPane, phantomSpec, phantomStop, runPhantom, taskTerminal, tmuxBin, tmuxCommandBytes } from '../phantom.js';
+import { TMUX_COMMAND_MAX, TMUX_SLOW, boardProblem, claudeAtPrompt, folderTrusted, lookedLately, markTaskless, phantomAvailable, phantomPane, phantomSpec, phantomStop, runPhantom, taskTerminal, tmuxBin, tmuxCommandBytes } from '../phantom.js';
 import { ADOPT_TOKEN, freshTerminalSessions, isBoardSession, markBoardSession, markResumed, prepHolder, tieLaunched } from '../claude-sessions.js';
 import { CHECK_LABEL, OPEN_CHECK, doneRules, isCheck, leadCheck } from '../review-check.js';
 import { liveTick, readRegistry } from '../claude-live.js';
@@ -22,6 +22,7 @@ import { moveLaunched, resolveTask, snapshot, TASK_SELECT } from './tasks.js';
 import { isManual } from '../task-shape.js';
 import { packagedSkillNames, packagedSkillState, refreshPackagedSkill } from '../skills.js';
 import { isGuest } from '../share.js';
+import { bin } from '../bin-path.js';
 
 export const ONBOARDING_VERSION = 5;
 
@@ -337,7 +338,7 @@ export default async function systemRoutes(app) {
     const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
     const stat = (p) => { try { return statSync(p); } catch { return null; } };
     const commit = await new Promise((resolve) => {
-      execFile('git', ['log', '-1', '--format=%h %cs'], { cwd: ROOT }, (err, out) => resolve(err ? null : out.trim()));
+      execFile(bin('git'), ['log', '-1', '--format=%h %cs'], { cwd: ROOT }, (err, out) => resolve(err ? null : out.trim()));
     });
     const appMtime = uiVersion();
     const dbPath = join(DATA_DIR, 'kanban.db');
@@ -372,7 +373,7 @@ export default async function systemRoutes(app) {
   const checkUpdate = oneFlight(async () => {
     const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
     const git = (args) => new Promise((resolve) => {
-      execFile('git', args, { cwd: ROOT, timeout: 8000 }, (err, out) => resolve(err ? null : out.trim()));
+      execFile(bin('git'), args, { cwd: ROOT, timeout: 8000 }, (err, out) => resolve(err ? null : out.trim()));
     });
     let data = { update_available: null, local: null, remote: null, branch: null, tag: null, dev: null };
     try {
@@ -597,12 +598,12 @@ export default async function systemRoutes(app) {
       const running = [];
       const unsure = [];
       for (const t of tasks) {
-        let term = await taskTerminal(t.id, { strict: true });
+        let term = await taskTerminal(t.id);
         // returned the task, the last round) makes room, or the fix waited for its terminal for up to six hours. Only the fix of
         // an automation asks for it (`adopt` would not do: a resume sends that too), and never over a terminal being looked at
         for (let i = 0; i < ROOM_TRIES && b.makeRoom === ADOPT_TOKEN && term?.session && !term.unknown && !term.dead && await restsAtPrompt(term.session); i += 1) {
           await phantomStop(term.session);
-          term = await taskTerminal(t.id, { strict: true });
+          term = await taskTerminal(t.id);
         }
         if (term?.unknown) unsure.push(t.key); else if (term && !term.dead) running.push(t.key);
       }
@@ -660,7 +661,7 @@ export default async function systemRoutes(app) {
   }
   async function resumeSession(b, p, tasks, reply, sid, keys) {
     const pane = await phantomPane(sid);
-    if (pane?.unknown) return reply.code(409).send({ error: 'tmux did not answer in time — try again', reason: 'tmux-slow', keys });
+    if (pane?.unknown) return reply.code(409).send({ error: TMUX_SLOW, reason: 'tmux-slow', keys });
     if (pane && !pane.dead) return reply.code(409).send({ error: `Claude of the board already works on ${keys.join(', ')}`, running: keys });
     const name = keys.length > 1 ? `${keys[0]} +${keys.length - 1}` : keys[0];
     const spec = phantomSpec({ sid, name, folder: p.path, permission: b.permission, port: PORT, allow: doneRules(tasks), effort: b.effort, resume: true });

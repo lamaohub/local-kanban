@@ -35,6 +35,7 @@ before(async () => {
   const { ghState } = await import('../src/sync/worker.js');
   ghState.available = false; ghState.lastCheck = Date.now() + 1e9;
   auto = await import('../src/automations.js');
+  await (await import('../src/claude-live.js')).refreshLive(undefined, async () => ({ live: [], questions: [], background: [], over: [], limited: [] }));
   app = Fastify();
   const { PORT } = await import('../src/config.js');
   app.addHook('onRequest', (await import('../src/origin-guard.js')).makeOriginGuard(PORT));

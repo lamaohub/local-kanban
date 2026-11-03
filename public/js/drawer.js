@@ -601,6 +601,7 @@ async function pollTerminal() {
   let r;
   try { r = await api('GET', `/api/tasks/${seg(key)}/terminal${qs ? `?${qs}` : ''}`, undefined, { quiet: true }); } catch { return; }
   if (n !== termReq || key !== termKey || key !== state.drawerKey) return;
+  if (r.unknown) return;
   if (!r.same) {
     r = wholeAnswer(r, termBase, termSeen);
     if (!r) { termSeen = null; return; } // not against what this card has: the next look gets it whole

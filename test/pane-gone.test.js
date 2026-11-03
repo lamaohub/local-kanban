@@ -23,6 +23,7 @@ before(async () => {
     // a tmux that did not answer in time: the board's call to it is killed (execFile's timeout), with no word of tmux
     '  late) kill -TERM $$;;',
     '  exiting) echo "lost server" >&2; exit 1;;',
+  '  empty) echo "no current target" >&2; exit 1;;',
     '  dead) echo "1|1|120|4242|4141";;',
     '  up) echo "0||120|4242|4141";;',
     `  chain) case "$*" in *list-panes*) echo "kb-${SID}|0";; *) echo "can't find pane: kb-x" >&2; exit 1;; esac;;`,
@@ -47,6 +48,9 @@ test('the pane of a board session is gone only on tmux\'s own word — a tmux th
   assert.deepEqual(await phantom.phantomPane(SID), { dead: false, unknown: true }, 'a tmux that did not answer reads as no pane');
   answer('exiting');
   assert.equal(await phantom.phantomPane(SID), null, 'a tmux server on its way out read as one that did not answer');
+  answer('empty');
+  assert.equal(await phantom.phantomPane(SID), null, 'a tmux server with no session left read as one that did not answer');
+  assert.equal(await phantom.phantomView(SID), null);
   answer('dead');
   assert.equal((await phantom.phantomPane(SID)).dead, true);
   answer('up');
@@ -73,4 +77,39 @@ test('a look whose capture tmux failed says so, and is not read as screens with 
   answer('noserver');
   const none = await phantom.boardLook();
   assert.deepEqual([none.failed, none.live], [undefined, []], 'no server of tmux is no terminals, not a failed look');
+});
+
+// «no terminal». Only tmux's own word closes it; a silence is `unknown`, and the pages keep what they show.
+test('a terminal tmux did not answer about is not «not running», and the chat is not «not inside the board»', async () => {
+  process.env.KB_CLAUDE_DIR = join(dir, 'claude'); // the chat reads no transcript and no registry of the owner's
+  mkdirSync(join(dir, 'claude', 'projects'), { recursive: true });
+  const { db } = await import('../src/db.js');
+  const { ghState } = await import('../src/sync/worker.js');
+  ghState.available = false; ghState.lastCheck = Date.now() + 1e9;
+  db.prepare("INSERT INTO projects (slug, prefix, name, next_task_no) VALUES ('pg','PG','pane',2)").run();
+  const pid = db.prepare("SELECT id FROM projects WHERE slug='pg'").get().id;
+  const id = db.prepare("INSERT INTO tasks (project_id, task_no, title, status) VALUES (?,1,'At work','doing')").run(pid).lastInsertRowid;
+  db.prepare('INSERT INTO task_sessions (task_id, session_id) VALUES (?, ?)').run(id, SID);
+  sessions.markBoardSession(SID);
+  const Fastify = (await import('fastify')).default;
+  const app = Fastify();
+  await app.register((await import('../src/routes/terminal.js')).default);
+  await app.register((await import('../src/routes/chat.js')).default);
+  await app.ready();
+  try {
+    answer('late');
+    assert.deepEqual(await phantom.taskTerminal(id), { session: SID, unknown: true });
+    assert.deepEqual(await phantom.taskTerminal(id, { screen: true }), { session: SID, unknown: true }, 'a silence of tmux read as no terminal');
+    assert.deepEqual((await app.inject({ method: 'GET', url: '/api/tasks/PG-1/terminal' })).json(), { session: SID, unknown: true });
+    const chat = (await app.inject({ method: 'GET', url: `/api/tasks/PG-1/chat?session=${SID}` })).json();
+    assert.deepEqual([chat.send, chat.state], [true, null], 'the chat of a Claude of the board read as one not inside the board');
+    const said = await app.inject({ method: 'POST', url: '/api/tasks/PG-1/chat', payload: { session: SID, text: 'go on' } });
+    assert.deepEqual([said.statusCode, said.json().reason], [409, 'tmux-slow'], 'words to it were refused as «only read»');
+    const typed = await app.inject({ method: 'POST', url: '/api/tasks/PG-1/terminal', payload: { text: 'go on' } });
+    assert.deepEqual([typed.statusCode, typed.json().reason], [409, 'tmux-slow']);
+    answer('gone');
+    assert.equal(await phantom.taskTerminal(id, { screen: true }), null, 'tmux\'s word that the session is gone is no longer heard');
+    assert.deepEqual((await app.inject({ method: 'GET', url: '/api/tasks/PG-1/terminal' })).json(), { session: null });
+    assert.equal((await app.inject({ method: 'GET', url: `/api/tasks/PG-1/chat?session=${SID}` })).json().send, false);
+  } finally { await app.close(); }
 });

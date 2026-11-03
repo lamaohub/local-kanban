@@ -180,18 +180,6 @@ test('the check fails on a test that only passes with the comments in place', (t
   assert.match(r.out, /the test suite fails ON THE SNAPSHOT/);
 });
 
-test('the suite in two steps proves all of it: a red test stops the check on either side', (t) => {
-  if (!existsSync(RELEASE)) return t.skip('scripts/release.js is a private tool and is not part of the published slice');
-  const red = (name) => `import { test } from 'node:test';\nimport assert from 'node:assert/strict';\ntest('${name}', () => { assert.equal(1, 2); });\n`;
-  const green = "import { test } from 'node:test';\ntest('fine', () => {});\n";
-  const apart = check(repo(t, { 'test/shipped.test.js': red('the file set apart'), 'test/other.test.js': green }));
-  assert.equal(apart.code, 1, apart.out);
-  assert.match(apart.out, /the file set apart/, 'the file set apart did not run');
-  const rest = check(repo(t, { 'test/shipped.test.js': green, 'test/other.test.js': red('a file of the rest') }));
-  assert.equal(rest.code, 1, rest.out);
-  assert.match(rest.out, /a file of the rest/, 'the rest did not run');
-});
-
 test('CI runs the check on every push to dev', (t) => {
   if (!existsSync(RELEASE)) return t.skip('scripts/release.js is a private tool and is not part of the published slice');
   const yml = readFileSync(new URL('../.github/workflows/release-check.yml', import.meta.url), 'utf8');

@@ -1,6 +1,6 @@
 
 import { resolveTask, taskAttachmentPaths } from './tasks.js';
-import { CHAT_COLS, REPLY_MAX, claudeAtPrompt, paceOnScreen, phantomResize, phantomScreen, phantomSend, taskTerminal, watched } from '../phantom.js';
+import { CHAT_COLS, REPLY_MAX, TMUX_SLOW, claudeAtPrompt, paceOnScreen, phantomResize, phantomScreen, phantomSend, taskTerminal, watched } from '../phantom.js';
 import { SESSION_ID_RE, taskSessions, transcriptNow } from '../claude-sessions.js';
 import { DOC_MAX, PICTURE_MAX, PICTURE_TYPES, SHOT_RE, TURNS_DEFAULT, TURNS_MAX, chatDoc, chatHash, chatPicture, chatShot, isMarkdown, pictureKindOf, saidCommand, transcriptChat, watchChat } from '../chat-feed.js';
 import { createReadStream } from 'node:fs';
@@ -87,6 +87,9 @@ export default async function chatRoutes(app) {
     if (!t) reply.code(404).send({ error: 'task not found' });
     return t;
   };
+  const noClaude = (reply, term) => (term?.unknown
+    ? reply.code(409).send({ error: TMUX_SLOW, reason: 'tmux-slow' })
+    : reply.code(409).send({ error: 'no Claude of the board works on this task — the chat can only be read', reason: 'gone' }));
 
   app.get('/api/tasks/:id/chat', async (req, reply) => {
     const t = taskOr404(req, reply); if (!t) return reply;
@@ -104,10 +107,11 @@ export default async function chatRoutes(app) {
     if (!s.transcript) s.transcript = await transcriptNow(t.id, s.session_id);
     const chat = await transcriptChat(s.transcript, { turns });
     watchChat(s.transcript, s.session_id);
-    // the chat talks only to the board's Claude of this task, and only in the session it shows
+    // did not answer about is still the board's — the chat said «does not run inside the board» over a Claude at work;
+    // its state is not known this look (null), a word sent now is refused as tmux-slow
     const term = await taskTerminal(t.id);
-    const send = Boolean(term && !term.unknown && !term.dead && term.session === s.session_id);
-    const state = send ? await claudeAtPrompt(s.session_id) : null;
+    const send = Boolean(term && !term.dead && term.session === s.session_id);
+    const state = send && !term.unknown ? await claudeAtPrompt(s.session_id) : null;
     // terminal beside it must answer Claude's question itself: what the screen shows of it, and keys under it
     const screen = state === 'question' ? (await phantomScreen(s.session_id, 0, { escapes: true })) ?? '' : null;
     const question = screen === null ? null : questionLines(plainScreen(screen));
@@ -244,9 +248,7 @@ export default async function chatRoutes(app) {
     const images = taskAttachmentPaths(t.id, ids);
     if (!images) return reply.code(400).send({ error: 'images: an attachment of this task only' });
     const term = await taskTerminal(t.id);
-    if (!term || term.unknown || term.dead) {
-      return reply.code(409).send({ error: 'no Claude of the board works on this task — the chat can only be read', reason: 'gone' });
-    }
+    if (!term || term.unknown || term.dead) return noClaude(reply, term);
     // words already waiting go first: these ones line up behind them, even if Claude is free right now; and words typed
     // a moment ago (here, in another chat, out of the queue) have not shown Claude busy yet — these ones wait too.
     if (req.body?.now !== undefined && typeof req.body.now !== 'boolean') return reply.code(400).send({ error: 'now: true or false' });
@@ -275,9 +277,7 @@ export default async function chatRoutes(app) {
   app.post('/api/tasks/:id/chat/stop', async (req, reply) => {
     const t = taskOr404(req, reply); if (!t) return reply;
     const term = await taskTerminal(t.id);
-    if (!term || term.unknown || term.dead) {
-      return reply.code(409).send({ error: 'no Claude of the board works on this task — the chat can only be read', reason: 'gone' });
-    }
+    if (!term || term.unknown || term.dead) return noClaude(reply, term);
     const r = await typing(term.session, async () => {
       if (Date.now() - (stoppedAt.get(term.session) || 0) < STOP_GAP_MS) return { refused: 'stopping' };
       if ((await claudeAtPrompt(term.session)) !== 'busy') return { refused: 'not-busy' };
@@ -294,9 +294,7 @@ export default async function chatRoutes(app) {
   app.post('/api/tasks/:id/chat/queue/:itemId/now', async (req, reply) => {
     const t = taskOr404(req, reply); if (!t) return reply;
     const term = await taskTerminal(t.id);
-    if (!term || term.unknown || term.dead) {
-      return reply.code(409).send({ error: 'no Claude of the board works on this task — the chat can only be read', reason: 'gone' });
-    }
+    if (!term || term.unknown || term.dead) return noClaude(reply, term);
     const item = takeQueued(term.session, req.params.itemId);
     if (!item) return reply.code(404).send({ error: 'these words are not waiting any more — they went, or were taken back' });
     const r = await sayNow(t, term.session, item.text, item.images);

@@ -187,6 +187,27 @@ test('a project reports its docs and the skill it uses', async () => {
   assert.equal(doc.text, '# project notes\n');
 });
 
+// name and folders. A guest gets the names, sizes and the text, and no path.
+test("a guest reads the project docs without the owner's paths", async () => {
+  const { homedir } = await import('node:os');
+  const guest = { 'x-kb-guest': '1' };
+  const list = await app.inject({ method: 'GET', url: '/api/projects/docs-proj/docs', headers: guest });
+  assert.equal(list.statusCode, 200);
+  const body = list.json();
+  assert.equal(body.docs.find((d) => d.name === 'CLAUDE.md').exists, true, 'what is there is still said');
+  assert.equal(body.paths_hidden, true);
+  assert.equal(body.skill.name, 'deploy');
+  const doc = await app.inject({ method: 'GET', url: '/api/projects/docs-proj/docs/CLAUDE.md', headers: guest });
+  assert.equal(doc.json().text, '# project notes\n');
+  for (const r of [list, doc]) {
+    assert.ok(!r.body.includes(projectsRoot), `a path of the project reached a guest: ${r.body}`);
+    assert.ok(!r.body.includes(homedir()), `a path of the owner's home reached a guest: ${r.body}`);
+  }
+  // the owner still sees them
+  const own = (await app.inject({ method: 'GET', url: '/api/projects/docs-proj/docs/CLAUDE.md' })).json();
+  assert.ok(own.real_path && own.path.startsWith(projectsRoot));
+});
+
 test('CLAUDE.md is listed even when it is missing — that is a signal, not an empty answer', async () => {
   const { mkdirSync } = await import('node:fs');
   const dir = join(projectsRoot, 'nodocs-proj');

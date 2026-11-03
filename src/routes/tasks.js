@@ -3,13 +3,14 @@ import { execFile } from 'node:child_process';
 import { writeFileSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { db, DATA_DIR, STATUSES, WORK_SEGMENT_MAX_S, enqueue, nextTaskNo, nextPosition, logError } from '../db.js';
+import { db, ghOwner, ghRepo, DATA_DIR, STATUSES, WORK_SEGMENT_MAX_S, enqueue, nextTaskNo, nextPosition, logError } from '../db.js';
 import { scalarQuery } from '../query-params.js';
 import { bus, emit } from '../bus.js';
 import { resolveProject } from './projects.js';
 import { kick } from '../sync/worker.js';
 import { LABELS } from '../sync/github.js';
 import { repoHttpsBase } from '../repo-base.js';
+import { STAT_FORMAT, mirrorName, statCommit, wordsOf } from '../shipped.js';
 import { isManual, listShape, noclaudeFilter, snapshot, taskEvent } from '../task-shape.js';
 import { requestSession, requestHostSession, bindSession, taskSessions, mayReprep, unclaimedLaunch, claimLaunch, markLaunch } from '../claude-sessions.js';
 import { taskFeed } from '../work-feed.js';
@@ -19,6 +20,7 @@ import { activeBoardSessions, doneRuns, nowRuns } from '../claude-now.js';
 import { closeFinishedTerminals, taskTerminal } from '../phantom.js';
 import { CHECK_LABEL, OPEN_CHECK, isCheck, leadCheck, openCheck, secondCheck } from '../review-check.js';
 import { treePrint } from '../tree-print.js';
+import { bin } from '../bin-path.js';
 
 const ATTACH_DIR = join(DATA_DIR, 'attachments');
 const ATTACH_MAX = 30;
@@ -61,37 +63,39 @@ async function commitUrlFor(task) {
   return base ? `${base}/commit/${hash}` : null;
 }
 
+// and not the newest commit of the project, whoever made it
+const STAT_SCAN = 300;
 function attachGitStat(task, startedAt) {
   const project = db.prepare('SELECT path FROM projects WHERE id = ?').get(task.project_id);
   if (!project?.path) return;
   const issueNo = task.gh_issue_number;
-  let args, gate = null;
-  if (issueNo) {
-    args = ['-C', project.path, 'log', '-1', '-E', `--grep=#${issueNo}([^0-9]|$)`, '--format=%h|%ct|%s', '--shortstat'];
-  } else if (startedAt) {
-    args = ['-C', project.path, 'log', '-1', '--format=%h|%ct|%s', '--shortstat'];
-    gate = startedAt;
-  } else {
-    return;
-  }
-  execFile('git', args, { timeout: 5000 }, (err, stdout) => {
+  if (!issueNo && !startedAt) return;
+  const git = (args) => new Promise((done) => execFile(bin('git'), ['-C', project.path, ...args], { timeout: 5000, maxBuffer: 16 * 1024 * 1024 }, (err, out) => done(err ? null : out)));
+  (async () => {
     try {
-      if (err) return;
-      const lines = stdout.trim().split('\n').filter(Boolean);
-      if (!lines.length) return;
-      const [hash, ct, ...subj] = (lines[0] || '').split('|');
-      if (!hash || !ct) return;
-      if (gate && Number(ct) < Math.floor(new Date(gate + 'Z').getTime() / 1000)) return;
-      if (db.prepare("SELECT 1 FROM task_comments WHERE task_id = ? AND author = 'git' AND body LIKE ?").get(task.id, hash + ' %')) return;
+      const mirror = mirrorName(ghOwner(), ghRepo());
+      const base = issueNo && mirror ? await repoHttpsBase(project.path) : null;
+      const home = Boolean(base) && base.toLowerCase() === `https://github.com/${mirror}`.toLowerCase();
+      const log = await git(['log', '-n', String(STAT_SCAN), `--format=${STAT_FORMAT}`]);
+      if (log === null) return; // not a git repository, or no git — nothing to show
+      const known = new Set(db.prepare('SELECT upper(prefix) AS prefix FROM projects').all().map((p) => p.prefix));
+      const since = startedAt ? Math.floor(new Date(startedAt + 'Z').getTime() / 1000) : null;
+      const hash = statCommit(log, wordsOf(task.key, issueNo, mirror, home), { issue: issueNo, since, known });
+      if (!hash) return;
+      const stdout = await git(['log', '-1', '--format=%h|%ct|%s', '--shortstat', hash]);
+      const lines = String(stdout || '').trim().split('\n').filter(Boolean);
+      const [short, , ...subj] = (lines[0] || '').split('|');
+      if (!short) return;
+      if (db.prepare("SELECT 1 FROM task_comments WHERE task_id = ? AND author = 'git' AND body LIKE ?").get(task.id, short + ' %')) return;
       const stat = lines[1] ? lines[1].trim() : '';
-      const body = `${hash} ${subj.join('|')}${stat ? `\n${stat}` : ''}`;
+      const body = `${short} ${subj.join('|')}${stat ? `\n${stat}` : ''}`;
       const r = db.prepare("INSERT INTO task_comments (task_id, author, body) VALUES (?, 'git', ?)").run(task.id, body);
       const c = db.prepare('SELECT * FROM task_comments WHERE id = ?').get(r.lastInsertRowid);
       emit('task.comment', { task_id: task.id, key: task.key, project: task.project, comment: c, comments_n: commentsN(task.id) });
     } catch (e) {
       logError('server', 'attachGitStat', e?.message || String(e), `task #${task.id}`);
     }
-  });
+  })();
 }
 
 export const TASK_SELECT = `
@@ -166,28 +170,29 @@ function planPatch(t, b, sid = null, { undone = false } = {}) {
   const updates = [];
   const values = [];
   let claim = null;
-  const bad = (error) => ({ code: 400, error });
-  for (const f of ['title', 'description', 'blocked_reason']) { const e = badText(b[f], f); if (e) return bad(e); }
+  // of the description held the whole edit, and a resend dropped every field of the queue with it
+  const bad = (error, field = null) => ({ code: 400, error, ...(field ? { field } : {}) });
+  for (const f of ['title', 'description', 'blocked_reason']) { const e = badText(b[f], f); if (e) return bad(e, f); }
 
   if (b.title !== undefined) { updates.push('title = ?'); values.push(String(b.title ?? '')); }
   if (b.description !== undefined) { updates.push('description = ?'); values.push(String(b.description ?? '')); }
   if (b.priority !== undefined) {
-    if (!Number.isInteger(b.priority) || b.priority < 0 || b.priority > 3) return bad('priority: an integer 0-3');
+    if (!Number.isInteger(b.priority) || b.priority < 0 || b.priority > 3) return bad('priority: an integer 0-3', 'priority');
     updates.push('priority = ?'); values.push(b.priority);
   }
   let labels = null;
   const delta = b.labels_add !== undefined || b.labels_remove !== undefined;
-  if (b.labels !== undefined && delta) return bad('labels replaces the whole set, labels_add/labels_remove change it — send one or the other');
+  if (b.labels !== undefined && delta) return bad('labels replaces the whole set, labels_add/labels_remove change it — send one or the other', 'labels');
   if (b.labels !== undefined) {
     labels = normalizeLabels(b.labels);
-    if (labels === null) return bad('labels: an array of strings');
+    if (labels === null) return bad('labels: an array of strings', 'labels');
     const badSet = unknownLabels(labels);
     if (badSet.length) return { code: 400, ...labelPaletteError(badSet) };
   } else if (delta) {
     const add = b.labels_add === undefined ? [] : normalizeLabels(b.labels_add);
     const remove = b.labels_remove === undefined ? [] : normalizeLabels(b.labels_remove);
-    if (add === null) return bad('labels_add: an array of strings');
-    if (remove === null) return bad('labels_remove: an array of strings');
+    if (add === null) return bad('labels_add: an array of strings', 'labels');
+    if (remove === null) return bad('labels_remove: an array of strings', 'labels');
     const badAdd = unknownLabels(add);
     if (badAdd.length) return { code: 400, ...labelPaletteError(badAdd) };
     const cur = JSON.parse(t.labels || '[]');
@@ -203,20 +208,20 @@ function planPatch(t, b, sid = null, { undone = false } = {}) {
     updates.push('blocked_reason = ?'); values.push(b.blocked ? String(b.blocked_reason ?? '') : null);
   }
   if (b.position !== undefined) {
-    if (typeof b.position !== 'number' && typeof b.position !== 'string') return bad('position: a finite number');
+    if (typeof b.position !== 'number' && typeof b.position !== 'string') return bad('position: a finite number', 'position');
     const pos = Number(b.position);
-    if (!Number.isFinite(pos)) return bad('position: a finite number');
+    if (!Number.isFinite(pos)) return bad('position: a finite number', 'position');
     updates.push('position = ?'); values.push(pos);
   }
   if (b.pinned !== undefined) { updates.push('pinned = ?'); values.push(b.pinned ? 1 : 0); }
   if (b.status !== undefined) {
-    if (!STATUSES.includes(b.status)) return bad('bad status');
+    if (!STATUSES.includes(b.status)) return bad('bad status', 'status');
     if (b.status === 'prep' && t.status === 'prep') {
       if (!mayReprep(t.id, sid)) return { code: 409, error: `${t.key} is already taken: it is in prep. To take a free task: kb take ${t.project}` };
       claim = unclaimedLaunch(t.id);
     }
     if (!isManual(labels || t.labels) && ['backlog', 'todo'].includes(t.status) && ['ready', 'review', 'done'].includes(b.status)) {
-      return bad(`cannot go straight from "${t.status}" to "${b.status}" — it has to pass through the working statuses`);
+      return bad(`cannot go straight from "${t.status}" to "${b.status}" — it has to pass through the working statuses`, 'status');
     }
     // a check has nothing to ship, and words undone only put back what they moved. The labels the task HAD: one given in this
     // very request frees nothing

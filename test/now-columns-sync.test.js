@@ -268,3 +268,17 @@ test('a delta made against another screen is not drawn in a column, and the next
   assert.equal(k.box.kinds[2], 'whole');
   assert.equal(k.shown(), longScreen(1));
 });
+
+test('a look tmux did not answer is not drawn in a column — it keeps its screen and its word', async () => {
+  const k = terminalColumn(longScreen(0));
+  await k.look();
+  const word = k.c.el.querySelector('.term-state').textContent;
+  k.box.tamper = () => ({ session: 's', unknown: true });
+  await k.look();
+  assert.equal(k.shown(), longScreen(0), 'a silence of tmux emptied the column');
+  assert.equal(k.c.el.querySelector('.term-state').textContent, word, 'a silence of tmux read as «Not running»');
+  k.box.tamper = null;
+  k.box.term = { ...k.box.term, screen: longScreen(1) };
+  await k.look();
+  assert.equal(k.shown(), longScreen(1));
+});

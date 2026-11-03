@@ -257,7 +257,7 @@ function openTaskFromNotification(key, project) {
 function maybeWaitingAlert(changes) {
   // it tells its Claude to go on (`retrying`): that rang for a blink of the network the person need not see
   const waiting = (changes || []).filter((c) => (c.claude === 'idle' && c.broke === 'stuck' && c.fromBroke !== 'stuck')
-    || (!c.broke && (c.from === 'busy' || c.from === 'background') && (c.claude === 'waiting' || c.claude === 'idle'))
+    || (!c.broke && c.status !== 'ready' && (c.from === 'busy' || c.from === 'background') && (c.claude === 'waiting' || c.claude === 'idle'))
     || (c.claude === 'limit' && c.from !== 'limit'));
   if (!waiting.length) return new Set();
   playReviewSound();

@@ -2,7 +2,10 @@
 import { $, HEALTH, LANG, api, esc, ic, state, tr } from './core.js';
 import { keepFocus } from './now.js';
 import { plural } from './settings.js';
-import { selectProject } from './sidebar.js';
+import { selectProject, styledAlert, styledConfirm } from './sidebar.js';
+import { refusalLine } from './unsaved.js';
+import { openDrawer } from './drawer.js';
+import { launchInClaude, taskPromptText } from './sse.js';
 import { fileState, healthCounts, healthGroups, startTotal } from './health-rules.js';
 
 const FRESH_MS = 30000;
@@ -48,13 +51,16 @@ function projectHTML(p, d) {
     : `<span class="hl-size muted">${esc(tr('no CLAUDE.md of its own'))}</span>`;
   const start = `<span class="hl-start${total.over ? ' hl-heavy' : ''}" title="${esc(tr('Everything a session reads when it starts in this folder, with your own files'))}">`
     + `${esc(tr('at the start'))}: ${esc(num(total.chars))} ${esc(plural(total.chars, 'character', 'characters'))}</span>`;
+  const fix = st === 'heavy' || st === 'long'
+    ? `<button type="button" class="btn-ghost hl-fix" data-slug="${esc(p.slug)}" title="${esc(tr('Open the task «Shrink CLAUDE.md» and start Claude on it — only while nobody works in the folder of the project'))}">${esc(tr('Fix'))}</button>`
+    : '';
   const files = [...p.files, ...p.nested];
   const body = files.length
     ? files.map((f) => fileHTML(f, norms)).join('')
     : `<div class="hl-file muted">${esc(tr('Claude Code reads nothing of this project at the start but your own files.'))}</div>`;
   return `<details class="hl-proj" data-slug="${esc(p.slug)}"${opened.has(p.slug) ? ' open' : ''}>`
     + `<summary class="hl-row">${ic('chevron', 13)}<span class="hl-main"><a class="hl-name" href="#" data-slug="${esc(p.slug)}">${esc(p.name)}</a>`
-    + `<span class="hl-what">${what}</span></span>${start}</summary>`
+    + `<span class="hl-what">${what}</span></span>${start}${fix}</summary>`
     + `<div class="hl-files">${body}</div></details>`;
 }
 
@@ -109,6 +115,39 @@ function paint(d) {
     a.onclick = (e) => { e.preventDefault(); e.stopPropagation(); selectProject(a.dataset.slug); };
   });
   box.querySelector('.hl-again').onclick = (e) => { e.currentTarget.disabled = true; renderHealth({ force: true }); };
+  box.querySelectorAll('.hl-fix').forEach((b) => {
+    b.onclick = (e) => { e.preventDefault(); e.stopPropagation(); fixProject(b.dataset.slug, b); }; // a click in <summary> folds it
+  });
+}
+
+const fixing = new Set(); // a second press while the first one opens and starts the task
+/** The words of a refusal «Claude works there»: what holds the folder. */
+export function busyWords(b) {
+  const parts = [tr('Claude works in the folder of this project — fix its CLAUDE.md once that work is over.')];
+  if (b.keys?.length) parts.push(`${tr('Tasks in work')}: ${b.keys.join(', ')}.`);
+  if (b.sessions) parts.push(`${tr('Claude sessions at work there')}: ${b.sessions}.`);
+  return parts.join(' ');
+}
+async function fixProject(slug, btn) {
+  if (!slug || fixing.has(slug)) return;
+  fixing.add(slug);
+  btn.disabled = true;
+  try {
+    let r;
+    try { r = await api('POST', '/api/health/fix', { project: slug }, { quiet: true }); } catch (e) {
+      const b = e.body || {};
+      if (b.reason === 'busy') styledAlert(busyWords(b));
+      else if (b.reason === 'review' && b.key) {
+        styledConfirm(`${tr('The last fix of this CLAUDE.md waits for your review')}: ${b.key}.`, { okLabel: `${tr('Open')} ${b.key}` })
+          .then((ok) => { if (ok) openDrawer(b.key); });
+      } else styledAlert(refusalLine('Could not open the task', e, tr));
+      return;
+    }
+    await launchInClaude({ text: taskPromptText(r.key), project: slug, keys: [r.key], btn });
+  } finally {
+    fixing.delete(slug);
+    btn.disabled = false;
+  }
 }
 
 let seq = 0;

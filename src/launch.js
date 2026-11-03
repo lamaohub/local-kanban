@@ -5,18 +5,12 @@ import { delimiter, join } from 'node:path';
 import { homedir } from 'node:os';
 import { HOST_SESSION_RE, SESSION_ID_RE } from './claude-sessions.js';
 import { claudeBin } from './config.js';
+import { onPath } from './bin-path.js';
 
 /** What the Claude app takes in `?q=` (WA in its URL handler); longer text is refused, not cut. */
 export const PROMPT_MAX = 14336;
 
-export function onPath(name, env = process.env) {
-  for (const dir of String(env.PATH || '').split(delimiter)) {
-    if (!dir) continue;
-    const p = join(dir, name);
-    try { accessSync(p, constants.X_OK); return p; } catch { /* not here */ }
-  }
-  return null;
-}
+export { onPath };
 
 const runnable = (p) => { try { accessSync(p, constants.X_OK); return statSync(p).isFile(); } catch { return false; } };
 

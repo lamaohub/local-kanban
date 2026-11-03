@@ -67,7 +67,7 @@ export default async function dashboardRoutes(app) {
 
   app.get('/api/dashboard', (req) => {
     const range = Object.hasOwn(RANGE_DAYS, req.query.range) ? req.query.range : 'week';
-    const withLive = (data) => ({ ...data, waiting: { ...data.waiting, claude: currentLive().filter((x) => !['busy', 'starting', 'unsent'].includes(x.claude) && x.broke !== 'retrying')
+    const withLive = (data) => ({ ...data, waiting: { ...data.waiting, claude: currentLive().filter((x) => x.status !== 'ready' && !['busy', 'starting', 'unsent'].includes(x.claude) && x.broke !== 'retrying')
       .map((x) => ({ key: x.key, title: x.title, project: x.project_name, status: x.status, claude: x.claude, since: x.since, resets: x.resets ?? null, ...(x.interrupted ? { interrupted: true } : {}), ...(x.broke ? { broke: x.broke } : {}) })) } });
     const hit = dashCache.get(range);
     if (hit && Date.now() - hit.at < DASH_TTL) return withLive(hit.data);

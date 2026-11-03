@@ -110,3 +110,27 @@ test('the board reads the transcript of a session — again when it grows, and f
   assert.equal(await waitsOwnWork(sid, end + 60_000), false, 'the grown transcript was not read again');
   assert.equal(await waitsOwnWork('99999999-2222-4333-8444-555555555555'), false, 'a session with no transcript');
 });
+
+// answered «waiting for the second» — the chain ended on that woken turn and read it as waiting for the person
+test('a helper that ended does not end the wait for the other one still running', () => {
+  const agentNote = (id) => `<task-notification>\n<tool-use-id>${id}</tool-use-id>\n<status>completed</status>\n</task-notification>`;
+  const two = [human('review it from two sides'), bg('toolu_H1', 'side one', 'Agent'), result('toolu_H1', 'Async agent launched successfully.'),
+    bg('toolu_H2', 'side two', 'Agent'), result('toolu_H2', 'Async agent launched successfully.'), says('Two helpers are at it.'), system()];
+  const launchEnd = Date.parse(JSON.parse(two.at(-1)).timestamp);
+  const woke = [...two, human(agentNote('toolu_H1')), says('The first is back; waiting for the second.'), system()];
+  assert.equal(ownWaitIn(woke)?.own, true, 'a Claude waiting for its second helper is said to wait for you');
+  assert.equal(ownWaitIn(woke).at, launchEnd, 'the two hours count from the turn that started the helper');
+  // a question of the person after it does not change that
+  assert.equal(ownWaitIn([...woke, human('how long?'), says('A few minutes.')])?.own, true);
+  // the second ends too: what Claude says then is for the person
+  assert.equal(ownWaitIn([...woke, human(agentNote('toolu_H2')), says('Both are back: here is the summary.')])?.own, false);
+  // a workflow counts as a helper does
+  const wf = [human('go'), JSON.stringify({ type: 'assistant', timestamp: at(), message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_W', name: 'Workflow', input: { script: 'x' } }] } }),
+    result('toolu_W', 'Workflow launched in background. Task ID: wf1'), bg('toolu_H3', 'one more', 'Agent'), result('toolu_H3', 'Async agent launched successfully.'),
+    says('Running.'), human(agentNote('toolu_H3')), says('The helper is back, the workflow runs on.')];
+  assert.equal(ownWaitIn(wf)?.own, true, 'a workflow still running was forgotten past the woken turn');
+  // a command of an older turn still does not count past a woken turn (TBF-107 stands)
+  const cmd = [human('go'), bg('toolu_C', 'zsh long.sh'), result('toolu_C', 'running'), bg('toolu_H4', 'quick look', 'Agent'),
+    result('toolu_H4', 'Async agent launched successfully.'), says('Running.'), human(agentNote('toolu_H4')), says('Pay by the link, I will see it.')];
+  assert.equal(ownWaitIn(cmd)?.own, false, 'an older command past a woken turn read as Claude\'s own wait');
+});

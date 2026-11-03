@@ -147,7 +147,7 @@ export async function renderReview() {
   await Promise.all(groups.filter((g) => g.running).map(async (g) => {
     try {
       const t = await api('GET', `/api/tasks/${encodeURIComponent(g.running.key)}/terminal`, undefined, { quiet: true });
-      g.terminal = { session: t.session || null, dead: Boolean(t.dead), question: Boolean(t.question) };
+      if (!t.unknown) g.terminal = { session: t.session || null, dead: Boolean(t.dead), question: Boolean(t.question) };
     } catch { /* no answer: the column says what it can */ }
   }));
   if (state.slug !== REVIEW || my !== seq) return;

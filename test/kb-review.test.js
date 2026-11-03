@@ -11,14 +11,20 @@ import { fileURLToPath } from 'node:url';
 const KB = fileURLToPath(new URL('../bin/kb', import.meta.url));
 let server, base;
 let seen = [];
+let bodies = [];
 let answer = () => ({ status: 200, body: {} });
 
 before(async () => {
   server = createServer((req, res) => {
     seen.push(`${req.method} ${req.url}`);
-    const { status, body } = answer(req);
-    res.writeHead(status, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(body));
+    let raw = '';
+    req.on('data', (c) => { raw += c; });
+    req.on('end', () => {
+      if (raw) bodies.push(JSON.parse(raw));
+      const { status, body } = answer(req);
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(body));
+    });
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${server.address().port}`;
@@ -61,6 +67,29 @@ test('a saved note is the end of kb note: nothing is read after it that could fa
   assert.equal(r.code, 0, r.stderr);
   assert.equal(r.stdout.trim(), 'DM-7 📝');
   assert.deepEqual(seen, ['POST /api/tasks/DM-7/comments']);
+});
+
+// note carries a key of its task, words and session: a retry from a new kb sends the same key, and the board's
+test('a retried note sends the same key, so the board finds the one already written', async () => {
+  answer = (req) => (req.method === 'PATCH' ? { status: 200, body: task } : { status: 201, body: comment });
+  bodies = [];
+  for (const args of [['note', 'DM-7', 'halfway'], ['note', 'dm-7', 'halfway'], ['review', 'DM-7', 'halfway'],
+    ['note', 'DM-7', 'other words'], ['note', 'DM-8', 'halfway']]) assert.equal((await run(args)).code, 0);
+  const keys = bodies.filter((b) => 'body' in b).map((b) => b.client_key);
+  assert.equal(keys.length, 5);
+  assert.ok(keys.every((k) => typeof k === 'string' && k.length <= 64), `a key fits the board's limit: ${keys}`);
+  assert.equal(keys[0], keys[1], 'the same note retried got a new key — the board would write it twice');
+  assert.equal(keys[0], keys[2], 'kb review sends its note with the same key');
+  assert.notEqual(keys[0], keys[3], 'other words are another note');
+  assert.notEqual(keys[0], keys[4], 'the same words on another task are another note');
+});
+
+test('a note deleted on the board is not reported written', async () => {
+  answer = (req) => ({ status: 200, body: { deleted: true, client_key: 'kb-x' } });
+  const r = await run(['note', 'DM-7', 'halfway']);
+  assert.equal(r.code, 2, r.stderr);
+  assert.match(r.stderr, /deleted there — not written again/);
+  assert.equal(r.stdout, '');
 });
 
 test('a note that did not save after the move says so and how to add it', async () => {

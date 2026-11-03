@@ -18,11 +18,13 @@ const WAKE_LOOK_MS = 2 * 3600_000;
 const NOTE_ID = /<tool-use-id>([^<\s]+)<\/tool-use-id>/;
 const NOTE_TASK = /<task-id>([^<\s]+)<\/task-id>/;
 const NOTE_STATUS = /<status>([^<\s]+)<\/status>/;
+const promptText = (p) => (typeof p === 'string' ? p
+  : Array.isArray(p) ? p.filter((b) => b?.type === 'text' && typeof b.text === 'string').map((b) => b.text).join('\n') : null);
 export function notification(d) {
   let text = null;
   let usage = null;
   if (d.type === 'queue-operation' && d.operation === 'enqueue') text = d.content;
-  else if (d.type === 'attachment' && d.attachment?.type === 'queued_command') ({ prompt: text, usage } = d.attachment);
+  else if (d.type === 'attachment' && d.attachment?.type === 'queued_command') { text = promptText(d.attachment.prompt); usage = d.attachment.usage; }
   else if (d.type === 'user') { // Claude Code before 2.1.300 woke Claude with a line of the user
     const c = d.message?.content;
     text = typeof c === 'string' ? c : Array.isArray(c) ? c.filter((b) => b?.type === 'text').map((b) => b.text).join('\n') : null;
@@ -225,8 +227,9 @@ export function pictureBlocks(path, uuid, [at, length]) {
     const fh = await open(path, 'r');
     try { await fh.read(buf, 0, length, at); } finally { await fh.close(); }
     const d = JSON.parse(buf.toString('utf8'));
-    if (d?.uuid !== uuid || d.type !== 'user' || !Array.isArray(d.message?.content)) return null;
-    return d.message.content.filter((b) => b?.type === 'image');
+    if (d?.uuid !== uuid) return null;
+    const blocks = d.type === 'user' ? d.message?.content : d.type === 'attachment' && d.attachment?.type === 'queued_command' ? d.attachment.prompt : null;
+    return Array.isArray(blocks) ? blocks.filter((b) => b?.type === 'image') : null;
   })();
   lineBlocks.set(k, p);
   if (lineBlocks.size > SHOT_LINES) lineBlocks.delete(lineBlocks.keys().next().value);
@@ -240,7 +243,7 @@ export async function chatShot(path, ref) {
   const m = SHOT_RE.exec(String(ref));
   try {
     const c = m && path ? await itemsOf(path) : null;
-    if (!c?.items.some((it) => it.kind === 'user' && it.shots?.some((x) => x.ref === ref))) return null;
+    if (!c?.items.some((it) => (it.kind === 'user' || it.kind === 'said') && it.shots?.some((x) => x.ref === ref))) return null;
     const where = (await indexOf(path)).at.get(m[1]);
     if (!where) return null;
     const block = (await pictureBlocks(path, m[1], where))?.[Number(m[2])];
@@ -302,6 +305,17 @@ export function answersOf(asked, given, text) {
   return out;
 }
 
+function picturesOf(blocks, uuid) {
+  let images = 0;
+  const shots = [];
+  for (const b of blocks) {
+    if (b?.type !== 'image') continue;
+    images++;
+    const shot = images <= SHOTS_MAX && SHOT_LINE_RE.test(String(uuid)) ? shotOf(b) : null;
+    if (shot) shots.push({ ref: `${uuid}.${images - 1}`, ...(shot.w ? { w: shot.w, h: shot.h } : {}) });
+  }
+  return { images, shots };
+}
 /** The chat items one transcript line holds: what the person said, what Claude wrote, the steps it took, the end of a
     turn — and results, kept only to be paired with their call. */
 export function chatItems(d) {
@@ -311,12 +325,13 @@ export function chatItems(d) {
   if (d.type === 'system' && d.subtype === 'turn_duration' && Number.isFinite(d.durationMs)) return [{ at, kind: 'end', ms: d.durationMs }];
   const note = notification(d);
   if (note) return [{ at, kind: 'notified', ...note }];
-  // them as this attachment only (`origin.kind: 'human'`), never as a line of the person: they stay in their turn
+  // them as this attachment only (`origin.kind: 'human'`), never as a line of the person: they stay in their turn.
   const a = d.type === 'attachment' ? d.attachment : null;
-  if (a?.type === 'queued_command' && typeof a.prompt === 'string'
-    && (a.origin ? a.origin.kind === 'human' : a.commandMode === 'prompt' && !a.prompt.trimStart().startsWith('<'))) {
-    const t = ownWords(a.prompt);
-    return humanText(t) ? [{ at, kind: 'said', text: clip(t) }] : [];
+  const prompt = a?.type === 'queued_command' ? promptText(a.prompt) : null;
+  if (prompt !== null && (a.origin ? a.origin.kind === 'human' : a.commandMode === 'prompt' && !prompt.trimStart().startsWith('<'))) {
+    const t = ownWords(prompt);
+    const { images, shots } = picturesOf(Array.isArray(a.prompt) ? a.prompt : [], d.uuid);
+    return humanText(t) || images ? [{ at, kind: 'said', text: clip(humanText(t) ? t.trim() : ''), ...(images ? { images } : {}), ...(shots.length ? { shots } : {}) }] : [];
   }
   const m = d.message;
   if (!m || typeof m !== 'object') return [];
@@ -325,19 +340,13 @@ export function chatItems(d) {
   const out = [];
   if (d.type === 'user') {
     const blocks = typeof m.content === 'string' ? [{ type: 'text', text: m.content }] : Array.isArray(m.content) ? m.content : [];
-    let images = 0;
-    const shots = [];
+    const { images, shots } = picturesOf(blocks, d.uuid);
     const said = [];
     // what Claude Code writes after a step is of the line's one result — with several, it is nobody's
     const single = blocks.filter((b) => b?.type === 'tool_result').length === 1;
     const size = single ? editSize(d.toolUseResult) : null;
     for (const b of blocks) {
-      if (b?.type === 'image') {
-        images++;
-        const shot = images <= SHOTS_MAX && SHOT_LINE_RE.test(String(d.uuid)) ? shotOf(b) : null;
-        if (shot) shots.push({ ref: `${d.uuid}.${images - 1}`, ...(shot.w ? { w: shot.w, h: shot.h } : {}) });
-      }
-      else if (b?.type === 'text') {
+      if (b?.type === 'text') {
         const t = ownWords(b.text);
         const cmd = commandWords(String(b.text ?? ''));
         if (cmd) said.push(cmd);

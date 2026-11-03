@@ -208,7 +208,7 @@ async function look(c) {
   let r;
   try { r = await api('GET', `/api/tasks/${seg(c.key)}/terminal?${q}`, undefined, { quiet: true }); } catch { return; }
   if (n2 !== c.req) return; // a newer look has answered already
-  if (r.same) return;
+  if (r.same || r.unknown) return;
   r = wholeAnswer(r, c.base, c.seen);
   if (!r) { c.seen = null; return; } // not against what this column has: the next look gets it whole
   c.seen = r.v || null;

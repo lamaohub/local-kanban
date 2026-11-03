@@ -4,6 +4,7 @@
 
 import { parsePm2Services } from '../src/pm2-services.js';
 import { closeSync, writeSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { memoryText, moneyText, tokensText } from '../public/js/usage-rules.js';
 import { HOOK_WAIT_MS } from '../src/claude-hooks.js';
 
@@ -56,6 +57,8 @@ const TASK = ['a task', (d) => isObj(d) && typeof d.key === 'string' && typeof d
 const LIST = ['a list', Array.isArray];
 const PROJECT = ['a project', (d) => isObj(d) && typeof d.slug === 'string'];
 const COMMENT = ['a comment', (d) => isObj(d) && Number.isInteger(d.id)];
+// was on the card and someone deleted it there.
+const NOTE = ['a comment', (d) => COMMENT[1](d) || (isObj(d) && d.deleted === true)];
 const ITEM = ['a checklist item', (d) => isObj(d) && typeof d.text === 'string'];
 const DOCS = ['the project documents', (d) => isObj(d) && Array.isArray(d.docs)];
 const TAKEN = ['a taken task', (d) => isObj(d) && Number.isInteger(d.blocked_n) && (d.task === null || TASK[1](d.task))];
@@ -71,6 +74,17 @@ const KEY_RE = /^(?:[a-z0-9]+-\d+|\d+)$/i;
 function key(id) {
   if (!KEY_RE.test(id)) die(`kb: "${id}" is not a task key (like CK-12) or a task id`);
   return encodeURIComponent(id);
+}
+// after the board wrote the note (code 1), and the retry is a new kb with nothing remembered — the same key lets
+// the board find what it already wrote instead of writing it twice. The same words from the same session again
+// stay one note; that repeats nothing a person would want twice.
+function noteKey(id, body) {
+  return 'kb-' + createHash('sha256').update(`${String(id).toUpperCase()}\n${SESSION}\n${body}`).digest('hex').slice(0, 40);
+}
+async function postNote(id, body) {
+  const c = await api('POST', `/api/tasks/${key(id)}/comments`, { body, author: 'claude', client_key: noteKey(id, body) }, NOTE);
+  if (c.deleted) die(`kb: the same note was on ${id} and was deleted there — not written again; change the words to add it`);
+  return c;
 }
 function seg(s) {
   if (s === '.' || s === '..') die(`kb: "${s}" is not a project`);
@@ -470,7 +484,7 @@ const commands = {
     const t = await api('PATCH', `/api/tasks/${key(id)}`, { status: 'review' }, TASK);
     const unsaved = (code) => { if (code) process.stderr.write(`kb: ${t.key} is in review, but the note did not save — kb note ${t.key} "…"\n`); };
     process.on('exit', unsaved);
-    await api('POST', `/api/tasks/${key(id)}/comments`, { body: note, author: 'claude' }, COMMENT);
+    await postNote(id, note);
     process.off('exit', unsaved);
     console.log(`${t.key} review 📝`);
   },
@@ -605,7 +619,7 @@ const commands = {
     if (!id || !body) die('kb note <key> "text"');
     // Nothing is read after the write: a read that failed reported a failure of a note already saved, and the retry
     // wrote a second one. So the key is printed as it was typed.
-    await api('POST', `/api/tasks/${key(id)}/comments`, { body, author: 'claude' }, COMMENT);
+    await postNote(id, body);
     console.log(`${id} 📝`);
   },
 
