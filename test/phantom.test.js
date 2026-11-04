@@ -824,6 +824,46 @@ test('a turn that left the task untouched sends it back to Review; a commit, a c
   git('commit', '-q', '--allow-empty', '-m', 'the button');
   assert.deepEqual(await turn('idle', Date.now() + 1), []);
   assert.equal(row().status, 'doing', 'a turn that committed sent the task back to Review');
+  at = await words('note the batch in the changelog');
+  git('commit', '-q', '--allow-empty', '-m', 'TRN-2: the changelog of the batch');
+  assert.deepEqual(await turn('idle', Date.now() + 1), ['TRN-1'], 'another task\'s commit kept the handed-in task in Doing');
+  assert.deepEqual(row(), { status: 'review', work_seconds: 600 });
+  // a release names no key: a task without an issue may have commits that name nothing (statCommit) — the words stand
+  at = await words('roll it out');
+  git('commit', '-q', '--allow-empty', '-m', 'release v1.2.3');
+  assert.deepEqual(await turn('idle', Date.now() + 1), []);
+  assert.equal(row().status, 'doing', 'a commit naming nothing was not taken for the work of a task without an issue');
+  // … a task with an issue has its commits name it: a release and another task's commit are not about it
+  db.prepare('UPDATE tasks SET gh_issue_number = 77 WHERE id = ?').run(id);
+  at = await words('roll it out again');
+  git('commit', '-q', '--allow-empty', '-m', 'TRN-2: the changelog (#78)');
+  git('commit', '-q', '--allow-empty', '-m', 'release v1.2.4');
+  assert.deepEqual(await turn('idle', Date.now() + 1), ['TRN-1'], 'a release kept a task with an issue in Doing');
+  // a commit that names the task, among others: the words were about it
+  at = await words('and the header');
+  git('commit', '-q', '--allow-empty', '-m', 'TRN-1: the header');
+  git('commit', '-q', '--allow-empty', '-m', 'release v1.2.5');
+  assert.deepEqual(await turn('idle', Date.now() + 1), []);
+  assert.equal(row().status, 'doing', 'a commit of the task sent it back to Review');
+  // another task's commit and a file left changed: the file may be this task's
+  at = await words('and the footer');
+  git('commit', '-q', '--allow-empty', '-m', 'TRN-2: more');
+  writeFileSync(join(repo, 'a.txt'), 'one, and the footer\n');
+  assert.deepEqual(await turn('idle', Date.now() + 1), []);
+  assert.equal(row().status, 'doing', 'a changed file next to another task\'s commit sent the task back to Review');
+  // a branch switched under the words: the old commit is not behind the new one — cannot tell
+  at = await words('look at the other branch');
+  const [head] = execFileSync(bin('git'), ['-C', repo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).split('\n');
+  git('stash', '-q');
+  git('checkout', '-q', '--orphan', 'side');
+  git('commit', '-q', '--allow-empty', '-m', 'TRN-2: elsewhere');
+  git('stash', 'pop', '-q');
+  assert.deepEqual(await turn('idle', Date.now() + 1), []);
+  assert.equal(row().status, 'doing', 'a switched branch sent the task back to Review');
+  git('stash', '-q');
+  git('checkout', '-q', head);
+  git('stash', 'pop', '-q');
+  db.prepare('UPDATE tasks SET gh_issue_number = NULL WHERE id = ?').run(id);
   // a changed file, committed nothing
   at = await words('and the margin');
   writeFileSync(join(repo, 'a.txt'), 'one, and the margin\n');

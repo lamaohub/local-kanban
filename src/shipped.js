@@ -68,6 +68,12 @@ export function statCommit(out, words, { issue = null, since = null, known = nul
   return head.hash;
 }
 
+export function namesTask(out, words, { issue = null, known = null } = {}) {
+  const commits = parseLog(out, known);
+  if (!commits.length) return true;
+  return commits.some((c) => words.some((w) => c.words.has(w)) || (!issue && !ownKeys(c.subject, known).length));
+}
+
 export function branchesOf(key, names) {
   const k = new RegExp(`(^|[-/_])${key}($|[-/_])`, 'i');
   return names.filter((n) => k.test(n.replace(/^(origin\/)?claude\//, '')));

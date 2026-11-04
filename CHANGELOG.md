@@ -8,6 +8,12 @@ version it goes out as and opens an empty one again. Released sections are histo
 
 ## [Unreleased]
 
+## [2.0.0-beta.6]
+
+### Fixed
+
+- Words typed to the terminal of a task in Review that only lead to commits of other tasks or a release (such as «roll it out») no longer keep the handed-in task in Doing: when the turn changed nothing but commits and none of them names the task, it goes back to Review. A task without an issue keeps the old rule — a commit naming nothing may be its own.
+
 ## [2.0.0-beta.5]
 
 ### Fixed

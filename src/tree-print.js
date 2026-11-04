@@ -29,6 +29,16 @@ export async function treePrint(path) {
   if (untracked.length > UNTRACKED_MAX || !top) return null; // too many to look at, or no root to find them: cannot tell
   const root = top.toString('utf8').trim();
   const stamps = await Promise.all(untracked.map((f) => stat(join(root, f)).then((s) => `${f}\0${s.size}\0${s.mtimeMs}`, () => `${f}\0-`)));
-  return createHash('sha1').update(head || '').update('\0').update(status).update('\0').update(diff || '').update('\0')
-    .update(stamps.join('\0')).digest('hex');
+  const rest = createHash('sha1').update(status).update('\0').update(diff || '').update('\0').update(stamps.join('\0')).digest('hex');
+  return `${head ? head.toString('utf8').trim() : ''}:${rest}`;
+}
+
+export async function turnCommits(path, before, now, format) {
+  const cut = (p) => { const i = String(p || '').indexOf(':'); return i > 0 ? [p.slice(0, i), p.slice(i + 1)] : [null, null]; };
+  const [a, restA] = cut(before);
+  const [b, restB] = cut(now);
+  if (!a || !b || a === b || restA !== restB) return null;
+  if (await git(path, ['merge-base', '--is-ancestor', a, b]) === null) return null; // a branch switched, a reset: cannot tell
+  const out = await git(path, ['log', `--format=${format}`, `${a}..${b}`]);
+  return out === null ? null : out.toString('utf8');
 }

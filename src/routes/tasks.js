@@ -10,7 +10,7 @@ import { resolveProject } from './projects.js';
 import { kick } from '../sync/worker.js';
 import { LABELS } from '../sync/github.js';
 import { repoHttpsBase } from '../repo-base.js';
-import { STAT_FORMAT, mirrorName, statCommit, wordsOf } from '../shipped.js';
+import { STAT_FORMAT, mirrorName, namesTask, statCommit, wordsOf } from '../shipped.js';
 import { isManual, listShape, noclaudeFilter, snapshot, taskEvent } from '../task-shape.js';
 import { requestSession, requestHostSession, bindSession, taskSessions, mayReprep, unclaimedLaunch, claimLaunch, markLaunch } from '../claude-sessions.js';
 import { taskFeed } from '../work-feed.js';
@@ -19,7 +19,7 @@ import { currentWorkProjects, liveTasks, terminalQuestions } from '../claude-liv
 import { activeBoardSessions, doneRuns, nowRuns } from '../claude-now.js';
 import { closeFinishedTerminals, taskTerminal } from '../phantom.js';
 import { CHECK_LABEL, OPEN_CHECK, isCheck, leadCheck, openCheck, secondCheck } from '../review-check.js';
-import { treePrint } from '../tree-print.js';
+import { treePrint, turnCommits } from '../tree-print.js';
 import { bin } from '../bin-path.js';
 
 const ATTACH_DIR = join(DATA_DIR, 'attachments');
@@ -65,6 +65,15 @@ async function commitUrlFor(task) {
 
 // and not the newest commit of the project, whoever made it
 const STAT_SCAN = 300;
+/** The words that name `task` in a commit of the repository at `path` (wordsOf) and the prefixes of the board. */
+async function taskWords(task, path) {
+  const issueNo = task.gh_issue_number;
+  const mirror = mirrorName(ghOwner(), ghRepo());
+  const base = issueNo && mirror ? await repoHttpsBase(path) : null;
+  const home = Boolean(base) && base.toLowerCase() === `https://github.com/${mirror}`.toLowerCase();
+  const known = new Set(db.prepare('SELECT upper(prefix) AS prefix FROM projects').all().map((p) => p.prefix));
+  return { words: wordsOf(task.key, issueNo, mirror, home), known };
+}
 function attachGitStat(task, startedAt) {
   const project = db.prepare('SELECT path FROM projects WHERE id = ?').get(task.project_id);
   if (!project?.path) return;
@@ -73,14 +82,11 @@ function attachGitStat(task, startedAt) {
   const git = (args) => new Promise((done) => execFile(bin('git'), ['-C', project.path, ...args], { timeout: 5000, maxBuffer: 16 * 1024 * 1024 }, (err, out) => done(err ? null : out)));
   (async () => {
     try {
-      const mirror = mirrorName(ghOwner(), ghRepo());
-      const base = issueNo && mirror ? await repoHttpsBase(project.path) : null;
-      const home = Boolean(base) && base.toLowerCase() === `https://github.com/${mirror}`.toLowerCase();
+      const { words, known } = await taskWords(task, project.path);
       const log = await git(['log', '-n', String(STAT_SCAN), `--format=${STAT_FORMAT}`]);
       if (log === null) return; // not a git repository, or no git — nothing to show
-      const known = new Set(db.prepare('SELECT upper(prefix) AS prefix FROM projects').all().map((p) => p.prefix));
       const since = startedAt ? Math.floor(new Date(startedAt + 'Z').getTime() / 1000) : null;
-      const hash = statCommit(log, wordsOf(task.key, issueNo, mirror, home), { issue: issueNo, since, known });
+      const hash = statCommit(log, words, { issue: issueNo, since, known });
       if (!hash) return;
       const stdout = await git(['log', '-1', '--format=%h|%ct|%s', '--shortstat', hash]);
       const lines = String(stdout || '').trim().split('\n').filter(Boolean);
@@ -361,8 +367,16 @@ export async function settleTurns(states) {
     const elsewhere = db.prepare('SELECT 1 FROM task_events WHERE session_id = ? AND task_id != ? AND id > ? LIMIT 1').get(m.sid, st.id, m.event);
     if (!elsewhere) {
       const before = await m.print;
-      const now = await treePrint(db.prepare('SELECT p.path FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ?').get(st.id)?.path);
-      if (before === null || now === null || before !== now) continue; // committed or changed files — or cannot tell
+      const path = db.prepare('SELECT p.path FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ?').get(st.id)?.path;
+      const now = await treePrint(path);
+      if (before === null || now === null) continue; // cannot tell
+      if (before !== now) {
+        const log = await turnCommits(path, before, now, STAT_FORMAT);
+        const t = log === null ? null : resolveTask(String(st.id));
+        if (!t) continue; // changed files — or cannot tell
+        const { words, known } = await taskWords(t, path);
+        if (namesTask(log, words, { issue: t.gh_issue_number, known })) continue; // committed for it
+      }
     }
     back.push({ id: st.id, ...m });
   }
