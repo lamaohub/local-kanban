@@ -1,16 +1,45 @@
 
 import { $, HEALTH, LANG, api, esc, ic, state, tr } from './core.js';
+import { liveBadge } from './board.js';
 import { keepFocus } from './now.js';
 import { plural } from './settings.js';
 import { selectProject, styledAlert, styledConfirm } from './sidebar.js';
 import { refusalLine } from './unsaved.js';
 import { openDrawer } from './drawer.js';
-import { launchInClaude, taskPromptText } from './sse.js';
-import { fileState, fixable, healthCounts, healthGroups, startTotal } from './health-rules.js';
+import { STATUS_LABELS, launchInClaude, taskPromptText } from './sse.js';
+import { fileState, fixStage, fixable, healthCounts, healthGroups, startTotal } from './health-rules.js';
+import { renderStands, stopStands } from './health-stands.js';
+import { localStore } from './store.js';
+
+const TAB_KEY = 'kb.ui.healthTab';
+const TABS = ['files', 'stands'];
+let tab = 'files';
+try { const v = localStore.getItem(TAB_KEY); if (TABS.includes(v)) tab = v; } catch { /* private mode: the first one */ }
+function tabsHTML() {
+  const b = (v, label, title) => `<button type="button" class="dr-btn${tab === v ? ' active' : ''}" data-hl-tab="${v}" role="tab" aria-selected="${tab === v}" title="${esc(tr(title))}">${esc(tr(label))}</button>`;
+  return `<div class="now-bar hl-tabs"><div class="dash-range" role="tablist">${b('files', 'Instructions', 'How large the CLAUDE.md of each project is')}`
+    + `${b('stands', 'Stands', 'The git worktrees left behind by tasks, and their branches')}</div></div>`;
+}
+// one listener on the section for the switch: both sections draw it anew on every paint
+let tabsWired = false;
+function wireTabs() {
+  if (tabsWired) return;
+  tabsWired = true;
+  $('health').addEventListener('click', (e) => {
+    const b = e.target.closest?.('[data-hl-tab]');
+    if (!b || b.dataset.hlTab === tab) return;
+    tab = b.dataset.hlTab;
+    try { localStore.setItem(TAB_KEY, tab); } catch { /* the choice lives until reload */ }
+    drawnSig = '';
+    if (tab !== 'stands') stopStands();
+    renderHealth().catch(() => {});
+  });
+}
 
 const FRESH_MS = 30000;
 const DOCS_URL = 'https://code.claude.com/docs/en/memory';
 let last = null; // { at, d }
+let fixes = {};
 let drawnSig = '';
 const opened = new Set(); // the projects whose files are unfolded — kept through repaints
 
@@ -51,9 +80,8 @@ function projectHTML(p, d) {
     : `<span class="hl-size muted">${esc(tr('no CLAUDE.md of its own'))}</span>`;
   const start = `<span class="hl-start${total.over ? ' hl-heavy' : ''}" title="${esc(tr('Everything a session reads when it starts in this folder, with your own files'))}">`
     + `${esc(tr('at the start'))}: ${esc(num(total.chars))} ${esc(plural(total.chars, 'character', 'characters'))}</span>`;
-  const fix = p.main && fixable(p.main, norms)
-    ? `<button type="button" class="btn-ghost hl-fix" data-slug="${esc(p.slug)}" title="${esc(tr('Open the task «Shrink CLAUDE.md» and start Claude on it — only while nobody works in the folder of the project'))}">${esc(tr('Fix'))}</button>`
-    : '';
+  const button = `<button type="button" class="btn-ghost hl-fix" data-slug="${esc(p.slug)}" title="${esc(tr('Open the task «Shrink CLAUDE.md» and start Claude on it — only while nobody works in the folder of the project'))}">${esc(tr('Fix'))}</button>`;
+  const fix = fixHTML(fixes[p.slug], p.main && fixable(p.main, norms) ? button : '');
   const files = [...p.files, ...p.nested];
   const body = files.length
     ? files.map((f) => fileHTML(f, norms)).join('')
@@ -62,6 +90,18 @@ function projectHTML(p, d) {
     + `<summary class="hl-row">${ic('chevron', 13)}<span class="hl-main"><a class="hl-name" href="#" data-slug="${esc(p.slug)}">${esc(p.name)}</a>`
     + `<span class="hl-what">${what}</span></span>${start}${fix}</summary>`
     + `<div class="hl-files">${body}</div></details>`;
+}
+
+const statusWord = (st) => STATUS_LABELS[st] || st;
+function fixHTML(fx, button) {
+  const stage = fixStage(fx);
+  if (stage === 'none') return button;
+  const key = `<a class="hl-fix-key" href="#" data-key="${esc(fx.key)}" title="${esc(tr('Open the task of the fix'))}">${esc(fx.key)}</a>`;
+  let what;
+  if (stage === 'work') what = liveBadge({ id: fx.id, status: fx.status }) || `<span class="muted">${esc(statusWord(fx.status))} · ${esc(tr('Claude is not running'))}</span>`;
+  else if (stage === 'review') what = `<span class="muted">${esc(tr('waits for your review'))}</span>`;
+  else what = `<span class="muted">${esc(statusWord(fx.status))}</span>`;
+  return `<span class="hl-fixing">${key}${what}${stage === 'todo' ? button : ''}</span>`;
 }
 
 function normsHTML(d) {
@@ -100,7 +140,7 @@ function paint(d) {
     : '';
   const box = $('health');
   keepFocus(box, () => {
-    box.innerHTML = `<div class="now-wrap hl-wrap">${normsHTML(d)}<div class="hl-sum muted">${esc(sum)}</div>${mine}`
+    box.innerHTML = `<div class="now-wrap hl-wrap">${tabsHTML()}${normsHTML(d)}<div class="hl-sum muted">${esc(sum)}</div>${mine}`
       + groupHTML(tr('With a CLAUDE.md of its own'), own, d)
       + groupHTML(tr('Without one'), bare, d, { fold: true })
       + groupHTML(tr('No folder on this computer'), away, d, { fold: true }) + '</div>';
@@ -115,6 +155,9 @@ function paint(d) {
     a.onclick = (e) => { e.preventDefault(); e.stopPropagation(); selectProject(a.dataset.slug); };
   });
   box.querySelector('.hl-again').onclick = (e) => { e.currentTarget.disabled = true; renderHealth({ force: true }); };
+  box.querySelectorAll('a.hl-fix-key').forEach((a) => {
+    a.onclick = (e) => { e.preventDefault(); e.stopPropagation(); openDrawer(a.dataset.key); };
+  });
   box.querySelectorAll('.hl-fix').forEach((b) => {
     b.onclick = (e) => { e.preventDefault(); e.stopPropagation(); fixProject(b.dataset.slug, b); }; // a click in <summary> folds it
   });
@@ -148,30 +191,46 @@ async function fixProject(slug, btn) {
     fixing.delete(slug);
     btn.disabled = false;
   }
+  renderHealth().catch(() => {});
 }
 
 let seq = 0;
 /** Draw the section; the folders are walked again only when the last answer is older than FRESH_MS, or on `force`. */
+export function repaintHealth() {
+  if (state.slug !== HEALTH || tab !== 'files' || !last || !$('health').firstChild) return;
+  const sig = sigOf(last.d);
+  if (sig !== drawnSig) { drawnSig = sig; paint(last.d); }
+}
+// the badge itself, not only state.live: a question of its Claude (hasAsk) outranks the state of the session
+const sigOf = (d) => JSON.stringify([d, fixes, Object.values(fixes).map((f) => liveBadge({ id: f.id, status: f.status }))]);
+async function loadFixes() {
+  try { fixes = (await api('GET', '/api/health/fixes', undefined, { quiet: true })).fixes || {}; } catch { /* the last ones stay */ }
+}
 export async function renderHealth({ force = false } = {}) {
+  wireTabs();
+  if (tab === 'stands') return renderStands(tabsHTML());
   if (last && !force && Date.now() - last.at < FRESH_MS) {
+    await loadFixes();
+    if (state.slug !== HEALTH || tab !== 'files') return;
     if (!$('health').firstChild) { drawnSig = ''; }
-    const sig = JSON.stringify(last.d);
+    const sig = sigOf(last.d);
     if (sig !== drawnSig) { drawnSig = sig; paint(last.d); }
     return;
   }
   const my = ++seq;
-  if (!last) $('health').innerHTML = `<div class="now-wrap"><div class="muted">${tr('Measuring the instructions of the projects…')}</div></div>`;
+  if (!last || !$('health').querySelector('.hl-again')) $('health').innerHTML = `<div class="now-wrap hl-wrap">${tabsHTML()}<div class="muted">${tr('Measuring the instructions of the projects…')}</div></div>`;
   let d;
-  try { d = await api('GET', '/api/health', undefined, { quiet: true }); }
+  try { [d] = await Promise.all([api('GET', '/api/health', undefined, { quiet: true }), loadFixes()]); }
   catch {
     if (my !== seq || state.slug !== HEALTH) return;
-    if (!last) $('health').innerHTML = `<div class="now-wrap"><div class="muted">${tr('Could not measure the instructions of the projects.')}</div></div>`;
+    if (tab !== 'files') return;
+    if (!last) $('health').innerHTML = `<div class="now-wrap hl-wrap">${tabsHTML()}<div class="muted">${tr('Could not measure the instructions of the projects.')}</div></div>`;
     else { const b = $('health').querySelector('.hl-again'); if (b) b.disabled = false; }
     return; // a failed reload keeps the last picture
   }
   if (my !== seq) return;
   last = { at: Date.now(), d };
-  if (state.slug !== HEALTH) return; // the person moved on; the answer waits for the next opening
-  drawnSig = JSON.stringify(d);
+  if (state.slug !== HEALTH || tab !== 'files') return; // the person moved on; the answer waits for the next opening
+  drawnSig = sigOf(d);
   paint(d);
 }

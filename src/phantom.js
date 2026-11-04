@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { claudeCli, claudeRunnable, EFFORT_VAR, effortProblem, keysProblem, onPath } from './launch.js';
 import { SESSION_ID_RE } from './claude-sessions.js';
 import { db, logError } from './db.js';
-import { claudeConfigFile, DATA_DIR, tmuxSocket } from './config.js';
+import { claudeConfigFile, DATA_DIR, PORT, tmuxSocket } from './config.js';
 import { readRegistry, stateOf, screenState } from './claude-live.js';
 import { waitsOwnWork } from './own-wait.js';
 import { clearKeys, inField, promptBox, tallBox, undim } from './prompt-box.js';
@@ -511,6 +511,36 @@ async function captureScreens(sids) {
   return new Map(sids.map((sid, i) => [sid, parts[i]]).filter(([, screen]) => screen !== undefined));
 }
 
+const portOfEnv = (env) => {
+  const m = /^KB_URL=(.*)$/m.exec(env || '');
+  if (!m) return null;
+  try { const u = new URL(m[1].trim()); return Number(u.port || (u.protocol === 'https:' ? 443 : 80)); } catch { return null; }
+};
+/** The port of the board that started each session (KB_URL in the session's environment): Map sid → port, or null with
+    no KB_URL; a session tmux did not answer about (closed in between) is missing. One call to tmux, as captureScreens. */
+export async function boardPorts(sids) {
+  const out = new Map();
+  if (!sids.length || !tmuxBin()) return out;
+  const cut = `kb-cut-${randomUUID()}`;
+  const r = await tmux(...sids.flatMap((sid) => [['display-message', '-p', cut], ['show-environment', '-t', `=${sessionName(sid)}`]]));
+  if (!r.err) {
+    const parts = r.out.split(`${cut}\n`).slice(1);
+    sids.forEach((sid, i) => { if (parts[i] !== undefined) out.set(sid, portOfEnv(parts[i])); });
+    return out;
+  }
+  // a session that closed in between fails the whole chain: the rest are asked one by one
+  for (const sid of sids) {
+    const one = await tmux(['show-environment', '-t', `=${sessionName(sid)}`]);
+    if (!one.err) out.set(sid, portOfEnv(one.out));
+  }
+  return out;
+}
+/** The sessions of `sids` this very board started (its port in their KB_URL). */
+export async function startedHere(sids) {
+  const ports = await boardPorts(sids);
+  return sids.filter((sid) => ports.get(sid) === PORT);
+}
+
 let sweeping = Promise.resolve();
 /** Close the board's terminals none of whose tasks is in play anymore. Returns the ids of the sessions closed. */
 export function closeFinishedTerminals() {
@@ -534,7 +564,10 @@ async function sweepOnce() {
     }
     return seen.get(sid);
   };
-  const panes = (await socketPanes()).filter((p) => ours.has(p.sid) && !tasksOf(p.sid).work);
+  const candidates = (await socketPanes()).filter((p) => ours.has(p.sid) && !tasksOf(p.sid).work);
+  if (!candidates.length) return [];
+  const here = new Set(await startedHere(candidates.map((p) => p.sid)));
+  const panes = candidates.filter((p) => here.has(p.sid));
   if (!panes.length) return [];
   const claudes = await registryByPid();
   const finished = [];
@@ -668,15 +701,12 @@ export async function boardLook() {
 /** The board's own live terminals with a question open on their screen: [sid]. */
 export async function boardQuestions() { return (await boardLook()).questions; }
 
-/** Sessions this board started before it kept board_sessions: one on its socket that is tied to its tasks
-    is its own. Only at the start of the board itself, never on a request — a test's database must never
-    claim a session of the live socket. */
 export async function adoptBoardTerminals() {
   if (!tmuxBin()) return 0;
   const tied = db.prepare('SELECT 1 FROM task_sessions WHERE session_id = ? LIMIT 1');
   const add = db.prepare('INSERT OR IGNORE INTO board_sessions (session_id) VALUES (?)');
   let n = 0;
-  for (const p of await socketPanes()) if (tied.get(p.sid)) n += add.run(p.sid).changes;
+  for (const sid of await startedHere((await socketPanes()).map((p) => p.sid).filter((sid) => tied.get(sid)))) n += add.run(sid).changes;
   return n;
 }
 

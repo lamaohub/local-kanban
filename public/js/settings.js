@@ -1318,6 +1318,7 @@ const PLURAL_RU = {
   question: ['вопрос', 'вопроса', 'вопросов'],
   tool: ['инструмент', 'инструмента', 'инструментов'],
   'background task': ['фоновую работу', 'фоновые работы', 'фоновых работ'],
+  stand: ['стенд', 'стенда', 'стендов'],
 };
 export function plural(n, one, many) {
   const forms = LANG === 'ru' && PLURAL_RU[one];

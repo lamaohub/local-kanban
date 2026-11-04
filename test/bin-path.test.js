@@ -97,6 +97,7 @@ const ALLOWED = {
   'src/phantom.js': ['cmd'], // run(cmd, …): tmuxBin() — a full path from onPath or TMUX_PLACES
   'src/launch.js': ['spec.cmd'], // launchSpec / commandSpec: bin('open'), bin('osascript'), bin('x-terminal-emulator')
   'src/routes/system.js': ['cmd'], // runUpdate's step: updatePlan gives bin('git'), bin('npm')
+  'src/stands.js': ['cmd'],
   'src/sync/github.js': ['ghBin()'], // KB_GH_BIN, a place gh is installed in, or bin('gh')
   'test/chat-deliver.test.js': ['TMUX'], // the first of the places tmux is installed in, or null (the tests skip)
   'test/claude-hooks.test.js': ['sh'], // each of ['/bin/sh', '/bin/dash', '/bin/bash'] that is there

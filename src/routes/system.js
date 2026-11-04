@@ -13,7 +13,7 @@ import { listBackups, backupNow, backupPath, backupState, ATTACH_MIRROR } from '
 import { inspectBackup, startPreview, stopPreview, currentPreview, UPLOAD_PREFIX } from '../restore.js';
 import { langOverride, ghOwnerEnv, ghRepoEnv, launchDryRun, PORT } from '../config.js';
 import { claudeWord, launchOptions, launchProblem, launchSpec, runLaunch } from '../launch.js';
-import { TMUX_COMMAND_MAX, boardProblem, claudeAtPrompt, folderTrusted, lookedLately, markTaskless, phantomAvailable, phantomPane, phantomSpec, phantomStop, runPhantom, taskTerminal, tmuxBin, tmuxCommandBytes, tmuxRefusal } from '../phantom.js';
+import { TMUX_COMMAND_MAX, boardProblem, claudeAtPrompt, folderTrusted, lookedLately, markTaskless, phantomAvailable, phantomPane, phantomSpec, phantomStop, runPhantom, startedHere, taskTerminal, tmuxBin, tmuxCommandBytes, tmuxRefusal } from '../phantom.js';
 import { ADOPT_TOKEN, freshTerminalSessions, isBoardSession, markBoardSession, markResumed, prepHolder, tieLaunched } from '../claude-sessions.js';
 import { CHECK_LABEL, OPEN_CHECK, doneRules, isCheck, leadCheck } from '../review-check.js';
 import { liveTick, readRegistry } from '../claude-live.js';
@@ -601,7 +601,7 @@ export default async function systemRoutes(app) {
         let term = await taskTerminal(t.id);
         // returned the task, the last round) makes room, or the fix waited for its terminal for up to six hours. Only the fix of
         // an automation asks for it (`adopt` would not do: a resume sends that too), and never over a terminal being looked at
-        for (let i = 0; i < ROOM_TRIES && b.makeRoom === ADOPT_TOKEN && term?.session && !term.unknown && !term.dead && await restsAtPrompt(term.session); i += 1) {
+        for (let i = 0; i < ROOM_TRIES && b.makeRoom === ADOPT_TOKEN && term?.session && !term.unknown && !term.dead && (await startedHere([term.session])).length && await restsAtPrompt(term.session); i += 1) {
           await phantomStop(term.session);
           term = await taskTerminal(t.id);
         }

@@ -68,6 +68,15 @@ export async function fixHolds(project, registry = readRegistry) {
   return { sessions: claudesAt(folder, entries), keys };
 }
 
+/** The open task «Shrink CLAUDE.md» of each project, the newest: {slug: {id, key, status}}. Read on every look — no walk. */
+export function openFixes() {
+  const rows = db.prepare(`SELECT p.slug, t.id, p.prefix || '-' || t.task_no AS key, t.status FROM tasks t JOIN projects p ON p.id = t.project_id
+    WHERE p.archived = 0 AND t.title IN (?, ?) AND t.status NOT IN ('done', 'cancelled') ORDER BY t.id`).all(TITLES.ru, TITLES.en);
+  const out = {};
+  for (const r of rows) out[r.slug] = { id: r.id, key: r.key, status: r.status }; // the newest wins
+  return out;
+}
+
 const fixing = new Map(); // slug → the press in flight
 /** The task of «Fix» for a project: one still open of the same title (backlog → To do), else a new one in To do.
     {key, created} or {code, error, reason, …} of a refusal. */

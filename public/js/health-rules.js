@@ -9,6 +9,15 @@ export function fileState(f, norms) {
 
 export const fixable = (main, norms) => ['heavy', 'long'].includes(fileState(main, norms));
 
+const FIX_WORK = new Set(['prep', 'doing', 'ready', 'deploy']);
+export function fixStage(fix) {
+  if (!fix) return 'none';
+  if (FIX_WORK.has(fix.status)) return 'work';
+  if (fix.status === 'review') return 'review';
+  if (fix.status === 'backlog' || fix.status === 'todo') return 'todo';
+  return 'none';
+}
+
 const RANK = { heavy: 0, long: 1, ok: 2 };
 
 /** The projects split for the section: with their own CLAUDE.md (worst first, then the most loaded at the start), without
@@ -43,3 +52,23 @@ export function healthCounts(own, norms) {
   }
   return n;
 }
+
+const BY_SIZE = (a, b) => (b.size || 0) - (a.size || 0) || String(a.path).localeCompare(String(b.path));
+/** The stands split for the section — what can go first, the biggest first: {free, unsent, busy, reading}. */
+export function standGroups(stands) {
+  const out = { free: [], unsent: [], busy: [], reading: [] };
+  for (const s of stands || []) (out[s.state] || out.reading).push(s);
+  for (const k of Object.keys(out)) out[k].sort(BY_SIZE);
+  return out;
+}
+/** How many stands and how much room: {n, size, freeN, freeSize}. */
+export function standTotals(stands) {
+  let size = 0; let freeN = 0; let freeSize = 0;
+  for (const s of stands || []) {
+    size += s.size || 0;
+    if (s.state === 'free') { freeN += 1; freeSize += s.size || 0; }
+  }
+  return { n: (stands || []).length, size, freeN, freeSize };
+}
+/** The chosen folders that can still go: a stand chosen earlier that is no longer free drops out of the choice. */
+export const chosenFree = (chosen, stands) => (stands || []).filter((s) => s.state === 'free' && chosen.has(s.path)).map((s) => s.path);

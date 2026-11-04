@@ -73,6 +73,7 @@ These are deliberate and predate most of the features. Changes that break them n
 | `src/term-screens.js` | the screens answered lately and what a look gets: same, what changed, or the whole screen |
 | `src/routes/horizons.js` | time-horizon goals |
 | `src/health.js`, `src/routes/health.js` | "Health": how big the instructions Claude Code reads in each project are (CLAUDE.md up the folders, imports, rules, auto memory) against the norms of its docs and its own warnings; what loads only on demand — the CLAUDE.md of subfolders and the rules with `paths:` — apart |
+| `src/stands.js` | "Health → Stands": the git worktrees left behind by tasks — free to remove, with work not in main, or busy — and the task that removes the free ones (the board itself removes nothing) |
 | `src/sync/github.js` | every `gh` invocation, the label palette, Projects v2 plumbing |
 | `src/sync/worker.js` | drains the sync queue in the background |
 | `src/backup.js`, `src/restore.js` | scheduled snapshots; opening a backup as a second board |

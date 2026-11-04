@@ -793,7 +793,7 @@ const LIVE_BADGE = {
   brokeRetrying: ['busy', 'connection lost · going on', "The connection to the API broke off in the middle of Claude's answer — the board tells it to go on by itself"],
   brokeStuck: ['wait', 'answer broke off', "The connection to the API broke off in the middle of Claude's answer, and it did not go on — open the card"],
 };
-function liveBadge(t) {
+export function liveBadge(t) {
   if (hasAsk(t.id)) return `<span class="card-live live-wait live-ask" title="${esc(tr('Claude is waiting for your answer — open the card'))}"><span class="live-dot"></span>${tr('needs your answer')}</span>`;
   const l = state.live[t.id];
   const b = l && (WORKING.has(t.status) || t.status === 'ready') && LIVE_BADGE[l.claude === 'gone' && l.interrupted ? 'interrupted'

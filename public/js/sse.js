@@ -1,4 +1,5 @@
 
+import { repaintHealth } from './health.js';
 import { applyLive, patchCard, renderBoard } from './board.js';
 import { $, ALL, ALL_STATUSES, AUTO, HEALTH, CALENDAR, CHAOS, DASH, DONE, HORIZON, LANG, NOW, REVIEW, SETTINGS, api, esc, fmtNum, ic, readyInUse, retryUnsaved, seg, setGhSyncOn, state, tr } from './core.js';
 import { applyChecklist, closeDrawer, commentArrived, openDrawer, openTerminalOf, peekTerminal, refreshWork, renderComments, renderIssueRow, syncOpenDrawerStatus } from './drawer.js';
@@ -70,7 +71,7 @@ async function loadLive() {
     const fresh = applyTerminalQuestions(live.questions);
     if (liveLoaded) maybeQuestionAlert(fresh, maybeWaitingAlert(changes));
     liveLoaded = true;
-    markNowEntry(); repaintReview();
+    markNowEntry(); repaintReview(); repaintHealth();
   } catch {  }
 }
 
@@ -347,12 +348,12 @@ function streamMessage(data) {
   if (ev.type === 'sync.status') { refreshSync(); return; }
   if (ev.type === 'session.chat') { chatEvent(ev.data?.session); return; }
   if (ev.type === 'task.work') { const open = state.drawerKey && (ev.data?.keys || []).includes(state.drawerKey); if (open) refreshUsage(state.drawerKey); if (open) refreshWork(state.drawerKey); return; }
-  if (ev.type === 'task.live') { liveEvents++; state.liveProjects = ev.data?.projects || []; maybeQuestionAlert(applyTerminalQuestions(ev.data?.questions), maybeWaitingAlert(applyLive(ev.data?.tasks))); markNowEntry(); peekTerminal(); if (state.slug === DASH || state.slug === NOW || state.slug === REVIEW) loadTasks().catch(() => {}); return; }
+  if (ev.type === 'task.live') { liveEvents++; state.liveProjects = ev.data?.projects || []; maybeQuestionAlert(applyTerminalQuestions(ev.data?.questions), maybeWaitingAlert(applyLive(ev.data?.tasks))); markNowEntry(); peekTerminal(); if (state.slug === DASH || state.slug === NOW || state.slug === REVIEW) loadTasks().catch(() => {}); repaintHealth(); return; }
   if (ev.type === 'task.checklist') { applyChecklist(ev.data?.key, ev.data?.checklist); if (state.slug === NOW && !ev.data?.text_only) loadTasks().catch(() => {}); return; }
   if (ev.type === 'limits.updated') { applyLimits(ev.data); return; }
   if (ev.type === 'share.updated') { applyShare(ev.data); return; }
   if (ev.type === 'automation.updated') { applyAutomations(ev.data); return; }
-  if (ev.type === 'ask.created' || ev.type === 'ask.removed') { applyAskEvent(ev); return; }
+  if (ev.type === 'ask.created' || ev.type === 'ask.removed') { applyAskEvent(ev); repaintHealth(); return; }
   if (ev.type === 'task.comment') commentArrived(ev.data.key, ev.data.comment, ev.data.comments_n);
   maybeReviewSound(ev);
   maybeReviewNotify(ev);

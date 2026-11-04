@@ -8,6 +8,20 @@ version it goes out as and opens an empty one again. Released sections are histo
 
 ## [Unreleased]
 
+## [2.0.0-beta.7]
+
+### Added
+
+- Health has a second section, Stands: the git worktrees left behind by tasks, with each one's project, task, size and date, and whether it can go (nothing uncommitted, every commit already in main), still holds work not in main (its commits and the changes, on request) or is busy (a Claude session, a running process, its task in work). «Remove the ticked» opens one task per repository with the stands that can go and starts it like «Fix»; its Claude checks each stand again right before removing it, never with `--force`, and asks you about the rest. The board itself removes nothing.
+
+### Changed
+
+- Health: after «Fix», the row of the project names the task of the fix and shows Claude's state on it — starting, working, waiting for you, not running, or waiting for your review.
+
+### Fixed
+
+- A board no longer takes in or closes a terminal another board started on the same tmux socket: a terminal counts as its own only with the board's own port in its environment.
+
 ## [2.0.0-beta.6]
 
 ### Fixed

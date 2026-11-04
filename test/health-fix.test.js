@@ -187,10 +187,12 @@ test('the page shows «Fix» on a long CLAUDE.md and on a heavy one, not on one 
   const rules = await import('../public/js/health-rules.js');
   const src = readFileSync(new URL('../public/js/health.js', import.meta.url), 'utf8');
   const at = src.indexOf('function projectHTML(');
+  const fixAt = src.indexOf('const statusWord =');
   const box = { ...rules, tr: (s) => s, esc: (s) => String(s), ic: () => '', plural: (n, a, b) => (n === 1 ? a : b), num: String, size: () => '',
-    stateHTML: () => '', fileHTML: () => '', opened: new Set() };
+    stateHTML: () => '', fileHTML: () => '', opened: new Set(), fixes: {}, STATUS_LABELS: { todo: 'To do', doing: 'Doing', review: 'Review' },
+    liveBadge: () => '' };
   vm.createContext(box);
-  vm.runInContext(`${src.slice(at, src.indexOf('\n}\n', at) + 2)}\nthis.row = projectHTML;`, box);
+  vm.runInContext(`${src.slice(fixAt, src.indexOf('\n}\n', fixAt) + 2)}\n${src.slice(at, src.indexOf('\n}\n', at) + 2)}\nthis.row = projectHTML;`, box);
   const norms = { lines: 200, file_chars: 40000, total_chars: 120000 };
   const d = { norms, everywhere: { files: [], chars: 0, lines: 0 } };
   const row = (chars, lines) => box.row({ slug: 'x', name: 'X', main: { path: 'CLAUDE.md', chars, lines }, files: [], nested: [], chars, lines }, d);
@@ -198,4 +200,48 @@ test('the page shows «Fix» on a long CLAUDE.md and on a heavy one, not on one 
   assert.match(row(40001, 10), /class="btn-ghost hl-fix"/, 'a heavy CLAUDE.md has no «Fix»');
   assert.doesNotMatch(row(5000, 150), /hl-fix/, 'a CLAUDE.md within the norms has «Fix»');
   assert.doesNotMatch(box.row({ slug: 'x', name: 'X', main: null, files: [], nested: [], chars: 0, lines: 0 }, d), /hl-fix/);
+});
+
+test('the row of a project says what became of its fix: the task, and Claude on it (CK-967)', async () => {
+  // the owner: «started, but it is not clear whether the agent works yet» — the row stayed as it was after «Fix»
+  const { readFileSync } = await import('node:fs');
+  const vm = (await import('node:vm')).default;
+  const rules = await import('../public/js/health-rules.js');
+  const src = readFileSync(new URL('../public/js/health.js', import.meta.url), 'utf8');
+  const at = src.indexOf('const statusWord =');
+  const live = new Map();
+  const box = { ...rules, tr: (s) => s, esc: (s) => String(s), STATUS_LABELS: { todo: 'To do', doing: 'Doing', review: 'Review' },
+    liveBadge: (t) => (live.has(t.id) ? `<span class="card-live">${live.get(t.id)}</span>` : '') };
+  vm.createContext(box);
+  vm.runInContext(`${src.slice(at, src.indexOf('\n}\n', at) + 2)}\nthis.fix = fixHTML;`, box);
+  const BUTTON = '<button class="hl-fix">Fix</button>';
+  assert.equal(box.fix(undefined, BUTTON), BUTTON, 'no open fix — the button as before');
+  live.set(7, 'working');
+  const working = box.fix({ id: 7, key: 'X-7', status: 'doing' }, BUTTON);
+  assert.match(working, /data-key="X-7"/, 'the task of the fix is not named');
+  assert.match(working, /card-live">working/, "Claude's state on the task is not shown");
+  assert.doesNotMatch(working, /hl-fix"/, 'a second «Fix» over a Claude at work');
+  assert.match(box.fix({ id: 8, key: 'X-8', status: 'doing' }, BUTTON), /Doing · Claude is not running/, 'a fix in work with nobody on it reads as working');
+  const review = box.fix({ id: 9, key: 'X-9', status: 'review' }, BUTTON);
+  assert.match(review, /waits for your review/);
+  assert.doesNotMatch(review, /hl-fix"/);
+  const todo = box.fix({ id: 10, key: 'X-10', status: 'todo' }, BUTTON);
+  assert.match(todo, /data-key="X-10"[\s\S]*To do[\s\S]*hl-fix/, 'a fix waiting in To do — the key, the column and the button that starts it');
+  assert.equal(rules.fixStage({ status: 'ready' }), 'work');
+  assert.equal(rules.fixStage({ status: 'backlog' }), 'todo');
+});
+
+test('GET /api/health/fixes names the open fix of each project, the newest, not a done or cancelled one (CK-967)', async () => {
+  const RU_TITLE = '\u0423\u0436\u0430\u0442\u044c CLAUDE.md'; // the Russian title of the task, spelt by its code points: the public slice keeps the Russian to the locale
+  const { openFixes } = await import('../src/auto-health.js');
+  const pid = db.prepare("INSERT INTO projects (slug, prefix, name, next_task_no) VALUES ('fixes967', 'FXS', 'Fixes', 5)").run().lastInsertRowid;
+  const add = (n, title, status) => db.prepare('INSERT INTO tasks (project_id, task_no, title, status) VALUES (?, ?, ?, ?)').run(pid, n, title, status);
+  add(1, RU_TITLE, 'done');
+  add(2, 'Shrink CLAUDE.md', 'review');
+  add(3, 'Something else', 'doing');
+  assert.deepEqual(openFixes().fixes967, { id: db.prepare("SELECT id FROM tasks WHERE project_id = ? AND task_no = 2").get(pid).id, key: 'FXS-2', status: 'review' });
+  add(4, RU_TITLE, 'cancelled');
+  assert.equal(openFixes().fixes967.key, 'FXS-2', 'a cancelled fix hid the open one');
+  db.prepare("UPDATE tasks SET status = 'done' WHERE project_id = ? AND task_no = 2").run(pid);
+  assert.equal(openFixes().fixes967, undefined, 'a project with no open fix has one');
 });
