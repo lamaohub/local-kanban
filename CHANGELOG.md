@@ -8,6 +8,15 @@ version it goes out as and opens an empty one again. Released sections are histo
 
 ## [Unreleased]
 
+## [2.0.0-beta.9]
+
+### Fixed
+
+- Health → Stands no longer offers to remove a stand holding ignored data: `git worktree remove` deletes ignored files without asking, so a stand with a `.env`, a `data/` folder or a database the main checkout does not hold is now «work not in main», and the files are listed under «Show what is not in main». What a build or an install makes again (`node_modules`, `dist`, `__pycache__`…) and the settings of a Claude session of the folder do not hold a stand.
+- Health → Stands takes a commit as handed in only when main already holds its changes: the same title or issue number in the log of main is shown as a hint, not as proof — a commit never in main passed because another commit of its task had landed. A change that landed inside a squash is found by its result.
+- «Stop», «Continue» and typing in a card no longer reach a terminal another board started on the same tmux socket: before, «Continue» cleared the exited terminal of the other board and took its session over — the board's own resume of interrupted work did it too — and «Stop» closed its running Claude. The card, the chat included, now says the terminal belongs to another board and leaves it alone; it can still be looked at.
+- The task of a cleanup checks ignored data and the changes of each commit the same way, tells a stand whose folder is gone to drop its own record instead of `git worktree prune`, which drops every such record of the repository, asks for `git fetch origin` only where there is an origin, and gives sizes under a gigabyte in MB; the ticks go as soon as the task is opened.
+
 ## [2.0.0-beta.8]
 
 ### Fixed

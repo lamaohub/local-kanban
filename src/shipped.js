@@ -88,7 +88,7 @@ export function cherryState(out) {
 const cherryCopies = (out) => new Set(String(out || '').split('\n').filter((l) => l.startsWith('- ')).map((l) => l.slice(2)));
 
 /** A path for GIT_ALTERNATE_OBJECT_DIRECTORIES, which splits on a colon unless the entry is quoted. */
-const alternate = (p) => (/[:"\\]/.test(p) ? `"${p.replace(/["\\]/g, '\\$&')}"` : p);
+export const alternate = (p) => (/[:"\\]/.test(p) ? `"${p.replace(/["\\]/g, '\\$&')}"` : p);
 
 /** Whether a line ahead by patches is squashed into main: merging it leaves main's tree as it is, and it does change something
     (a line that took its work back merges the same way, with nothing on main). Git before 2.38 has no `--write-tree`, and a

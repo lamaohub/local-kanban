@@ -1,7 +1,7 @@
 import { resolveTask } from './tasks.js';
 import { sayToTerminal } from '../terminal-say.js';
 import { typing } from '../chat-queue.js';
-import { COLS_MAX, COLS_MIN, KEYS, REPLY_MAX, noteLook, phantomMessage, phantomResize, phantomStop, questionOpen, taskTerminal, tmuxRefusal, widthFor } from '../phantom.js';
+import { COLS_MAX, COLS_MIN, KEYS, REPLY_MAX, noteLook, otherBoardRefusal, phantomMessage, phantomResize, phantomStop, questionOpen, taskTerminal, tmuxRefusal, widthFor } from '../phantom.js';
 import { logError } from '../db.js';
 import { scalarQuery } from '../query-params.js';
 import { createScreens } from '../term-screens.js';
@@ -25,13 +25,13 @@ export default async function terminalRoutes(app) {
     }
     const term = await taskTerminal(t.id, { screen: true });
     if (!term) return { session: null };
-    noteLook(term.session);
+    if (!term.other) noteLook(term.session);
     if (term.unknown) return { session: term.session, unknown: true, ...(term.broken ? tmuxRefusal(term) : {}) };
     // a Claude that has exited cannot redraw itself: its last screen stays as it was laid out. A column or two
     // wider is not worth a redraw: the same card measures 46 in Chromium and 45 in Safari, and two of them
     // open at once would otherwise lay the window out again every second, one after the other (review)
     const want = cols === null ? null : widthFor(term.session, cols);
-    const lay = want !== null && !term.dead && (term.cols === null || want < term.cols || want > term.cols + 2);
+    const lay = want !== null && !term.dead && !term.other && (term.cols === null || want < term.cols || want > term.cols + 2);
     if (lay && !(await phantomResize(term.session, want)).err) term.cols = want;
     // whether Claude waits on an open question (a permission, the trust of a folder, a choice): «Claude review» says
     term.question = !term.dead && questionOpen(term.screen);
@@ -50,6 +50,7 @@ export default async function terminalRoutes(app) {
     if (!term) return reply.code(404).send({ error: 'no Claude of the board works on this task' });
     if (term.unknown) return reply.code(409).send(tmuxRefusal(term));
     if (term.dead) return reply.code(409).send({ error: 'Claude has exited in this terminal' });
+    if (term.other) return reply.code(409).send(otherBoardRefusal(term.other));
     const r = await typing(term.session, () => sayToTerminal(t, term.session, { text, key }));
     if (r.err) {
       logError('server', 'terminal', `typing into the terminal failed: ${r.err.message}`, r.text);
@@ -68,6 +69,7 @@ export default async function terminalRoutes(app) {
     const term = await taskTerminal(t.id);
     if (!term) return reply.code(404).send({ error: 'no Claude of the board works on this task', reason: 'gone' });
     if (term.unknown) return reply.code(409).send(tmuxRefusal(term));
+    if (term.other) return reply.code(409).send(otherBoardRefusal(term.other));
     const r = await phantomMessage(term.session, t.key, text.trim());
     if (r.refused) {
       const why = { question: 'Claude is asking a question in its terminal', busy: 'Claude is in the middle of its work', gone: 'Claude has exited in this terminal' };
@@ -84,6 +86,8 @@ export default async function terminalRoutes(app) {
     const t = taskOr404(req, reply); if (!t) return reply;
     const term = await taskTerminal(t.id);
     if (!term) return reply.code(404).send({ error: 'no Claude of the board works on this task' });
+    if (term.unknown) return reply.code(409).send(tmuxRefusal(term)); // whose it is cannot be told either
+    if (term.other) return reply.code(409).send(otherBoardRefusal(term.other));
     await phantomStop(term.session);
     return { ok: true, session: term.session };
   });

@@ -39,14 +39,18 @@ function whyWords(s) {
     locked: tr('the worktree is locked'),
     unknown: tr('could not tell what is in it'),
     dirty: `${tr('not committed')}: ${s.changes?.files ?? '?'} ${plural(s.changes?.files ?? 0, 'file', 'files')}`,
+    ignored: `${tr('ignored data not in the main checkout')}: ${s.ignored?.files ?? '?'} ${plural(s.ignored?.files ?? 0, 'file', 'files')}`,
     commits: `${tr('not in main')}: ${n()} ${plural(n(), 'commit', 'commits')}`,
     detached: tr('detached HEAD with commits of its own'),
   }[w] || w)).join(' · ');
 }
 const FOUND = {
   patch: 'in main as the same change',
-  title: 'in main by its title',
-  issue: 'in main by its issue number',
+  content: 'its changes are in main',
+};
+const LIKE = {
+  title: 'not in main: its title is, the changes differ',
+  issue: 'not in main: its issue is, the changes differ',
 };
 
 function rowHTML(s) {
@@ -60,9 +64,9 @@ function rowHTML(s) {
     + `${s.state !== 'free' && s.state !== 'reading' ? `<span class="st-why">${esc(whyWords(s))}</span>` : ''}</span></span>`
     + `<span class="hl-start st-size">${esc(gb(s.size))}${s.changed_at ? ` · ${esc(day(s.changed_at))}` : ''}</span>`;
   const commits = s.commits || [];
-  if (!commits.length && !(s.state === 'unsent' && s.dirty)) return `<div class="hl-row st-row">${box}<span class="st-chev-gap"></span>${head}</div>`;
+  if (!commits.length && !(s.state === 'unsent' && (s.dirty || s.ignored?.files))) return `<div class="hl-row st-row">${box}<span class="st-chev-gap"></span>${head}</div>`;
   const list = commits.map((c) => `<div class="hl-file"><span class="hl-file-path">${esc(c.sha.slice(0, 9))} ${esc(c.title)}</span>`
-    + `<span class="hl-file-kind${c.found ? '' : ' hl-heavy'}">${esc(c.found ? tr(FOUND[c.found]) : tr('not in main'))}</span></div>`).join('');
+    + `<span class="hl-file-kind${c.found ? '' : ' hl-heavy'}">${esc(c.found ? tr(FOUND[c.found] || c.found) : tr(LIKE[c.like] || 'not in main'))}</span></div>`).join('');
   const diff = s.state === 'unsent'
     ? (diffs.has(s.path) ? `<pre class="st-diff">${esc(diffs.get(s.path))}</pre>` : `<button type="button" class="btn-ghost st-diff-btn" data-path="${esc(s.path)}">${esc(tr('Show what is not in main'))}</button>`)
     : '';
@@ -89,7 +93,7 @@ function paint(d, tabs) {
     : (d.running ? '' : tr('No stands: the projects of the board have no git worktrees besides the main one.'));
   const head = '<div class="panel hl-norms">'
     + `<div class="hl-h">${tr('Stands')}<button type="button" class="btn-ghost st-again"${d.running ? ' disabled' : ''}>${tr('Check again')}</button></div>`
-    + `<div class="muted hl-hint">${esc(tr('A stand is a git worktree of a task (.claude/worktrees/<KEY>) and its branch. «Can go» — nothing uncommitted and every commit is in main; the task you open checks each one again right before removing it, and never removes one with work not in main.'))}</div>`
+    + `<div class="muted hl-hint">${esc(tr('A stand is a git worktree of a task (.claude/worktrees/<KEY>) and its branch. «Can go» — nothing uncommitted, no ignored data the main checkout lacks (a .env, data/), and the changes of every commit are in main; the task you open checks each one again right before removing it, and never removes one with work not in main.'))}</div>`
     + `${repos}<div class="hl-sum muted">${esc(walk)}</div></div>`;
   const bar = g.free.length
     ? `<div class="st-bar"><button type="button" class="btn-ghost st-all">${esc(picked.length === g.free.length ? tr('Untick all') : `${tr('Tick all that can go')} (${g.free.length})`)}</button>`
@@ -162,6 +166,7 @@ async function removeChosen(btn, tabs) {
       return;
     }
     chosen.clear();
+    repaint(); // the ticks go at once: the walk is fresh, and renderStands below would not draw again
     for (const t of r.tasks || []) await launchInClaude({ text: taskPromptText(t.key), project: t.project, keys: [t.key], btn });
   } finally {
     starting = false;

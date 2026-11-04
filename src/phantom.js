@@ -540,6 +540,28 @@ export async function startedHere(sids) {
   const ports = await boardPorts(sids);
   return sids.filter((sid) => ports.get(sid) === PORT);
 }
+const portSeen = new Map(); // sid → {port, at}: a pane keeps the environment it was started with
+const PORT_SEEN_MS = 60_000;
+/** Whether the terminal of `sid` — a pane known to be there — is another board's: {port} — the port in its KB_URL (null:
+    none, or tmux did not say: nobody's, as for a pass), or null — this board started it. Asked of the pane a card looks
+    at every second, so a known answer is kept a minute. */
+export async function otherBoard(sid) {
+  const seen = portSeen.get(sid);
+  let port;
+  if (seen && Date.now() - seen.at < PORT_SEEN_MS) port = seen.port;
+  else {
+    const ports = await boardPorts([sid]);
+    if (ports.has(sid)) { port = ports.get(sid); portSeen.set(sid, { port, at: Date.now() }); }
+    if (portSeen.size > 500) portSeen.delete(portSeen.keys().next().value);
+  }
+  return port === PORT ? null : { port: port ?? null };
+}
+/** The refusal of an action on another board's terminal: 409 with `reason: 'other-board'` and its port. */
+export const otherBoardRefusal = ({ port }) => ({
+  error: port ? `this terminal was started by another board (port ${port}): stop, continue or answer it there`
+    : 'this terminal was not started by this board: stop, continue or answer it where it was started',
+  reason: 'other-board', port: port || null,
+});
 
 let sweeping = Promise.resolve();
 /** Close the board's terminals none of whose tasks is in play anymore. Returns the ids of the sessions closed. */
@@ -728,7 +750,8 @@ export async function taskTerminal(taskId, { screen = false } = {}) {
     const st = screen ? await phantomView(r.session_id) : await phantomPane(r.session_id);
     if (st?.unknown) return { session: r.session_id, unknown: true, ...(st.broken ? { broken: true } : {}) };
     if (st) {
-      return { session: r.session_id, dead: st.dead, ...(st.dead ? { exit: st.exit, interrupted: endedBySignal(st) } : {}), cols: st.cols,
+      const other = await otherBoard(r.session_id);
+      return { session: r.session_id, ...(other ? { other } : {}), dead: st.dead, ...(st.dead ? { exit: st.exit, interrupted: endedBySignal(st) } : {}), cols: st.cols,
         ...(screen ? { screen: st.screen, wraps: st.wraps, links: st.links } : {}),
         ...(screen && !st.dead ? { activity: await terminalActivity(st.pid, st.screen) } : {}) };
     }

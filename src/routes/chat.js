@@ -1,6 +1,6 @@
 
 import { resolveTask, taskAttachmentPaths } from './tasks.js';
-import { CHAT_COLS, REPLY_MAX, claudeAtPrompt, paceOnScreen, phantomResize, phantomScreen, phantomSend, taskTerminal, tmuxRefusal, watched } from '../phantom.js';
+import { CHAT_COLS, REPLY_MAX, claudeAtPrompt, paceOnScreen, phantomResize, phantomScreen, phantomSend, otherBoardRefusal, taskTerminal, tmuxRefusal, watched } from '../phantom.js';
 import { SESSION_ID_RE, taskSessions, transcriptNow } from '../claude-sessions.js';
 import { DOC_MAX, PICTURE_MAX, PICTURE_TYPES, SHOT_RE, TURNS_DEFAULT, TURNS_MAX, chatDoc, chatHash, chatPicture, chatShot, isMarkdown, pictureKindOf, saidCommand, transcriptChat, watchChat } from '../chat-feed.js';
 import { createReadStream } from 'node:fs';
@@ -110,7 +110,7 @@ export default async function chatRoutes(app) {
     // did not answer about is still the board's — the chat said «does not run inside the board» over a Claude at work;
     // its state is not known this look (null), a word sent now is refused as tmux-slow
     const term = await taskTerminal(t.id);
-    const send = Boolean(term && !term.dead && term.session === s.session_id);
+    const send = Boolean(term && !term.dead && !term.other && term.session === s.session_id);
     const state = send && !term.unknown ? await claudeAtPrompt(s.session_id) : null;
     // terminal beside it must answer Claude's question itself: what the screen shows of it, and keys under it
     const screen = state === 'question' ? (await phantomScreen(s.session_id, 0, { escapes: true })) ?? '' : null;
@@ -249,6 +249,7 @@ export default async function chatRoutes(app) {
     if (!images) return reply.code(400).send({ error: 'images: an attachment of this task only' });
     const term = await taskTerminal(t.id);
     if (!term || term.unknown || term.dead) return noClaude(reply, term);
+    if (term.other) return reply.code(409).send(otherBoardRefusal(term.other));
     // words already waiting go first: these ones line up behind them, even if Claude is free right now; and words typed
     // a moment ago (here, in another chat, out of the queue) have not shown Claude busy yet — these ones wait too.
     if (req.body?.now !== undefined && typeof req.body.now !== 'boolean') return reply.code(400).send({ error: 'now: true or false' });
@@ -278,6 +279,7 @@ export default async function chatRoutes(app) {
     const t = taskOr404(req, reply); if (!t) return reply;
     const term = await taskTerminal(t.id);
     if (!term || term.unknown || term.dead) return noClaude(reply, term);
+    if (term.other) return reply.code(409).send(otherBoardRefusal(term.other));
     const r = await typing(term.session, async () => {
       if (Date.now() - (stoppedAt.get(term.session) || 0) < STOP_GAP_MS) return { refused: 'stopping' };
       if ((await claudeAtPrompt(term.session)) !== 'busy') return { refused: 'not-busy' };
@@ -295,6 +297,7 @@ export default async function chatRoutes(app) {
     const t = taskOr404(req, reply); if (!t) return reply;
     const term = await taskTerminal(t.id);
     if (!term || term.unknown || term.dead) return noClaude(reply, term);
+    if (term.other) return reply.code(409).send(otherBoardRefusal(term.other));
     const item = takeQueued(term.session, req.params.itemId);
     if (!item) return reply.code(404).send({ error: 'these words are not waiting any more — they went, or were taken back' });
     const r = await sayNow(t, term.session, item.text, item.images);

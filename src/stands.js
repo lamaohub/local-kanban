@@ -1,11 +1,13 @@
 
 import { execFile } from 'node:child_process';
-import { realpath, stat, statfs } from 'node:fs/promises';
+import { lstat, mkdtemp, open, readdir, readlink, realpath, rm, stat, statfs } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { basename, isAbsolute, join, relative, sep } from 'node:path';
 import { existsSync } from 'node:fs';
 import { db } from './db.js';
 import { readRegistry, stateOf } from './claude-live.js';
 import { bin } from './bin-path.js';
+import { alternate } from './shipped.js';
 
 const GIT_MS = 20_000;
 const DU_MS = 120_000;
@@ -15,10 +17,31 @@ export const FORCE_EVERY_MS = 15_000; // «Check again» — not more often
 const WORK = new Set(['prep', 'doing', 'ready', 'deploy']);
 const DIFF_MAX = 200_000;
 
+/* Ignored files a removal may take without a word: what a build or an install makes again, and the settings Claude Code
+   writes for a session of the folder. The rest of the ignored files — a `.env`, `data/`, `var/` — is kept unless the main
+   checkout holds the very same bytes at the same place. Measured on 05.11.2026 on the owner's tree of 176 stands: 58 held
+   such data (villa_tap/var, server_panel/data, inst.bot/app/data, a .env, older copies of skills). */
+const REGEN_DIRS = new Set(['node_modules', '__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache', '.venv', 'venv',
+  '.next', '.nuxt', '.turbo', '.parcel-cache', '.cache', 'coverage', 'dist', 'build', '.gradle']);
+const REGEN_FILES = new Set(['.DS_Store', 'Thumbs.db', 'package-lock.json']);
+const SESSION_FILES = new Set(['.claude/settings.local.json', '.claude/launch.json']);
+/** An ignored path (relative to the stand, «dir/» for a folder) that a removal may take: made again by a build or an
+    install, or the settings of a Claude session of the folder. Pure. */
+export function regenerable(rel) {
+  const clean = String(rel).replace(/\/+$/, '');
+  if (SESSION_FILES.has(clean)) return true;
+  const parts = clean.split('/');
+  if (parts.some((x) => REGEN_DIRS.has(x))) return true;
+  const name = parts[parts.length - 1];
+  return REGEN_FILES.has(name) || /\.(pyc|tsbuildinfo)$/.test(name);
+}
+const KEPT_MAX = 20; // the paths of ignored data a stand lists
+const LOOK_MAX = 20_000; // the entries looked at in one stand — past them its ignored files are «not known»
+
 const env = { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0', LC_ALL: 'C' };
-function run(cmd, args, { cwd, timeout = GIT_MS, max = 32 * 1024 * 1024 } = {}) {
+function run(cmd, args, { cwd, timeout = GIT_MS, max = 32 * 1024 * 1024, extra = null } = {}) {
   return new Promise((resolve) => {
-    execFile(cmd, args, { cwd, timeout, maxBuffer: max, env }, (err, out) => resolve(err ? { err, out: String(out || '') } : { out: String(out) }));
+    execFile(cmd, args, { cwd, timeout, maxBuffer: max, env: extra ? { ...env, ...extra } : env }, (err, out) => resolve(err ? { err, out: String(out || '') } : { out: String(out) }));
   });
 }
 const git = (dir, args, opts) => run(bin('git'), ['-C', dir, ...args], opts);
@@ -70,25 +93,127 @@ export const issuesIn = (msg) => [...String(msg || '').matchAll(ISSUE)].map((m) 
 /** A title that names its work: three words and fifteen characters at least — the board's commits are sentences; «WIP»,
     «Fix tests», «Update README» stand in any long log for other work. */
 export const telling = (title) => String(title || '').trim().length >= 15 && String(title).trim().split(/\s+/).length >= 3;
-/** How the commits of a branch stand against main: each commit {sha, title, found: 'patch'|'title'|'issue'|null}.
-    `cherry` — the lines of `git cherry <main> <head>` («+ sha» not in main as a patch, «- sha» is); `main` — {titles: Set,
-    issues: Set} of the log of main; `messages` — sha → {title, body}. Pure. */
-export function matchCommits(cherry, messages, main) {
+export function matchCommits(cherry, messages, main, inMain = new Set()) {
   const out = [];
   for (const line of String(cherry).split('\n')) {
     const m = /^([+-]) ([0-9a-f]{7,64})/.exec(line.trim());
     if (!m) continue;
     const msg = messages.get(m[2]) || { title: '', body: '' };
     let found = null;
+    let like = null;
     if (m[1] === '-') found = 'patch';
-    else if (telling(msg.title) && main.titles.has(msg.title)) found = 'title';
     else {
+      if (inMain.has(m[2])) found = 'content';
       const issues = issuesIn(`${msg.title}\n${msg.body}`);
-      if (issues.length && issues.every((n) => main.issues.has(n))) found = 'issue';
+      if (telling(msg.title) && main.titles.has(msg.title)) like = 'title';
+      else if (issues.length && issues.every((n) => main.issues.has(n))) like = 'issue';
     }
-    out.push({ sha: m[2], title: msg.title, found });
+    out.push({ sha: m[2], title: msg.title, found, like: found ? null : like });
   }
   return out;
+}
+
+/** `git status --porcelain -z --ignored` read: {changed: ['XY path'…], ignored: [path…]}. `-z` — the names come as they
+    are: without it a name in Cyrillic comes quoted and escaped, and no file of that name is found. Pure. */
+export function parseStatusZ(out) {
+  const items = String(out).split('\0');
+  const changed = [];
+  const ignored = [];
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (it.length < 4) continue;
+    if (it.startsWith('!! ')) { ignored.push(it.slice(3)); continue; }
+    changed.push(it);
+    if (it[0] === 'R' || it[0] === 'C') i += 1; // a rename or a copy: its old name follows
+  }
+  return { changed, ignored };
+}
+
+/** The ignored files of a stand that the main checkout `top` does not hold with the same bytes: {files, paths} (the first
+    KEPT_MAX); null when they could not all be looked at. `ignored` — the «!!» paths of `git status --ignored`. */
+async function keptIgnored(dir, top, ignored) {
+  const out = [];
+  let looked = 0;
+  // piece by piece: a database of a stand is hundreds of megabytes, and four stands are walked at once
+  const same = async (a, b) => {
+    let x; let y;
+    try {
+      [x, y] = await Promise.all([open(a), open(b)]);
+      const bx = Buffer.alloc(1 << 20); const by = Buffer.alloc(1 << 20);
+      for (;;) {
+        const [rx, ry] = await Promise.all([x.read(bx, 0, bx.length, null), y.read(by, 0, by.length, null)]);
+        if (rx.bytesRead !== ry.bytesRead || !bx.subarray(0, rx.bytesRead).equals(by.subarray(0, ry.bytesRead))) return false;
+        if (rx.bytesRead === 0) return true;
+      }
+    } catch { return false; } finally { await x?.close().catch(() => {}); await y?.close().catch(() => {}); }
+  };
+  const visit = async (rel) => {
+    if (regenerable(rel)) return true;
+    if ((looked += 1) > LOOK_MAX) return false;
+    const a = join(dir, rel);
+    const b = join(top, rel);
+    let st;
+    try { st = await lstat(a); } catch { out.push(rel); return true; } // not to be read: kept, not taken for nothing
+    if (st.isSymbolicLink()) {
+      let same2 = false;
+      try { same2 = (await readlink(a)) === (await readlink(b)); } catch { /* not in main */ }
+      if (!same2) out.push(rel);
+      return true;
+    }
+    if (st.isDirectory()) {
+      let names;
+      try { names = await readdir(a); } catch { return false; }
+      for (const n of names) if (!(await visit(`${rel.replace(/\/+$/, '')}/${n}`))) return false;
+      return true;
+    }
+    let other = null;
+    try { other = await lstat(b); } catch { /* not in main */ }
+    if (!other?.isFile() || other.size !== st.size || !(await same(a, b))) out.push(rel);
+    return true;
+  };
+  for (const rel of ignored) if (!(await visit(rel))) return null;
+  return { files: out.length, paths: out.slice(0, KEPT_MAX) };
+}
+
+/** The commits of `shas` whose changes main already holds: each put onto `ref` by itself (`git merge-tree` against its
+    first parent) leaves the tree of `ref` as it is. A commit that changes nothing (an empty one) proves nothing — it would
+    merge to main's tree anyway; a root commit, a merge that does not go clean, or a git that cannot say — not in main.
+    `merge-tree --write-tree` writes the trees it makes: into an object folder of its own that reads the repository's as
+    an alternate, so a look leaves nothing in the owner's repository. `repo` — {tree, objects} of `ref`, asked once per
+    repository (repoOf). Two calls of git for the lot, then one merge-tree a commit. */
+async function inMainByContent(top, ref, shas, repo) {
+  const out = new Set();
+  if (!shas.length || !repo?.tree || !repo.objects) return out;
+  const list = shas.slice(0, 200);
+  const lg = await git(top, ['log', '--no-walk=unsorted', '--format=%H %T %P', ...list]);
+  if (lg.err) return out;
+  const of = new Map();
+  for (const line of lg.out.split('\n')) {
+    const [sha, tree, parent] = line.trim().split(' ');
+    if (sha && tree && parent) of.set(sha, { tree, parent });
+  }
+  const parents = [...new Set([...of.values()].map((c) => c.parent))];
+  const pt = parents.length ? await git(top, ['rev-parse', ...parents.map((p) => `${p}^{tree}`)]) : { out: '' };
+  if (pt.err) return out;
+  const parentTree = new Map(parents.map((p, i) => [p, pt.out.split('\n')[i]?.trim()]));
+  const scratch = await mkdtemp(join(tmpdir(), 'kb-stand-'));
+  const extra = { GIT_OBJECT_DIRECTORY: scratch, GIT_ALTERNATE_OBJECT_DIRECTORIES: alternate(repo.objects) };
+  try {
+    for (const sha of list) {
+      const c = of.get(sha);
+      if (!c || c.tree === parentTree.get(c.parent)) continue; // no parent, or nothing changed: no proof
+      const m = await git(top, ['merge-tree', '--write-tree', `--merge-base=${c.parent}`, ref, sha], { extra });
+      if (!m.err && m.out.split('\n')[0].trim() === repo.tree) out.add(sha);
+    }
+  } finally {
+    await rm(scratch, { recursive: true, force: true }).catch(() => {});
+  }
+  return out;
+}
+/** The tree of `ref` and the object folder of the repository of `top`: {tree, objects}, nulls when git cannot say. */
+async function repoGit(top, ref) {
+  const [t, o] = await Promise.all([git(top, ['rev-parse', `${ref}^{tree}`]), git(top, ['rev-parse', '--path-format=absolute', '--git-path', 'objects'])]);
+  return { tree: t.err ? null : t.out.trim(), objects: o.err ? null : o.out.trim() };
 }
 
 /** The state of a stand from what was read of it. Pure: {state: 'reading'|'busy'|'unsent'|'free', why: [words…]}. */
@@ -100,8 +225,9 @@ export function standState(s) {
   if (s.task && WORK.has(s.task.status)) why.push('task');
   if (why.length) return { state: 'busy', why };
   if (s.locked) why.push('locked');
-  if (s.dirty === null || s.commits === null || s.processes === null) why.push('unknown'); // git or lsof did not answer, or no main to measure by
+  if (s.dirty === null || s.commits === null || s.processes === null || s.ignored === null) why.push('unknown'); // git or lsof did not answer, no main to measure by, too many ignored files to look at
   if (s.dirty) why.push('dirty');
+  if (s.ignored?.files) why.push('ignored');
   if (s.commits?.some((c) => !c.found)) why.push('commits');
   if (s.detached && s.commits?.length) why.push('detached');
   if (why.length) return { state: 'unsent', why };
@@ -209,7 +335,7 @@ async function walk() {
         locked: w.locked ? (w.locked === true ? '' : w.locked) : null, prunable: Boolean(w.prunable),
         project: { slug: own.slug, name: own.name }, key,
         task: t ? { id: t.id, status: t.status, title: t.title } : null,
-        read: false, dirty: null, changes: null, commits: null, sessions: 0, processes: 0, size: null, changed_at: null, missing: false,
+        read: false, dirty: null, changes: null, ignored: null, commits: null, sessions: 0, processes: 0, size: null, changed_at: null, missing: false,
       });
     }
   }
@@ -228,18 +354,22 @@ async function walk() {
     return logs.get(top);
   };
   const reposByTop = new Map(next.repos.map((r) => [r.top, r]));
+  const gits = new Map(); // top → {tree, objects} of its main, asked once per repository
+  const repoOf = (top, ref) => { if (!gits.has(top)) gits.set(top, repoGit(top, ref)); return gits.get(top); };
 
   const one = async (s) => {
     const dir = await real(s.path);
     s.sessions = sessionDirs.filter((d) => within(dir, d)).length;
     s.processes = procDirs ? procDirs.filter((d) => within(dir, d)).length : null; // null — not known: no stand is free by it
     // no folder (deleted by hand, `prunable`): nothing in it to lose, but its branch is still compared with main below
-    if (!existsSync(s.path)) { s.missing = true; s.dirty = 0; s.changes = { files: 0 }; }
-    const st = s.missing ? null : await git(s.path, ['status', '--porcelain', '--untracked-files=normal']);
+    if (!existsSync(s.path)) { s.missing = true; s.dirty = 0; s.changes = { files: 0 }; s.ignored = { files: 0, paths: [] }; }
+    // with the ignored files: `git worktree remove` takes them without asking, so a stand holding data is no free one
+    const st = s.missing ? null : await git(s.path, ['status', '--porcelain', '-z', '--ignored', '--untracked-files=normal']);
     if (!st) { /* the folder is gone */ } else if (st.err) { s.dirty = null; } else {
-      const lines = st.out.split('\n').filter(Boolean);
-      s.dirty = lines.length;
-      s.changes = { files: lines.length, untracked: lines.filter((l) => l.startsWith('??')).length };
+      const { changed, ignored } = parseStatusZ(st.out);
+      s.dirty = changed.length;
+      s.changes = { files: changed.length, untracked: changed.filter((l) => l.startsWith('??')).length };
+      s.ignored = await keptIgnored(s.path, s.top, ignored);
     }
     const ref = reposByTop.get(s.top)?.main;
     if (!ref || !s.head) { s.commits = null; return; }
@@ -255,7 +385,8 @@ async function walk() {
       }
     }
     const main = await logOf(s.top, ref);
-    s.commits = matchCommits(ch.out, messages, main).map((c) => ({ ...c, sha: c.sha.slice(0, 12) }));
+    const plus = ch.out.split('\n').map((l) => /^\+ ([0-9a-f]{7,64})/.exec(l.trim())?.[1]).filter(Boolean);
+    s.commits = matchCommits(ch.out, messages, main, await inMainByContent(s.top, ref, plus, await repoOf(s.top, ref))).map((c) => ({ ...c, sha: c.sha.slice(0, 12) }));
     if (s.missing) return;
     const lc = await git(s.path, ['log', '-1', '--format=%ct', 'HEAD']);
     s.changed_at = Number(lc.out?.trim()) * 1000 || null;
@@ -307,6 +438,9 @@ export async function standDiff(path) {
     const u = await git(s.path, ['ls-files', '--others', '--exclude-standard']);
     parts.push(`# not committed\n${r.out}${u.out.trim() ? `\n# untracked\n${u.out}` : ''}`);
   }
+  if (s.ignored?.files) {
+    parts.push(`# ignored, and not in the main checkout — a removal deletes these\n${s.ignored.paths.join('\n')}${s.ignored.files > s.ignored.paths.length ? `\n… and ${s.ignored.files - s.ignored.paths.length} more` : ''}\n`);
+  }
   const text = parts.join('\n');
   return { text: text.length > DIFF_MAX ? `${text.slice(0, DIFF_MAX)}\n… (cut at ${DIFF_MAX} characters)` : text, cut: text.length > DIFF_MAX };
 }
@@ -315,16 +449,22 @@ export async function standDiff(path) {
    again right before removing it — the picture may be minutes old, and a session may have opened in a folder since. */
 const TITLES = { ru: 'Убрать старые стенды', en: 'Remove old stands' };
 export const STAND_TITLES = TITLES;
-const gb = (n) => (n ? `${(n / 1024 ** 3).toFixed(1)} GB` : '?');
+const gb = (n) => (!n ? '?' : n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(1)} GB` : `${Math.max(1, Math.round(n / 1024 ** 2))} MB`);
 export function cleanupWords(lang, repo, chosen, unsent) {
-  const list = chosen.map((s) => `- ${s.path} — ${s.branch ? `branch ${s.branch}` : 'detached HEAD'}${s.head ? ` @ ${s.head.slice(0, 12)}` : ''}${s.size ? ` · ${gb(s.size)}` : ''}${s.missing ? ' · no folder: `git worktree prune`' : ''}`).join('\n');
+  const ref = repo.main || 'origin/main';
+  const fetch = ref.startsWith('origin/'); // a repository without origin is measured against its own main: no fetch there
+  const en = lang === 'en';
+  const gone = en ? ' · no folder: `git worktree remove <folder>` drops its record alone (not `git worktree prune`: it drops every such record of the repository)'
+    : ' · папки нет: `git worktree remove <папка>` уберёт только её запись (не `git worktree prune`: он убирает все такие записи репозитория)';
+  const list = chosen.map((s) => `- ${s.path} — ${s.branch ? `branch ${s.branch}` : 'detached HEAD'}${s.head ? ` @ ${s.head.slice(0, 12)}` : ''}${s.size ? ` · ${gb(s.size)}` : ''}${s.missing ? gone : ''}`).join('\n');
   const asks = unsent.map((s) => `- ${s.path}${s.branch ? ` (${s.branch})` : ''}: ${standState(s).why.join(', ')}`).join('\n');
-  if (lang === 'en') {
+  if (en) {
     return `Remove the old stands (git worktrees) of ${repo.top}, chosen in Health → Stands: ${chosen.length}.\n\n${list}\n\n`
-      + 'For EACH stand, right before removing it, check all three again — skip it and say why if any fails:\n'
+      + 'For EACH stand, right before removing it, check all four again — skip it and say why if any fails:\n'
       + '1. nothing uncommitted or untracked: `git -C <folder> status --porcelain` is empty;\n'
-      + `2. every commit of the branch is in ${repo.main || 'origin/main'}: \`git fetch origin\`, then \`git cherry ${repo.main || 'origin/main'} <branch>\`; a «+» commit counts only if the same title or the same issue number is in \`git log ${repo.main || 'origin/main'}\` — otherwise it is work not handed in;\n`
-      + '3. not busy: no Claude session and no process in the folder (`lsof +D <folder>`), the task of its key is not in prep/doing/ready/deploy.\n\n'
+      + '2. no ignored data: `git worktree remove` deletes ignored files without asking. Every path of `git -c core.quotePath=false -C <folder> status --porcelain --ignored` (names as they are, Cyrillic too) marked «!!» is what a build or an install makes again (node_modules, dist, build, __pycache__, .venv, .DS_Store, package-lock.json…), `.claude/settings.local.json` or `.claude/launch.json`, or a file the main checkout holds with the same bytes (`cmp <folder>/<path> ' + repo.top + '/<path>`); anything else — a `.env`, `data/`, `var/`, a database — keep the stand and name the files;\n'
+      + `3. every commit of the branch is in ${ref}: ${fetch ? '`git fetch origin`, then ' : ''}\`git cherry ${ref} <branch>\`; a «+» commit counts only if main already holds its changes — \`git merge-tree --write-tree --merge-base=<sha>^ ${ref} <sha>\` prints the tree of \`git rev-parse ${ref}^{tree}\`. The same title or issue number in the log of main is no proof: every commit of a task carries its issue;\n`
+      + '4. not busy: no Claude session and no process in the folder (`lsof +D <folder>`), the task of its key is not in prep/doing/ready/deploy.\n\n'
       + 'Then `git worktree remove <folder>` (never --force) and `git branch -d <branch>` (never -D; refused — leave the branch and say so). '
       + 'Do not touch the main checkout, the branch main, other projects or the stash.\n\n'
       + 'In the report: per stand — removed or kept and why, and the last commit of each removed branch (`<sha> <branch>`): it lives on in the reflog and can be brought back with `git branch <branch> <sha>`.'
@@ -332,10 +472,11 @@ export function cleanupWords(lang, repo, chosen, unsent) {
       + '\n\nThe board opened this task: Health → Stands.';
   }
   return `Убрать старые стенды (рабочие копии git) в ${repo.top}, выбранные в «Здоровье → Стенды»: ${chosen.length}.\n\n${list}\n\n`
-    + 'По КАЖДОМУ стенду прямо перед удалением ещё раз проверить все три условия — не прошло хоть одно, стенд не трогать и сказать почему:\n'
+    + 'По КАЖДОМУ стенду прямо перед удалением ещё раз проверить все четыре условия — не прошло хоть одно, стенд не трогать и сказать почему:\n'
     + '1. нет незакоммиченного и неотслеживаемого: `git -C <папка> status --porcelain` пуст;\n'
-    + `2. каждый коммит ветки есть в ${repo.main || 'origin/main'}: \`git fetch origin\`, затем \`git cherry ${repo.main || 'origin/main'} <ветка>\`; коммит с «+» считается, только если тот же заголовок или тот же номер issue есть в \`git log ${repo.main || 'origin/main'}\` — иначе это несданная работа;\n`
-    + '3. не занят: в папке нет сессии Claude и процесса (`lsof +D <папка>`), задача ключа не в prep/doing/ready/deploy.\n\n'
+    + '2. нет игнорируемых данных: `git worktree remove` удаляет игнорируемые файлы без вопроса. Каждый путь с «!!» в `git -c core.quotePath=false -C <папка> status --porcelain --ignored` (имена как есть, и кириллица) — то, что сборка или установка сделают заново (node_modules, dist, build, __pycache__, .venv, .DS_Store, package-lock.json…), `.claude/settings.local.json` или `.claude/launch.json`, либо файл, который основной чекаут держит теми же байтами (`cmp <папка>/<путь> ' + repo.top + '/<путь>`); что-то другое — `.env`, `data/`, `var/`, база — стенд оставить и назвать файлы;\n'
+    + `3. каждый коммит ветки есть в ${ref}: ${fetch ? '`git fetch origin`, затем ' : ''}\`git cherry ${ref} <ветка>\`; коммит с «+» считается, только если его правки в main уже есть — \`git merge-tree --write-tree --merge-base=<sha>^ ${ref} <sha>\` печатает дерево \`git rev-parse ${ref}^{tree}\`. Тот же заголовок или номер issue в логе main — не доказательство: номер своей задачи несёт каждый её коммит;\n`
+    + '4. не занят: в папке нет сессии Claude и процесса (`lsof +D <папка>`), задача ключа не в prep/doing/ready/deploy.\n\n'
     + 'Затем `git worktree remove <папка>` (без --force) и `git branch -d <ветка>` (не -D; отказал — ветку оставить и сказать). '
     + 'Основной чекаут, ветку main, чужие проекты и stash не трогать.\n\n'
     + 'В отчёте: по каждому стенду — удалён или оставлен и почему, и последний коммит каждой удалённой ветки (`<sha> <ветка>`): она ещё живёт в reflog, вернуть — `git branch <ветка> <sha>`.'

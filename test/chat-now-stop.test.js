@@ -83,7 +83,7 @@ process.stdin.on('data', (s) => {
   tie.run(task, OLD, '2026-10-22 09:00:00', '2026-10-22 09:30:00');
   tie.run(task, NEW, '2026-10-22 10:00:00', '2026-10-22 10:00:02');
   db.prepare('INSERT INTO board_sessions (session_id) VALUES (?)').run(NEW);
-  execFileSync(TMUX, ['-L', SOCKET, 'new-session', '-d', '-s', `kb-${NEW}`, '-x', '80', '-y', '24', process.execPath, fake]);
+  execFileSync(TMUX, ['-L', SOCKET, 'new-session', '-d', '-s', `kb-${NEW}`, '-e', `KB_URL=http://127.0.0.1:${(await import('../src/config.js')).PORT}`, '-x', '80', '-y', '24', process.execPath, fake]);
   panePid = Number(execFileSync(TMUX, ['-L', SOCKET, 'list-panes', '-t', `kb-${NEW}`, '-F', '#{pane_pid}'], { encoding: 'utf8' }).trim());
   await pause(600);
   app = Fastify();

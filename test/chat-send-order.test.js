@@ -66,7 +66,7 @@ process.stdin.on('data', (s) => {
   const task = db.prepare("INSERT INTO tasks (project_id, task_no, title, status) VALUES (?,1,'Chat send','doing')").run(pid).lastInsertRowid;
   db.prepare('INSERT INTO task_sessions (task_id, session_id, first_seen, last_seen) VALUES (?,?,?,?)').run(task, SID, '2026-10-22 12:00:00', '2026-10-22 12:00:01');
   db.prepare('INSERT INTO board_sessions (session_id) VALUES (?)').run(SID);
-  execFileSync(TMUX, ['-L', SOCKET, 'new-session', '-d', '-s', `kb-${SID}`, '-x', '80', '-y', '24', process.execPath, fake]);
+  execFileSync(TMUX, ['-L', SOCKET, 'new-session', '-d', '-s', `kb-${SID}`, '-e', `KB_URL=http://127.0.0.1:${(await import('../src/config.js')).PORT}`, '-x', '80', '-y', '24', process.execPath, fake]);
   panePid = Number(execFileSync(TMUX, ['-L', SOCKET, 'list-panes', '-t', `kb-${SID}`, '-F', '#{pane_pid}'], { encoding: 'utf8' }).trim());
   // Claude Code's registry says the Claude of the pane waits at its prompt; the screen stays as it is
   writeFileSync(join(claude, 'sessions', `${panePid}.json`), JSON.stringify({ sessionId: SID, pid: panePid, status: 'idle', updatedAt: Date.now() }));

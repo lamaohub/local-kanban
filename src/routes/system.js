@@ -13,7 +13,7 @@ import { listBackups, backupNow, backupPath, backupState, ATTACH_MIRROR } from '
 import { inspectBackup, startPreview, stopPreview, currentPreview, UPLOAD_PREFIX } from '../restore.js';
 import { langOverride, ghOwnerEnv, ghRepoEnv, launchDryRun, PORT } from '../config.js';
 import { claudeWord, launchOptions, launchProblem, launchSpec, runLaunch } from '../launch.js';
-import { TMUX_COMMAND_MAX, boardProblem, claudeAtPrompt, folderTrusted, lookedLately, markTaskless, phantomAvailable, phantomPane, phantomSpec, phantomStop, runPhantom, startedHere, taskTerminal, tmuxBin, tmuxCommandBytes, tmuxRefusal } from '../phantom.js';
+import { TMUX_COMMAND_MAX, boardProblem, claudeAtPrompt, folderTrusted, lookedLately, markTaskless, phantomAvailable, phantomPane, phantomSpec, phantomStop, otherBoard, otherBoardRefusal, runPhantom, startedHere, taskTerminal, tmuxBin, tmuxCommandBytes, tmuxRefusal } from '../phantom.js';
 import { ADOPT_TOKEN, freshTerminalSessions, isBoardSession, markBoardSession, markResumed, prepHolder, tieLaunched } from '../claude-sessions.js';
 import { CHECK_LABEL, OPEN_CHECK, doneRules, isCheck, leadCheck } from '../review-check.js';
 import { liveTick, readRegistry } from '../claude-live.js';
@@ -664,6 +664,9 @@ export default async function systemRoutes(app) {
     const pane = await phantomPane(sid);
     if (pane?.unknown) return reply.code(409).send({ ...tmuxRefusal(pane), keys });
     if (pane && !pane.dead) return reply.code(409).send({ error: `Claude of the board already works on ${keys.join(', ')}`, running: keys });
+    // should not have took the owner's session away from its board; the board's own resume of cut work goes this way too
+    const other = pane ? await otherBoard(sid) : null;
+    if (other) return reply.code(409).send({ ...otherBoardRefusal(other), keys });
     const name = keys.length > 1 ? `${keys[0]} +${keys.length - 1}` : keys[0];
     const spec = phantomSpec({ sid, name, folder: p.path, permission: b.permission, port: PORT, allow: doneRules(tasks), effort: b.effort, resume: true });
     const trusted = folderTrusted(p.path);

@@ -267,6 +267,8 @@ const KNOWN = [
   [/^tmux did not answer in time — try again$/, 'tmux did not answer in time — try again in a few seconds'],
   [/^tmux was updated while the board's terminals still run on the old one/, 'tmux was updated under the running terminals of the board — close them, the command is in Settings → Errors'],
   [/^unknown labels: /, 'this board has no such label'],
+  [/^this terminal was started by another board/, 'this terminal was started by another board — stop, continue or answer it on that board'],
+  [/^this terminal was not started by this board/, 'this board did not start this terminal — it can only be looked at here'],
 ];
 export function refusalText(e) {
   const status = e?.status;

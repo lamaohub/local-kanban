@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import Fastify from 'fastify';
 import { bin as fullPath } from '../src/bin-path.js';
 
-let tmp, repo, app, db, stands, host, sleeper;
+let tmp, repo, app, db, stands, host, sleeper, objectsBefore;
 const wt = (name) => join(repo, '.claude', 'worktrees', name);
 const git = (dir, ...args) => execFileSync(fullPath('git'), ['-C', dir, ...args], { env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } }).toString();
 function commit(dir, file, text, message) {
@@ -30,7 +30,7 @@ before(async () => {
   git(tmp, 'init', '-q', '--bare', origin);
   git(repo, 'init', '-q', '-b', 'main');
   commit(repo, 'a.txt', 'one\n', 'start');
-  writeFileSync(join(repo, '.gitignore'), '.claude/\n');
+  writeFileSync(join(repo, '.gitignore'), '.claude/\n.env\nnode_modules/\ndata/\n');
   git(repo, 'add', '.gitignore'); git(repo, 'commit', '-q', '-m', 'ignore the stands');
   git(repo, 'remote', 'add', 'origin', origin);
 
@@ -55,18 +55,60 @@ before(async () => {
   rmSync(wt('gone'), { recursive: true, force: true });
   // a title that says nothing is in any log: «WIP» in main proves nothing about this one
   commit(stand('wip', 'claude/wip'), 'w.txt', 'mine\n', 'WIP');
+  // of the first vouched for the second
+  const halfDir = stand('half', 'claude/half');
+  const halfIn = commit(halfDir, 'h1.txt', 'in\n', 'The first half of the work (o/r#110)');
+  commit(halfDir, 'h2.txt', 'out\n', 'The second half, never in main (o/r#110)');
+  // the same change landed inside a bigger squash: another patch, the same result
+  commit(stand('squashed', 'claude/squashed'), 'q.txt', 'squashed\n', 'A change that landed in a squash');
+  // ignored files: a .env and a database the main checkout lacks — `git worktree remove` would delete them
+  const kept = stand('kept-data', 'claude/kept-data');
+  writeFileSync(join(kept, '.env'), 'SECRET=1\n');
+  mkdirSync(join(kept, 'data'));
+  writeFileSync(join(kept, 'data', 'app.db'), 'rows\n');
+  // a name in Cyrillic: git quotes it unless asked for -z, and a quoted name is found nowhere
+  const cyr = stand('cyr-data', 'claude/cyr-data');
+  mkdirSync(join(cyr, 'data'));
+  writeFileSync(join(cyr, 'data', '\u043e\u0442\u0447\u0451\u0442.txt'), 'notes\n');
+  // what an install makes again, the settings of a Claude session, and data the main checkout holds byte for byte
+  const cache = stand('cache', 'claude/cache');
+  mkdirSync(join(cache, 'node_modules', 'x'), { recursive: true });
+  writeFileSync(join(cache, 'node_modules', 'x', 'i.js'), 'x\n');
+  mkdirSync(join(cache, '.claude'));
+  writeFileSync(join(cache, '.claude', 'settings.local.json'), '{}\n');
+  mkdirSync(join(repo, 'data'));
+  writeFileSync(join(repo, 'data', 'seed.json'), '[1]\n');
+  mkdirSync(join(cache, 'data'));
+  writeFileSync(join(cache, 'data', 'seed.json'), '[1]\n');
+  // a Claude session works in the folder
+  stand('sessioned', 'claude/sessioned');
+  // an empty commit merges to main's tree like work that landed: it proves nothing
+  git(stand('emptied', 'claude/emptied'), 'commit', '-q', '--allow-empty', '-m', 'Notes on the work, nothing changed');
+  // a database over a megabyte: the same bytes as the main checkout's but for the last one — compared to the end
+  const big = Buffer.alloc(3 * 1024 * 1024 + 17, 7);
+  writeFileSync(join(repo, 'data', 'big.db'), big);
+  writeFileSync(join(cache, 'data', 'big.db'), big);
+  const tail = stand('tail-data', 'claude/tail-data');
+  mkdirSync(join(tail, 'data'));
+  writeFileSync(join(tail, 'data', 'big.db'), Buffer.concat([big.subarray(0, big.length - 1), Buffer.from([8])]));
 
   // main moves on first: a cherry-pick onto the same parent in the same second would make the very same commit
   commit(repo, 'r2.txt', 'theirs\n', 'Same title in main');
   git(repo, 'cherry-pick', picked);
   commit(repo, 'b.txt', 'batch\n', 'The batch, squashed (o/r#77, o/r#79)');
+  git(repo, 'cherry-pick', halfIn);
+  writeFileSync(join(repo, 'q.txt'), 'squashed\n');
+  writeFileSync(join(repo, 'q2.txt'), 'more of the squash\n');
+  git(repo, 'add', 'q.txt', 'q2.txt'); git(repo, 'commit', '-q', '-m', 'Several tasks in one squash');
   commit(repo, 'w2.txt', 'theirs\n', 'WIP');
   git(repo, 'push', '-q', 'origin', 'main');
   sleeper = spawn('/bin/sleep', ['60'], { cwd: proc, stdio: 'ignore' });
+  objectsBefore = git(repo, 'count-objects', '-v');
 
   process.env.KB_DATA_DIR = join(tmp, 'data');
   process.env.KB_CLAUDE_DIR = join(tmp, 'claude');
   mkdirSync(join(tmp, 'claude', 'sessions'), { recursive: true });
+  writeFileSync(join(tmp, 'claude', 'sessions', `${process.pid}.json`), JSON.stringify({ sessionId: '0f0e0d0c-0b0a-4909-8807-060504030201', pid: process.pid, status: 'busy', cwd: wt('sessioned') }));
   ({ db } = await import('../src/db.js'));
   const { ghState } = await import('../src/sync/worker.js');
   ghState.available = false; ghState.lastCheck = Date.now() + 1e9;
@@ -100,7 +142,7 @@ test('each stand reads as free, not handed in, or busy — by its folder, its co
   assert.equal(d.repos.length, 1);
   assert.equal(d.repos[0].main, 'origin/main');
   const by = Object.fromEntries(d.stands.map((s) => [s.path.split('/').pop(), s]));
-  assert.deepEqual(Object.keys(by).sort(), ['STA-1', 'dirty', 'empty', 'gone', 'issued', 'lost', 'retitled-9f3e1a', 'served', 'sta-2-busy', 'wip'], 'the main checkout is no stand');
+  assert.deepEqual(Object.keys(by).sort(), ['STA-1', 'cache', 'cyr-data', 'dirty', 'emptied', 'empty', 'gone', 'half', 'issued', 'kept-data', 'lost', 'retitled-9f3e1a', 'served', 'sessioned', 'squashed', 'sta-2-busy', 'tail-data', 'wip'], 'the main checkout is no stand');
   assert.equal(by.gone.state, 'unsent', 'a stand whose folder went read as free, its branch never compared with main');
   assert.deepEqual(by.gone.why, ['commits']);
   assert.equal(by.wip.state, 'unsent', '«WIP» in main read as this very work');
@@ -108,11 +150,29 @@ test('each stand reads as free, not handed in, or busy — by its folder, its co
   assert.equal(by['STA-1'].commits[0].found, 'patch');
   assert.equal(by['STA-1'].key, 'STA-1');
   assert.equal(by['STA-1'].task.status, 'review');
-  assert.equal(by['retitled-9f3e1a'].state, 'free');
-  assert.equal(by['retitled-9f3e1a'].commits[0].found, 'title');
+  // a title or an issue in main is a hint, not a proof: the changes of these two are in main nowhere
+  assert.equal(by['retitled-9f3e1a'].state, 'unsent', 'the same title in main vouched for other changes');
+  assert.deepEqual([by['retitled-9f3e1a'].commits[0].found, by['retitled-9f3e1a'].commits[0].like], [null, 'title']);
   assert.equal(by['retitled-9f3e1a'].key, null, 'a hash tail read as a key');
-  assert.equal(by.issued.state, 'free');
-  assert.equal(by.issued.commits[0].found, 'issue');
+  assert.equal(by.issued.state, 'unsent', 'the issue of a squash vouched for a file it never had');
+  assert.deepEqual([by.issued.commits[0].found, by.issued.commits[0].like], [null, 'issue']);
+  assert.equal(by.half.state, 'unsent', 'one commit of a task in main vouched for the rest of its branch');
+  assert.deepEqual(by.half.commits.map((c) => [c.title.slice(0, 10), c.found, c.like]).sort(), [['The first ', 'patch', null], ['The second', null, 'issue']].sort());
+  assert.equal(by.squashed.state, 'free', 'a change that landed in a squash read as not in main');
+  assert.equal(by.squashed.commits[0].found, 'content');
+  assert.equal(by['kept-data'].state, 'unsent', 'a .env and a database the main checkout lacks read as nothing to lose');
+  assert.deepEqual(by['kept-data'].why, ['ignored']);
+  assert.deepEqual(by['kept-data'].ignored.paths.sort(), ['.env', 'data/app.db']);
+  assert.equal(by['cyr-data'].state, 'unsent', 'an ignored file named in Cyrillic was not found and read as nothing');
+  assert.deepEqual(by['cyr-data'].why, ['ignored']);
+  assert.equal(by.cache.state, 'free', `node_modules, the settings of a session or data the main checkout holds kept a stand: ${JSON.stringify(by.cache.ignored)}`);
+  assert.equal(git(repo, 'count-objects', '-v'), objectsBefore, 'a look wrote objects into the repository of the owner');
+  assert.equal(by.emptied.state, 'unsent', 'an empty commit read as its changes in main');
+  assert.equal(by.emptied.commits[0].found, null);
+  assert.equal(by['tail-data'].state, 'unsent', 'a database differing past its first megabyte read as the main checkout\'s');
+  assert.deepEqual(by['tail-data'].ignored.paths, ['data/big.db']);
+  assert.equal(by.sessioned.state, 'busy', 'a Claude session in the folder does not hold it');
+  assert.deepEqual(by.sessioned.why, ['session']);
   assert.equal(by.empty.state, 'free');
   assert.equal(by.lost.state, 'unsent');
   assert.deepEqual(by.lost.why, ['commits']);
@@ -131,11 +191,12 @@ test('the task of a cleanup takes only the free stands, names the others for the
   assert.equal(r.statusCode, 200, r.body);
   const [t] = r.json().tasks;
   assert.equal(r.json().tasks.length, 1);
-  assert.equal(t.n, 4);
+  assert.equal(t.n, 4);  // STA-1, squashed, cache, empty
   const task = db.prepare("SELECT t.status, t.description FROM tasks t JOIN projects p ON p.id = t.project_id WHERE p.prefix || '-' || t.task_no = ?").get(t.key);
   assert.equal(task.status, 'todo');
-  for (const name of ['STA-1', 'retitled-9f3e1a', 'issued', 'empty']) assert.ok(task.description.includes(`${wt(name)} —`), `${name} is not in the task`);
-  for (const name of ['served', 'sta-2-busy']) assert.ok(!task.description.includes(wt(name)), `a busy stand ${name} got into the task`);
+  for (const name of ['STA-1', 'squashed', 'cache', 'empty']) assert.ok(task.description.includes(`${wt(name)} —`), `${name} is not in the task`);
+  for (const name of ['served', 'sta-2-busy', 'sessioned']) assert.ok(!task.description.includes(wt(name)), `a busy stand ${name} got into the task`);
+  for (const name of ['kept-data', 'half', 'issued']) assert.ok(!task.description.includes(`${wt(name)} —`), `${name} got into the task to be removed`);
   const asks = task.description.slice(task.description.lastIndexOf('\n\n', task.description.indexOf(wt('lost'))));
   assert.ok(asks.includes(wt('lost')) && asks.includes(wt('dirty')), 'the stands with work not in main are not named for the owner');
   assert.match(task.description, /git worktree remove/);
@@ -159,6 +220,11 @@ test('the diff of a stand shows what is not in main, and only for a folder of th
   const lost = (await get(`/api/health/stands/diff?path=${encodeURIComponent(wt('lost'))}`)).json();
   assert.match(lost.text, /Work not handed in/);
   assert.match(lost.text, /\+lost/);
+  const kept = (await get(`/api/health/stands/diff?path=${encodeURIComponent(wt('kept-data'))}`)).json();
+  assert.match(kept.text, /ignored, and not in the main checkout/);
+  assert.match(kept.text, /data\/app\.db/, 'the diff does not name the ignored data a removal would delete');
+  const half = (await get(`/api/health/stands/diff?path=${encodeURIComponent(wt('half'))}`)).json();
+  assert.match(half.text, /\+out/, 'the diff hides the commit vouched for by the issue of another');
   const dirty = (await get(`/api/health/stands/diff?path=${encodeURIComponent(wt('dirty'))}`)).json();
   assert.match(dirty.text, /notes\.txt/);
   assert.equal((await get(`/api/health/stands/diff?path=${encodeURIComponent(repo)}`)).statusCode, 404, 'the main checkout is no stand');
@@ -219,13 +285,47 @@ test('the rules by themselves: worktrees, keys, issues and the match of commits'
   assert.equal(stands.keyIn(['zz-12'], prefixes), null, 'a prefix of no project read as a key');
   assert.deepEqual(stands.issuesIn('Fix (lamaohub/server-comp#6144, lamaohub/server-comp#6145) #12'), ['6144', '6145']);
   const main = { titles: new Set(['The same work by its title']), issues: new Set(['1', '2']) };
-  const msgs = new Map([['aaaaaaa', { title: 'The same work by its title', body: '' }], ['bbbbbbb', { title: 'U (o/r#1, o/r#3)', body: '' }], ['ccccccc', { title: 'V (o/r#2)', body: '' }]]);
-  assert.deepEqual(stands.matchCommits('- 1111111\n+ aaaaaaa\n+ bbbbbbb\n+ ccccccc\n', msgs, main).map((c) => c.found), ['patch', 'title', null, 'issue'],
-    'a commit with one issue of two in main read as handed in');
+  const msgs = new Map([['aaaaaaa', { title: 'The same work by its title', body: '' }], ['bbbbbbb', { title: 'U (o/r#1, o/r#3)', body: '' }], ['ccccccc', { title: 'V (o/r#2)', body: '' }], ['ddddddd', { title: 'W (o/r#2)', body: '' }]]);
+  assert.deepEqual(stands.matchCommits('- 1111111\n+ aaaaaaa\n+ bbbbbbb\n+ ccccccc\n+ ddddddd\n', msgs, main, new Set(['ddddddd'])).map((c) => [c.found, c.like ?? null]),
+    [['patch', null], [null, 'title'], [null, null], [null, 'issue'], ['content', null]], 'a title or an issue in main read as the changes in main, or one issue of two as a hint');
+  assert.equal(stands.regenerable('node_modules/'), true);
+  assert.equal(stands.regenerable('app/node_modules/x/i.js'), true);
+  assert.equal(stands.regenerable('.claude/settings.local.json'), true);
+  assert.equal(stands.regenerable('.DS_Store'), true);
+  for (const p of ['.env', 'data/', 'var/', 'app/data/app.db', '.claude/skills/x/SKILL.md', 'notes.log']) assert.equal(stands.regenerable(p), false, `${p} read as made again by a build`);
+  assert.deepEqual(stands.parseStatusZ('?? a b.txt\0R  new.txt\0old.txt\0!! data/\u043e.txt\0!! .env\0'), { changed: ['?? a b.txt', 'R  new.txt'], ignored: ['data/\u043e.txt', '.env'] });
+  assert.deepEqual(stands.standState({ read: true, dirty: 0, commits: [], sessions: 0, processes: 0, ignored: { files: 2, paths: [] } }).why, ['ignored']);
+  assert.deepEqual(stands.standState({ read: true, dirty: 0, commits: [], sessions: 0, processes: 0, ignored: null }).why, ['unknown'], 'ignored files not looked at read as none');
   assert.deepEqual(stands.standState({ read: true, dirty: 0, commits: [], locked: 'x', sessions: 0, processes: 0 }).why, ['locked']);
   assert.deepEqual(stands.standState({ read: true, dirty: 0, commits: [], sessions: 0, processes: null }).why, ['unknown'], 'lsof that did not answer read as «no process»');
   assert.equal(stands.telling('WIP'), false);
   assert.equal(stands.telling('Fix tests'), false);
   assert.equal(stands.telling('Same title in main'), true);
   assert.equal(stands.standState({ read: false }).state, 'reading');
+});
+
+test('the task of a cleanup says each rule of the check, in both languages, and no fetch where there is no origin', () => {
+  const st = { path: '/r/.claude/worktrees/X-1', branch: 'claude/X-1', head: 'abcdef0123456789', size: 5 * 1024 ** 2 };
+  const gone = { ...st, path: '/r/.claude/worktrees/X-2', branch: 'claude/X-2', missing: true };
+  for (const lang of ['en', 'ru']) {
+    const w = stands.cleanupWords(lang, { top: '/r', main: 'origin/main' }, [st, gone], []);
+    const say = (re, what) => assert.match(w, re, `${lang}: ${what}`);
+    say(lang === 'en' ? /never --force/ : /\u0431\u0435\u0437 --force/, '--force is not forbidden');
+    say(lang === 'en' ? /never -D/ : /\u043d\u0435 -D/, '-D is not forbidden');
+    say(lang === 'en' ? /right before removing/ : /\u043f\u0440\u044f\u043c\u043e \u043f\u0435\u0440\u0435\u0434 \u0443\u0434\u0430\u043b\u0435\u043d\u0438\u0435\u043c/, 'no check again right before the removal');
+    say(lang === 'en' ? /main checkout, the branch main, other projects or the stash/ : /\u041e\u0441\u043d\u043e\u0432\u043d\u043e\u0439 \u0447\u0435\u043a\u0430\u0443\u0442, \u0432\u0435\u0442\u043a\u0443 main, \u0447\u0443\u0436\u0438\u0435 \u043f\u0440\u043e\u0435\u043a\u0442\u044b \u0438 stash/, 'the main checkout, main and the stash are not kept');
+    say(lang === 'en' ? /last commit of each removed branch/ : /\u043f\u043e\u0441\u043b\u0435\u0434\u043d\u0438\u0439 \u043a\u043e\u043c\u043c\u0438\u0442 \u043a\u0430\u0436\u0434\u043e\u0439 \u0443\u0434\u0430\u043b\u0451\u043d\u043d\u043e\u0439 \u0432\u0435\u0442\u043a\u0438/, 'the last commit of a removed branch is not asked for');
+    say(/status --porcelain --ignored/, 'ignored data is not looked at');
+    say(/\.env/, 'the ignored data is not named');
+    say(/git merge-tree --write-tree --merge-base=<sha>\^ origin\/main <sha>/, 'a «+» commit is not checked by its changes');
+    say(/git fetch origin/, 'origin is not fetched');
+    say(/5 MB/, 'a small stand is not in MB');
+    assert.doesNotMatch(w, /\(\u0441 --force\)|\(with --force\)/, `${lang}: --force is advised`);
+    const goneLine = w.split('\n').find((l) => l.startsWith(`- ${gone.path} `));
+    assert.match(goneLine, /git worktree remove/, `${lang}: the folder-less stand is not told how to drop its record alone`);
+    assert.doesNotMatch(goneLine.replace(/(not|\u043d\u0435) `git worktree prune`/g, ''), /git worktree prune/, `${lang}: the folder-less stand is told to prune the whole repository`);
+    const local = stands.cleanupWords(lang, { top: '/r', main: 'main' }, [st], []);
+    assert.doesNotMatch(local, /git fetch origin/, `${lang}: a repository without origin is told to fetch it`);
+    assert.match(local, /git cherry main/);
+  }
 });
