@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
+import { bin } from '../src/bin-path.js';
 
 let app, tmp, isNewer, gitFreshness, registryCheck, updatePlan, runUpdate, restartMode, globalPrefixOf, failureReason, frontVersion, pkg;
 const realFetch = globalThis.fetch;
@@ -91,8 +92,8 @@ test('the git check still comes first, and the registry is only the fallback', a
 
 test('a clone updates itself with git, a package with npm', () => {
   assert.deepEqual(updatePlan({ packaged: false }), {
-    how: 'git', cmd: 'git', args: ['pull', '--ff-only'],
-    then: { cmd: 'npm', args: ['install', '--no-fund', '--no-audit'] },
+    how: 'git', cmd: bin('git'), args: ['pull', '--ff-only'],
+    then: { cmd: bin('npm'), args: ['install', '--no-fund', '--no-audit'] },
   });
   const plan = updatePlan({ packaged: true, name: 'local-kanban', root: '/opt/npm/lib/node_modules/local-kanban' });
   assert.equal(plan.how, 'npm');
@@ -109,7 +110,7 @@ test('a clone installs its dependencies after the pull, and a failure names the 
 
   let s = scripted([{ err: null, text: 'Fast-forward' }, { err: null, text: 'changed 32 packages' }]);
   let r = await runUpdate(clone, s.exec);
-  assert.deepEqual(s.calls, ['git pull --ff-only', 'npm install --no-fund --no-audit'],
+  assert.deepEqual(s.calls, [`${bin('git')} pull --ff-only`, `${bin('npm')} install --no-fund --no-audit`],
     'the clone restarted on new code with the old packages');
   assert.equal(r.err, null);
   assert.match(r.text, /Fast-forward[\s\S]*changed 32 packages/, 'both outputs reach the person');
@@ -118,20 +119,20 @@ test('a clone installs its dependencies after the pull, and a failure names the 
   s = scripted([{ err: null, text: 'Fast-forward' }, { err: npmErr, text: 'npm error code EACCES' }]);
   r = await runUpdate(clone, s.exec);
   assert.equal(r.err, npmErr);
-  assert.equal([r.step.cmd, ...r.step.args].join(' '), 'npm install --no-fund --no-audit',
+  assert.equal([r.step.cmd, ...r.step.args].join(' '), `${bin('npm')} install --no-fund --no-audit`,
     'the person would be told to rerun git pull, which already went through');
 
   const gitErr = new Error('not possible to fast-forward');
   s = scripted([{ err: gitErr, text: 'fatal: Not possible to fast-forward, aborting.' }]);
   r = await runUpdate(clone, s.exec);
   assert.equal(r.err, gitErr);
-  assert.deepEqual(s.calls, ['git pull --ff-only'], 'packages were installed for code that never arrived');
-  assert.equal(r.step.cmd, 'git');
+  assert.deepEqual(s.calls, [`${bin('git')} pull --ff-only`], 'packages were installed for code that never arrived');
+  assert.equal(r.step.cmd, bin('git'));
 
   const pkgPlan = updatePlan({ packaged: true, name: 'local-kanban', root: '/opt/npm/lib/node_modules/local-kanban' });
   s = scripted([{ err: null, text: 'changed 1 package' }]);
   r = await runUpdate(pkgPlan, s.exec);
-  assert.deepEqual(s.calls, ['npm install -g local-kanban@latest --prefix /opt/npm'], 'a package install is one command');
+  assert.deepEqual(s.calls, [`${bin('npm')} install -g local-kanban@latest --prefix /opt/npm`], 'a package install is one command');
 });
 
 test('the update lands where the running copy lives, not in whatever prefix the machine prefers', () => {
@@ -292,7 +293,7 @@ test('twenty checks at once on a cold cache go out once', async () => {
 test('a copy ahead of GitHub is not offered its own ancestor as an update', async () => {
   const { execFileSync } = await import('node:child_process');
   const repo = mkdtempSync(join(tmpdir(), 'kb-fresh-'));
-  const run = (...a) => execFileSync('git', a, { cwd: repo, encoding: 'utf8' }).trim();
+  const run = (...a) => execFileSync(bin('git'), a, { cwd: repo, encoding: 'utf8' }).trim();
   const git = (args) => { try { return run(...args); } catch { return null; } };
   run('init', '-q'); run('config', 'user.email', 'a@b.c'); run('config', 'user.name', 'a');
   run('commit', '-q', '--allow-empty', '-m', 'one'); const older = run('rev-parse', 'HEAD');

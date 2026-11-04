@@ -107,6 +107,9 @@ test('the install check asks for the page, not only for the API', () => {
   for (const wf of ['test.yml', 'publish.yml']) {
     const yml = readFileSync(new URL(`../.github/workflows/${wf}`, import.meta.url), 'utf8');
     assert.match(yml, /<div id="board"/, `${wf} would stay green on a package built without public/`);
+    // grep -q leaves on the first match and curl dies writing the rest (code 23): under pipefail
+    // a good page failed the step whenever curl had not finished in time
+    assert.doesNotMatch(yml, /curl[^\n|]*\|\s*grep\s+-q/, `${wf} pipes curl into grep -q, which fails at random under pipefail`);
   }
 });
 

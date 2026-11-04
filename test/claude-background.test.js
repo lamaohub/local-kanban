@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import Fastify from 'fastify';
+import { bin } from '../src/bin-path.js';
 
 const BG = '11111111-1111-4111-8111-111111111111';   // the board's, idle, a shell in the background
 const BUSY = '22222222-2222-4222-8222-222222222222'; // the board's, busy in its registry
@@ -41,7 +42,7 @@ before(async () => {
   }
   for (const sid of [BG, BUSY, DONE]) db.prepare('INSERT INTO board_sessions (session_id) VALUES (?)').run(sid);
   const reg = (pid, sessionId, status) => writeFileSync(join(claude, 'sessions', `${pid}.json`), JSON.stringify({ pid, sessionId, status, statusUpdatedAt: Date.now() }));
-  child = spawn('sleep', ['60'], { stdio: 'ignore' });
+  child = spawn(bin('sleep'), ['60'], { stdio: 'ignore' });
   Object.assign(PIDS, { [BG]: process.pid, [BUSY]: process.ppid, [DONE]: child.pid, [ELSE]: 1 });
   reg(PIDS[BG], BG, 'idle'); reg(PIDS[BUSY], BUSY, 'busy'); reg(PIDS[DONE], DONE, 'idle'); reg(PIDS[ELSE], ELSE, 'busy');
 });
@@ -231,6 +232,14 @@ test('the projects of a Claude of the board at work past its tasks in work go wi
   assert.deepEqual(live.currentWorkProjects(), [], 'a Claude idle at its prompt is taken for one at work');
   await live.refreshLive(alive, look([BG], [BG]));
   assert.deepEqual(live.currentWorkProjects(), ['demo']);
+  // a task of its in Ready to ship holds the session as a task in work does: its Claude waits there for the word to ship,
+  // and that card says so — the project is not lit as at work past its tasks
+  const ready = (status) => db.prepare("UPDATE tasks SET status = ? WHERE task_no = 1 AND project_id = (SELECT id FROM projects WHERE prefix = 'BG')").run(status);
+  ready('ready');
+  try {
+    await live.refreshLive(alive, look([BG], [BG]));
+    assert.deepEqual(live.currentWorkProjects(), [], 'a Claude waiting in its task in Ready to ship lights its project as at work');
+  } finally { ready('review'); }
   await live.refreshLive(alive, look([], []));
 });
 

@@ -588,8 +588,8 @@ function renderMultiPanel() {
 }
 export function refusedManyText(head, refused, t = tr) {
   const by = new Map();
-  for (const { key, e } of refused) {
-    const why = t(refusalText(e).reason);
+  for (const { key, e, why: said } of refused) {
+    const why = said ?? t(refusalText(e).reason);
     by.set(why, [...(by.get(why) || []), key]);
   }
   const keys = (ks) => (ks.length > 6 ? `${ks.slice(0, 6).join(', ')} +${ks.length - 6}` : ks.join(', '));
@@ -973,14 +973,10 @@ async function onDropGroup(e, status, body) {
     .filter(Boolean)
     .filter((t) => !DRAG_LOCKED.has(t.status))
     .filter((t) => !moveBlocked(t.status, status, { manual: taskIsNoclaude(t) }));
-  const refused = ids.map((id) => state.tasks.find((x) => x.id === id)).filter(Boolean)
-    .filter((t) => !movable.includes(t));
-  if (refused.length) {
-    const why = refused.map((t) => moveBlocked(t.status, status, { manual: taskIsNoclaude(t) }))
-      .find(Boolean) || tr('Claude moves these columns itself');
-    styledAlert(`${refused.length} ${plural(refused.length, 'task', 'tasks')}: ${why}`);
-  }
-  if (!movable.length) { dropPh.remove(); return; }
+  const failed = ids.map((id) => state.tasks.find((x) => x.id === id)).filter(Boolean)
+    .filter((t) => !movable.includes(t))
+    .map((t) => ({ key: t.key, why: moveBlocked(t.status, status, { manual: taskIsNoclaude(t) }) || tr('Claude moves these columns itself') }));
+  if (!movable.length) { dropPh.remove(); sayRefusedMany('Not moved', failed); return; }
 
   const draggedSet = new Set(movable.map((t) => t.id));
   const cards = [...body.querySelectorAll('.card')].filter((c) => !draggedSet.has(Number(c.dataset.id)));
@@ -995,7 +991,6 @@ async function onDropGroup(e, status, body) {
 
   dropPh.remove();
   dropSends = true;
-  const failed = [];
   for (let i = 0; i < movable.length; i++) {
     if (fixedOrder && movable[i].status === status) continue;
     try { await api('PATCH', `/api/tasks/${seg(movable[i].id)}`, fixedOrder ? { status } : { status, position: prev + step * (i + 1) }, { quiet: true }); }

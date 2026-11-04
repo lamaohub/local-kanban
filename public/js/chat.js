@@ -86,7 +86,8 @@ function stepRow(it, working = false) {
   const tail = it.running ? '' : [it.wrote ? timesWords(it.wrote, it.ms) : dur(it.ms), it.error ? '' : (it.ms !== undefined ? '✓' : '')].filter(Boolean).join(' ');
   const steps = it.helper ? `<span class="chat-step-n">${it.helper.steps} ${esc(plural(it.helper.steps, 'step', 'steps'))}</span>` : '';
   const since = it.running ? clockOf(it.since || it.at) : '';
-  const bg = it.running ? `<span class="chat-bg">${working ? '<span class="chat-pulse"></span>' : ''}${esc(since ? `${tr('in the background since')} ${since}` : tr('in the background'))}</span>` : '';
+  const bg = it.running ? `<span class="chat-bg">${working ? '<span class="chat-pulse"></span>' : ''}${esc(since ? `${tr('in the background since')} ${since}` : tr('in the background'))}</span>`
+    : it.lost ? `<span class="chat-bg">${esc(tr('no word from it for over 2 h'))}</span>` : '';
   const what = it.pic ? `<button type="button" class="chat-step-t chat-pic" data-pic="${esc(it.pic)}" title="${esc(tr('Open the picture'))}">${ic('image', 12)}<span class="chat-pic-t">${esc(it.text)}</span></button>`
     : `<span class="chat-step-t">${esc(it.text)}</span>`;
   return `<div class="chat-step${it.error ? ' err' : ''}${it.running ? ' running' : ''}" title="${esc(it.text)}"><span class="chat-step-k">${esc(tr(STEP_KIND[it.tool] || 'Tool'))}</span>`

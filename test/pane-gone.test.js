@@ -24,6 +24,7 @@ before(async () => {
     '  late) kill -TERM $$;;',
     '  exiting) echo "lost server" >&2; exit 1;;',
   '  empty) echo "no current target" >&2; exit 1;;',
+    '  mismatch) echo "protocol version mismatch (client 8, server 7)" >&2; exit 1;;',
     '  dead) echo "1|1|120|4242|4141";;',
     '  up) echo "0||120|4242|4141";;',
     `  chain) case "$*" in *list-panes*) echo "kb-${SID}|0";; *) echo "can't find pane: kb-x" >&2; exit 1;; esac;;`,
@@ -107,6 +108,21 @@ test('a terminal tmux did not answer about is not «not running», and the chat 
     assert.deepEqual([said.statusCode, said.json().reason], [409, 'tmux-slow'], 'words to it were refused as «only read»');
     const typed = await app.inject({ method: 'POST', url: '/api/tasks/PG-1/terminal', payload: { text: 'go on' } });
     assert.deepEqual([typed.statusCode, typed.json().reason], [409, 'tmux-slow']);
+    // a comment of the card to the terminal (POST …/terminal/message) is refused alike, nothing typed
+    const message = await app.inject({ method: 'POST', url: '/api/tasks/PG-1/terminal/message', payload: { text: 'go on' } });
+    assert.deepEqual([message.statusCode, message.json().reason], [409, 'tmux-slow'], 'a message to a terminal tmux did not answer about was not refused as «tmux slow»');
+    answer('mismatch');
+    assert.deepEqual(await phantom.taskTerminal(id), { session: SID, unknown: true, broken: true });
+    const look = (await app.inject({ method: 'GET', url: '/api/tasks/PG-1/terminal' })).json();
+    assert.deepEqual([look.unknown, look.reason], [true, 'tmux-broken']);
+    for (const [url, payload] of [['/api/tasks/PG-1/chat', { session: SID, text: 'go on' }], ['/api/tasks/PG-1/terminal', { text: 'go on' }],
+      ['/api/tasks/PG-1/terminal/message', { text: 'go on' }]]) {
+      const r = await app.inject({ method: 'POST', url, payload });
+      assert.deepEqual([r.statusCode, r.json().reason], [409, 'tmux-broken'], `${url}: a refusal for good read as one for a few seconds`);
+      assert.match(r.json().error, new RegExp(`tmux -L ${process.env.KB_TMUX_SOCKET} kill-server`), 'the refusal does not say what to do');
+    }
+    const { db: base } = await import('../src/db.js');
+    assert.ok(base.prepare("SELECT 1 FROM app_errors WHERE message LIKE 'tmux was updated%'").get(), 'the error log does not say it');
     answer('gone');
     assert.equal(await phantom.taskTerminal(id, { screen: true }), null, 'tmux\'s word that the session is gone is no longer heard');
     assert.deepEqual((await app.inject({ method: 'GET', url: '/api/tasks/PG-1/terminal' })).json(), { session: null });

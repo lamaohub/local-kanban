@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import vm from 'node:vm';
 import Fastify from 'fastify';
 import { boardOnly, effortOf, startEffort, checksOnly } from '../public/js/launch-rules.js';
-import { canRetry, changedFields, createCommentKeys, createTurns, createUnsentEdits, errorLine, refusalLine, refusalText, refusedFields } from '../public/js/unsaved.js';
+import { canRetry, changedFields, createCommentKeys, createRefusedTyped, createTurns, createUnsentEdits, errorLine, refusalLine, refusalText, refusedFields } from '../public/js/unsaved.js';
 
 /* ── the server's own refusals outside the card ── */
 let app, tmp;
@@ -436,6 +436,7 @@ function openCard({ server = 'up' } = {}) {
     setDrawerLock() {}, DrawerSync: { cardLocked: () => false },
     setTimeout: () => 1, clearTimeout: () => {},
     unsentEdits: createUnsentEdits(),
+    refusedTyped: createRefusedTyped(),
     editInTurn: createTurns(),
     descConflicts: new Map(), descConflict() {},
     queuedBase: new Map(), descSending: new Map(), descBaseOf: () => '', descSent() {},

@@ -14,7 +14,8 @@ const SECRET = 'result-text-that-must-stay-on-the-machine';
 let app, tmp, claude, dir, chat;
 
 const line = (o) => `${JSON.stringify(o)}\n`;
-const at = (s) => `2026-10-22T11:00:${String(s).padStart(2, '0')}.000Z`;
+const BASE = Math.floor((Date.now() - 3600_000) / 60_000) * 60_000;
+const at = (s) => new Date(BASE + s * 1000).toISOString();
 const user = (s, text) => line({ type: 'user', timestamp: at(s), message: { role: 'user', content: text } });
 const said = (s, text) => line({ type: 'assistant', timestamp: at(s), message: { content: [{ type: 'text', text }] } });
 const call = (s, id, name, input) => line({ type: 'assistant', timestamp: at(s), message: { content: [{ type: 'tool_use', id, name, input }] } });

@@ -11,7 +11,7 @@ const core = code(read('core.js'));
 test('autosave sends only the fields that actually changed', () => {
   assert.match(drawer, /let drawerSnapshot = null;/, 'the open-time snapshot is gone from drawer.js');
   assert.match(drawer, /import \{[^}]*\bchangedFields\b[^}]*\} from '\.\/unsaved\.js'/, 'changedFields is gone — autosave would send everything again');
-  assert.match(drawer, /drawerSnapshot \? changedFields\(full, drawerSnapshot\) : full/,
+  assert.match(drawer, /drawerSnapshot \? refusedTyped\.without\(key, changedFields\(full, drawerSnapshot\), full\) : full/,
     'doAutosave no longer diffs against the snapshot before PATCHing');
   assert.match(drawer, /drawerSnapshot = fieldsSnapshot\(t\)/, 'openDrawer no longer takes a snapshot');
 });

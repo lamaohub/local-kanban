@@ -329,3 +329,19 @@ test('the hold of a check follows the states of the Claude sessions that arrive 
   s.box.repaintReview();
   assert.doesNotMatch(held(), /aria-disabled/, 'nothing holds the check, yet the button stays held');
 });
+
+/* A terminal tmux did not answer about (`unknown: true`, src/routes/terminal.js) is no word on the terminal: the section
+   draws the check as with no answer at all, not as a live Claude waiting at the question in the folder. */
+test('a terminal tmux did not answer about is no word on the check\'s Claude', async () => {
+  const s = section({
+    sidebar: ['villa', 'shop'], projects: [P('villa'), P('shop')],
+    tasks: [task(1, 'villa', 'VT-1', 'review'), check(2, 'villa', 'VT-9', 'todo'), task(3, 'shop', 'SH-1', 'review'), check(4, 'shop', 'SH-9', 'todo')],
+    terminals: { 'VT-9': { session: 's1', unknown: true }, 'SH-9': { session: 's2', dead: false, question: false } },
+  });
+  await s.box.renderReview();
+  const html = s.els.review.innerHTML;
+  const button = (key) => (html.match(new RegExp(`<button class="btn-ghost rv-open"[^>]*data-key="${key}"[^>]*>[\\s\\S]*?</button>`)) || [''])[0];
+  assert.match(button('VT-9'), /The check is waiting to start/, 'a silence of tmux read as a Claude waiting for an answer');
+  assert.doesNotMatch(button('VT-9'), /data-terminal/, 'a silence of tmux leads to a terminal');
+  assert.match(button('SH-9'), /Claude is waiting for an answer/, 'a live terminal that answered is no longer heard');
+});

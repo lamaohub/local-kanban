@@ -62,7 +62,11 @@ jobs:
             curl -fsS "http://127.0.0.1:3199$path" >/dev/null \
               || { echo "the board serves the API but not $path"; kill -9 "$pid"; exit 1; }
           done
-          curl -fsS http://127.0.0.1:3199/ | grep -q '<div id="board"' \
+          # Into a file, not piped to grep: grep -q exits on the first match, curl then fails
+          # writing the rest of the page (code 23), and pipefail fails the step on a good page.
+          curl -fsS -o "$RUNNER_TEMP/page.html" http://127.0.0.1:3199/ \
+            || { echo "the page did not load"; kill -9 "$pid"; exit 1; }
+          grep -q '<div id="board"' "$RUNNER_TEMP/page.html" \
             || { echo "the page came back without the board markup"; kill -9 "$pid"; exit 1; }
 
           # and it must also stop the way a person stops it: a listener registered on import once

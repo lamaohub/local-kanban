@@ -8,7 +8,7 @@ import { getSetting, openSettingsModal, plural, setClaudeView } from './settings
 import { onPhone } from './phone-rules.js';
 import { NARROW, closeTopLayer, currentProject, layersOpen, overlayLayer, popLayer, pushLayer, selectProject, styledAlert, styledConfirm, watchLayers } from './sidebar.js';
 import { SHORT_MONTHS, askUsageNow, autoGrow, claudeInfoHTML, copyText, onClaudeInfo, launchInClaude, openSessionInClaude, refresh, relTime, renderTimeline, resumeOnBoard, taskPromptText } from './sse.js';
-import { canRetry, changedFields, createCommentKeys, createTurns, createUnsentComments, createUnsentEdits, imageTooLarge, pullExternal, refusalLine, refusalText, refusedFields, resendDelay } from './unsaved.js';
+import { canRetry, changedFields, createCommentKeys, createRefusedTyped, createTurns, createUnsentComments, createUnsentEdits, imageTooLarge, pullExternal, refusalLine, refusalText, refusedFields, resendDelay } from './unsaved.js';
 import { renderAsks } from './asks.js';
 import { stillOpen } from './review-rules.js';
 import { wireTermCopy } from './term-copy.js';
@@ -2469,6 +2469,7 @@ export async function doAutosave() {
 }
 
 const unsentEdits = createUnsentEdits();
+const refusedTyped = createRefusedTyped();
 const editInTurn = createTurns();
 function queueTaskEdit(key, fields) {
   unsentEdits.fail(key, fields);
@@ -2480,7 +2481,8 @@ async function resendTaskEdit(key) {
   const fields = { ...queued };
   const here = key === state.drawerKey && drawerShown() && drawerSnapshot && !drawerLocked;
   if (here) { clearTimeout(autosaveTimer); autosaveTimer = null; }
-  const dirty = here ? changedFields(formToSave(), drawerSnapshot) : {};
+  const form = here ? formToSave() : null;
+  const dirty = here ? refusedTyped.without(key, changedFields(form, drawerSnapshot), form) : {};
   if (descConflicts.has(key)) { delete dirty.description; delete fields.description; }
   const sent = { ...fields, ...dirty };
   // base the last word won, and a `kb desc` made while offline was erased when the connection came back
@@ -2493,6 +2495,7 @@ async function resendTaskEdit(key) {
     const back = refusalText(e).gone ? [] : refusedFields(e, sent);
     if (back.length) { // the rest of the edit is not refused with the field: words typed offline still get there, open card or not
       unsentEdits.supersede(key, back);
+      refusedTyped.keep(key, back, sent);
       if (here && state.drawerKey === key) { takeBackRefused(back, e); sayFieldRefused(key, e); }
       else styledAlert(`${key}: ${refusalLine('The change is not saved', e, tr)}`);
       const left = { ...dirty };
@@ -2516,7 +2519,7 @@ async function resendTaskEdit(key) {
   unsentEdits.settle(key, fields);
   unsentEdits.settle(key, dirty);
   if (here && state.drawerKey === key && drawerSnapshot) Object.assign(drawerSnapshot, dirty);
-  if (here && state.drawerKey === key && refusedNote !== key) showSaveNote(null);
+  if (here && state.drawerKey === key && refusedNote !== key && !refusedTyped.has(key)) showSaveNote(null);
 }
 const unsentCreates = new Map();
 function editRefusedText(e) {
@@ -2587,8 +2590,8 @@ async function doAutosaveOnce() {
   const full = formToSave();
   const { title = '', description, ...common } = full;
   if (state.drawerKey) {
-    const patch = drawerSnapshot ? changedFields(full, drawerSnapshot) : full;
     const key = state.drawerKey;
+    const patch = drawerSnapshot ? refusedTyped.without(key, changedFields(full, drawerSnapshot), full) : full;
     if (descConflicts.has(key)) delete patch.description;
     if (!Object.keys(patch).length) return;
     const body = 'description' in patch && drawerSnapshot ? { ...patch, description_base: descBaseOf(key) } : patch;
@@ -2607,6 +2610,7 @@ async function doAutosaveOnce() {
       if (canRetry(e)) queueTaskEdit(key, patch);
       // says it); the card moved on to another task while the request went: a refusal is said with the task's key
       if (!e?.offline && !r.gone) {
+        refusedTyped.keep(key, back, patch);
         if (key === state.drawerKey) takeBackRefused(back, e);
         if (restQueued) queueTaskEdit(key, rest); // as data: the card may close before it is sent
         if (key === state.drawerKey) { if (back.length) sayFieldRefused(key, e); else showSaveNote(editRefusedText(e)); }
@@ -2619,7 +2623,7 @@ async function doAutosaveOnce() {
       if ('description' in body) descSent(key, patch.description, body.description_base);
     }
     if ('description' in body) queuedBase.delete(key); // the description got there: nothing waits from that base
-    if (key === state.drawerKey) showSaveNote(null);
+    if (key === state.drawerKey && !refusedTyped.has(key)) showSaveNote(null);
     if (unsentEdits.supersede(key, Object.keys(patch))) dropUnsaved(`task:${key}`);
     const { description: mine, ...rest } = patch;
     if (drawerSnapshot && state.drawerKey === key) Object.assign(drawerSnapshot, saved?.description_conflict ? rest : patch);

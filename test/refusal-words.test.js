@@ -160,6 +160,14 @@ test('what a refusal says is in the Russian dictionary — the sentence, the rea
   assert.deepEqual(heads.filter((h) => !inDict(h)), [], 'the name of the action stays English on the Russian board');
 });
 
+// the refusal of words to a Claude of the board tmux did not answer about (409 tmux-slow, src/phantom.js) says when to try again
+test('a tmux that did not answer is said in the board\'s words, with when to try again, on both boards', async () => {
+  const { TMUX_SLOW } = await import('../src/phantom.js');
+  const r = refusalText({ status: 409, message: TMUX_SLOW, body: { error: TMUX_SLOW, reason: 'tmux-slow' } });
+  assert.equal(r.reason, 'tmux did not answer in time — try again in a few seconds', 'the refusal of a slow tmux read as «the board did not accept it»');
+  assert.ok(inDict(r.reason), 'the refusal of a slow tmux stays English on the Russian board');
+});
+
 /* ── the card ── */
 const drawerSrc = readFileSync(new URL('../public/js/drawer.js', import.meta.url), 'utf8');
 const sseSrc = readFileSync(new URL('../public/js/sse.js', import.meta.url), 'utf8');

@@ -158,6 +158,16 @@ export async function runPhantom(spec) {
 
 /** The refusal of a request about a terminal tmux did not answer about (reason `tmux-slow`) — said alike everywhere. */
 export const TMUX_SLOW = 'tmux did not answer in time — try again';
+const TMUX_BROKEN = /protocol version mismatch/i;
+export const tmuxBrokenWords = () => `tmux was updated while the board's terminals still run on the old one, and the new tmux cannot reach them — close them in Terminal with \`tmux -L ${tmuxSocket()} kill-server\` (the conversations are kept: «Continue» brings each one back)`;
+let brokenSaid = 0;
+function unknownPane(text) {
+  if (!TMUX_BROKEN.test(text)) return { dead: false, unknown: true };
+  if (Date.now() - brokenSaid > 3600e3) { brokenSaid = Date.now(); logError('server', 'tmux', tmuxBrokenWords(), text); }
+  return { dead: false, unknown: true, broken: true };
+}
+/** The refusal of a request about such a terminal: {error, reason} — `tmux-broken` for good, `tmux-slow` for this once. */
+export const tmuxRefusal = (term) => (term?.broken ? { error: tmuxBrokenWords(), reason: 'tmux-broken' } : { error: TMUX_SLOW, reason: 'tmux-slow' });
 const pane = (sid) => `=${sessionName(sid)}:`; // `=` — this very session, not one whose name starts so
 
 const STATE_FORMAT = '#{pane_dead}|#{pane_dead_status}|#{window_width}|#{pane_pid}|#{pid}|#{pane_dead_signal}';
@@ -197,7 +207,7 @@ const NO_PANE = /can't find (session|window|pane)|no current target|no server ru
 export async function phantomPane(sid) {
   if (!SESSION_ID_RE.test(sid)) return null;
   const r = await tmux(['list-panes', '-t', pane(sid), '-F', STATE_FORMAT]);
-  if (r.err) return NO_PANE.test(`${r.text} ${r.err.message}`) || SERVER_GONE.test(r.text) ? null : { dead: false, unknown: true };
+  if (r.err) return NO_PANE.test(`${r.text} ${r.err.message}`) || SERVER_GONE.test(r.text) ? null : unknownPane(`${r.text} ${r.err.message}`);
   return nudgeLostExit(sid, paneState(r.out), () => readState(sid));
 }
 
@@ -254,7 +264,7 @@ export async function phantomView(sid, lines = SCREEN_LINES) {
   const r = await tmux(['list-panes', '-t', pane(sid), '-F', STATE_FORMAT], mark,
     ['capture-pane', '-p', '-S', `-${lines}`, '-t', pane(sid)], mark,
     ['capture-pane', '-p', '-J', '-S', `-${lines}`, '-t', pane(sid)]);
-  if (r.err) return NO_PANE.test(`${r.text} ${r.err.message}`) || SERVER_GONE.test(r.text) ? null : { dead: false, unknown: true };
+  if (r.err) return NO_PANE.test(`${r.text} ${r.err.message}`) || SERVER_GONE.test(r.text) ? null : unknownPane(`${r.text} ${r.err.message}`);
   const [state, screen, joined] = r.out.split(`${cut}\n`);
   if (joined === undefined) return null;
   const st = await nudgeLostExit(sid, paneState(state), () => readState(sid));
@@ -610,13 +620,20 @@ export function paceOnScreen(screen) {
 
 const LIMIT_HIT = /\b(?:usage|5-hour|weekly|session|opus|sonnet|plan) limit reached|\bhit your (?:[\w-]+ )?limit/i;
 // joined with a space, and a line torn inside the time («12:» / «50am», «12:50a» / «m» at a width of 45) read «12» or «12:50»
-// with no am/pm — the words then waited for the wrong half of the day. A space may stand anywhere in the time.
-const LIMIT_RESETS = /resets?(?: at)? ((?:[a-z]{3,9} \d{1,2},? (?:at )?)?)(\d(?: ?\d)?(?: ?: ?\d ?\d)?(?: ?[ap] ?m\b)?)/i;
+// anywhere in the words and the date as well — «resets Oct 1|9 at 10am» read October 1 at 09:00, «Oc|t 19…» and «rese|ts
+// 12am» read nothing. Each word is spelt with a space allowed between its letters (`spaced`), and put back without them.
+const spaced = (w) => w.split('').join(' ?');
+const LIMIT_RESETS = new RegExp(`${spaced('reset')}(?: ?s)?(?: ${spaced('at')})? (?:([a-z](?: ?[a-z]){2,8}) (\\d(?: ?\\d)?)( ?,)? (${spaced('at')} )?)?`
+  + '(\\d(?: ?\\d)?(?: ?: ?\\d ?\\d)?(?: ?[ap] ?m\\b)?)', 'i');
+const unspaced = (s) => s.replace(/\s+/g, '');
 export function limitOnScreen(screen) {
   const under = underPromptBox(screen);
   if (!under || !LIMIT_HIT.test(under)) return null;
   const m = LIMIT_RESETS.exec(under);
-  return { resets: m ? `${m[1].replace(/\s+/g, ' ')}${m[2].replace(/\s+/g, '')}` : null };
+  if (!m) return { resets: null };
+  const [, month, day, comma, at, time] = m;
+  const date = month ? `${unspaced(month)} ${unspaced(day)}${comma ? ',' : ''} ${at ? 'at ' : ''}` : '';
+  return { resets: `${date}${unspaced(time)}` };
 }
 export async function boardLook() {
   const none = { live: [], questions: [], background: [], over: [], limited: [] };
@@ -679,7 +696,7 @@ export async function taskTerminal(taskId, { screen = false } = {}) {
     WHERE s.task_id = ? ORDER BY s.last_seen DESC, s.first_seen DESC LIMIT 5`).all(taskId);
   for (const r of rows) {
     const st = screen ? await phantomView(r.session_id) : await phantomPane(r.session_id);
-    if (st?.unknown) return { session: r.session_id, unknown: true };
+    if (st?.unknown) return { session: r.session_id, unknown: true, ...(st.broken ? { broken: true } : {}) };
     if (st) {
       return { session: r.session_id, dead: st.dead, ...(st.dead ? { exit: st.exit, interrupted: endedBySignal(st) } : {}), cols: st.cols,
         ...(screen ? { screen: st.screen, wraps: st.wraps, links: st.links } : {}),

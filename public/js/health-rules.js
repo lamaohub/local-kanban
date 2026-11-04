@@ -7,6 +7,8 @@ export function fileState(f, norms) {
   return 'ok';
 }
 
+export const fixable = (main, norms) => ['heavy', 'long'].includes(fileState(main, norms));
+
 const RANK = { heavy: 0, long: 1, ok: 2 };
 
 /** The projects split for the section: with their own CLAUDE.md (worst first, then the most loaded at the start), without

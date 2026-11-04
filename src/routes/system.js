@@ -13,7 +13,7 @@ import { listBackups, backupNow, backupPath, backupState, ATTACH_MIRROR } from '
 import { inspectBackup, startPreview, stopPreview, currentPreview, UPLOAD_PREFIX } from '../restore.js';
 import { langOverride, ghOwnerEnv, ghRepoEnv, launchDryRun, PORT } from '../config.js';
 import { claudeWord, launchOptions, launchProblem, launchSpec, runLaunch } from '../launch.js';
-import { TMUX_COMMAND_MAX, TMUX_SLOW, boardProblem, claudeAtPrompt, folderTrusted, lookedLately, markTaskless, phantomAvailable, phantomPane, phantomSpec, phantomStop, runPhantom, taskTerminal, tmuxBin, tmuxCommandBytes } from '../phantom.js';
+import { TMUX_COMMAND_MAX, boardProblem, claudeAtPrompt, folderTrusted, lookedLately, markTaskless, phantomAvailable, phantomPane, phantomSpec, phantomStop, runPhantom, taskTerminal, tmuxBin, tmuxCommandBytes, tmuxRefusal } from '../phantom.js';
 import { ADOPT_TOKEN, freshTerminalSessions, isBoardSession, markBoardSession, markResumed, prepHolder, tieLaunched } from '../claude-sessions.js';
 import { CHECK_LABEL, OPEN_CHECK, doneRules, isCheck, leadCheck } from '../review-check.js';
 import { liveTick, readRegistry } from '../claude-live.js';
@@ -61,12 +61,12 @@ export function isNewer(candidate, current) {
 
 export function updatePlan({ packaged, name, root }) {
   if (!packaged) {
-    return { how: 'git', cmd: 'git', args: ['pull', '--ff-only'], then: { cmd: 'npm', args: ['install', '--no-fund', '--no-audit'] } };
+    return { how: 'git', cmd: bin('git'), args: ['pull', '--ff-only'], then: { cmd: bin('npm'), args: ['install', '--no-fund', '--no-audit'] } };
   }
   const args = ['install', '-g', `${name}@latest`];
   const prefix = globalPrefixOf(root, name);
   if (prefix) args.push('--prefix', prefix);
-  return { how: 'npm', cmd: 'npm', args };
+  return { how: 'npm', cmd: bin('npm'), args };
 }
 
 export async function runUpdate(plan, exec) {
@@ -596,7 +596,7 @@ export default async function systemRoutes(app) {
     keys.forEach((k) => launching.add(k));
     try {
       const running = [];
-      const unsure = [];
+      const unsure = []; let broken = false;
       for (const t of tasks) {
         let term = await taskTerminal(t.id);
         // returned the task, the last round) makes room, or the fix waited for its terminal for up to six hours. Only the fix of
@@ -605,9 +605,10 @@ export default async function systemRoutes(app) {
           await phantomStop(term.session);
           term = await taskTerminal(t.id);
         }
-        if (term?.unknown) unsure.push(t.key); else if (term && !term.dead) running.push(t.key);
+        if (term?.unknown) { unsure.push(t.key); broken ||= Boolean(term.broken); } else if (term && !term.dead) running.push(t.key);
       }
       if (running.length) return reply.code(409).send({ error: `Claude of the board already works on ${running.join(', ')}`, running });
+      if (unsure.length && broken) return reply.code(409).send({ ...tmuxRefusal({ broken }), keys: unsure });
       if (unsure.length) {
         return reply.code(409).send({ error: `tmux did not answer in time: whether a Claude of the board works on ${unsure.join(', ')} is not known — try again`, reason: 'tmux-slow', keys: unsure });
       }
@@ -661,7 +662,7 @@ export default async function systemRoutes(app) {
   }
   async function resumeSession(b, p, tasks, reply, sid, keys) {
     const pane = await phantomPane(sid);
-    if (pane?.unknown) return reply.code(409).send({ error: TMUX_SLOW, reason: 'tmux-slow', keys });
+    if (pane?.unknown) return reply.code(409).send({ ...tmuxRefusal(pane), keys });
     if (pane && !pane.dead) return reply.code(409).send({ error: `Claude of the board already works on ${keys.join(', ')}`, running: keys });
     const name = keys.length > 1 ? `${keys[0]} +${keys.length - 1}` : keys[0];
     const spec = phantomSpec({ sid, name, folder: p.path, permission: b.permission, port: PORT, allow: doneRules(tasks), effort: b.effort, resume: true });

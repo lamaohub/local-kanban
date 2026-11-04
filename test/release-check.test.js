@@ -9,6 +9,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { bin } from '../src/bin-path.js';
 
 const RELEASE = new URL('../scripts/release.js', import.meta.url);
 const STRIP = new URL('../scripts/strip-comments.js', import.meta.url);
@@ -34,7 +35,7 @@ function repo(t, files) {
   mkdirSync(join(dir, 'scripts'));
   copyFileSync(RELEASE, join(dir, 'scripts', 'release.js'));
   copyFileSync(STRIP, join(dir, 'scripts', 'strip-comments.js'));
-  const git = (...a) => execFileSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@example.invalid', ...a], { cwd: dir, stdio: 'pipe' });
+  const git = (...a) => execFileSync(bin('git'), ['-c', 'user.name=test', '-c', 'user.email=test@example.invalid', ...a], { cwd: dir, stdio: 'pipe' });
   git('init', '-q', '-b', 'feature');
   git('add', '-A');
   git('commit', '-q', '-m', 'tiny');
@@ -55,13 +56,13 @@ test('the check passes a clean snapshot without the private patterns, on any bra
   // the CI job that runs the check is private like the script: if the snapshot kept it, a Russian line in it
   // would fail the English check of .github/ — so this one passing means the job is left out
   const dir = repo(t, { '.github/workflows/release-check.yml': `# ${RU}\nname: release check\n` });
-  const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' });
+  const head = execFileSync(bin('git'), ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' });
   const r = check(dir);
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /tests pass on the snapshot/);
   assert.match(r.out, /release checks pass/);
-  assert.equal(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }), head, 'the check committed something');
-  assert.equal(execFileSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }), '', 'the check left changes behind');
+  assert.equal(execFileSync(bin('git'), ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }), head, 'the check committed something');
+  assert.equal(execFileSync(bin('git'), ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }), '', 'the check left changes behind');
   assert.deepEqual(readdirSync(r.tmp).filter((n) => n.startsWith('local-kanban-release-')), [], 'the check left its snapshot behind');
   assert.equal(JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).version, '1.0.0', 'the check bumped the version');
 });

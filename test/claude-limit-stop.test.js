@@ -61,6 +61,14 @@ test('the stop at the limit and its reset are read off the lines under the input
     assert.notEqual(torn, SCREEN);
     assert.deepEqual(phantom.limitOnScreen(torn), { resets: '12:50am' }, `${a} | ${b}`);
   }
+  const head = '  ⚠ Weekly limit reached · ';
+  for (const [a, b, want] of [['resets Oct 1', '9 at 10am · clau.de', 'Oct 19 at 10am'], ['resets Oc', 't 19 at 10am · x', 'Oct 19 at 10am'],
+    ['rese', 'ts 12am · clau.de', '12am'], ['resets Oct 19 a', 't 10am · x', 'Oct 19 at 10am'], ['resets Oct 9,', '10am · x', 'Oct 9, 10am'],
+    ['resets Oct 9 at', '10am · x', 'Oct 9 at 10am'], ['resets Oct 1', '9, 10am · x', 'Oct 19, 10am']]) {
+    const torn = SCREEN.replace('  ⚠ Usage limit reached · limit resets\n  12:50am · clau.de/wrap-up ·', `${head}${a}\n  ${b}`);
+    assert.notEqual(torn, SCREEN);
+    assert.deepEqual(phantom.limitOnScreen(torn), { resets: want }, `${a} | ${b}`);
+  }
   assert.deepEqual(phantom.limitOnScreen(SCREEN.replace('12:50am', '14:00')), { resets: '14:00' }, 'a time with no am/pm stays as it is');
   assert.deepEqual(phantom.limitOnScreen(SCREEN.replace('limit resets', 'resets Oct 9,').replace('12:50am', '10 am')), { resets: 'Oct 9, 10am' });
   assert.equal(phantom.limitOnScreen('Claude said: the usage limit reached its peak.\n' + `${'─'.repeat(45)}\n❯ \n${'─'.repeat(45)}\n  ⏵⏵ auto mode on`), null,

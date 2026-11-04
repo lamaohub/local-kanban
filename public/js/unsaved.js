@@ -73,6 +73,34 @@ export function refusedFields(e, sent) {
   return 'status' in sent ? ['status'] : [];
 }
 
+/* A refused title, description or priority stays in the form as typed — the card says it is not saved — but goes again only
+   once it is changed: left differing from the snapshot, every resend and autosave took it with the rest, the server refused
+   the whole PATCH again, and the resend called itself — two thousand requests in ten seconds while the card stayed open,
+   and the rest of the edit never got there. Labels and status go back to the server's instead (takeBackRefused in
+   drawer.js). Pure. */
+export function createRefusedTyped() {
+  const byKey = new Map(); // task key → { field: the value the server refused }
+  return {
+    keep(key, fields, sent) {
+      const kept = byKey.get(key) || {};
+      for (const f of fields) if (f !== 'labels' && f !== 'status' && f in sent) kept[f] = sent[f];
+      if (Object.keys(kept).length) byKey.set(key, kept);
+    },
+    /** The edit without what the server refused and the form still holds unchanged; a field changed since goes again. */
+    without(key, patch, form) {
+      const kept = byKey.get(key);
+      if (!kept) return patch;
+      for (const f of Object.keys(kept)) {
+        if (form[f] !== kept[f]) delete kept[f];
+        else delete patch[f];
+      }
+      if (!Object.keys(kept).length) byKey.delete(key);
+      return patch;
+    },
+    has: (key) => byKey.has(key),
+  };
+}
+
 export const RESEND_MS = 3000;
 export const RESEND_MAX_MS = 60000;
 /** How long to wait before the next try, `n` — how many tries in a row already failed. */
@@ -235,7 +263,9 @@ const KNOWN = [
   [/^the terminal did not open/, 'the terminal did not open — copy the command instead; the details are in Settings → Errors'],
   [/^a guest starts Claude inside the board only$/, 'a guest starts Claude only inside the board'],
   [/^the project has no CLAUDE\.md of its own$/, 'the project has no CLAUDE.md of its own any more'],
+  [/^the CLAUDE\.md of this project is within the norms/, 'the CLAUDE.md of this project is within the norms now — there is nothing to fix'],
   [/^tmux did not answer in time — try again$/, 'tmux did not answer in time — try again in a few seconds'],
+  [/^tmux was updated while the board's terminals still run on the old one/, 'tmux was updated under the running terminals of the board — close them, the command is in Settings → Errors'],
   [/^unknown labels: /, 'this board has no such label'],
 ];
 export function refusalText(e) {

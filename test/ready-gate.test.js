@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
+import { bin } from '../src/bin-path.js';
 
 const KB = fileURLToPath(new URL('../bin/kb', import.meta.url));
 let app, tmp, db, base, n = 0;
@@ -208,7 +209,7 @@ test('whether a project waits is the owner\'s word, the switch of the board and 
 test('the column is one of the statuses a task in it hangs its commit on', async () => {
   const { execFileSync } = await import('node:child_process');
   const repo = mkdtempSync(join(tmpdir(), 'kb-gate-'));
-  const git = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...a], { cwd: repo, encoding: 'utf8', stdio: 'pipe' }).trim();
+  const git = (...a) => execFileSync(bin('git'), ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...a], { cwd: repo, encoding: 'utf8', stdio: 'pipe' }).trim();
   git('init', '-q', '-b', 'main'); git('commit', '-q', '--allow-empty', '-m', 'first');
   const pid = db.prepare("INSERT INTO projects (slug, prefix, name, next_task_no, path) VALUES ('hung','HG','Hung',9,?)").run(repo).lastInsertRowid;
   const id = db.prepare("INSERT INTO tasks (project_id, task_no, title, status, work_started_at) VALUES (?, 1, 'Work', 'doing', datetime('now', '-1 hour'))").run(pid).lastInsertRowid;

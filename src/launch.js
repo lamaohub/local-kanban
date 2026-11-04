@@ -5,7 +5,7 @@ import { delimiter, join } from 'node:path';
 import { homedir } from 'node:os';
 import { HOST_SESSION_RE, SESSION_ID_RE } from './claude-sessions.js';
 import { claudeBin } from './config.js';
-import { onPath } from './bin-path.js';
+import { bin as fullPath, onPath } from './bin-path.js'; // `bin` is the claude a launch is given
 
 /** What the Claude app takes in `?q=` (WA in its URL handler); longer text is refused, not cut. */
 export const PROMPT_MAX = 14336;
@@ -100,7 +100,7 @@ export function terminalCommand({ text, resume, folder, session, url, effort, bi
 export function launchSpec({ mode, text, folder, resume, host, session, url, effort, bin }, platform = process.platform) {
   if (mode === 'desktop') {
     if (platform !== 'darwin') throw Object.assign(new Error('the Claude app is opened this way only on macOS'), { statusCode: 501 });
-    return { cmd: 'open', args: [host ? continueUrl(host) : desktopUrl(text, folder)] };
+    return { cmd: fullPath('open'), args: [host ? continueUrl(host) : desktopUrl(text, folder)] };
   }
   return windowSpec(terminalCommand({ text, resume, folder, session, url, effort, bin }), platform, 'the prompt');
 }
@@ -109,9 +109,9 @@ export function launchSpec({ mode, text, folder, resume, host, session, url, eff
     window keeps (Linux). */
 function windowSpec(line, platform, what, then = '; ') {
   if (platform === 'darwin') {
-    return { cmd: 'osascript', args: ['-e', `tell application "Terminal" to do script ${appleString(line)}`, '-e', 'tell application "Terminal" to activate'] };
+    return { cmd: fullPath('osascript'), args: ['-e', `tell application "Terminal" to do script ${appleString(line)}`, '-e', 'tell application "Terminal" to activate'] };
   }
-  if (platform === 'linux') return { cmd: 'x-terminal-emulator', args: ['-e', 'bash', '-lc', `${line}${then}exec bash`] };
+  if (platform === 'linux') return { cmd: fullPath('x-terminal-emulator'), args: ['-e', 'bash', '-lc', `${line}${then}exec bash`] };
   throw Object.assign(new Error(`no terminal to open on this system — copy ${what} instead`), { statusCode: 501 });
 }
 

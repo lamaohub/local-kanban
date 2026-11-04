@@ -8,6 +8,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
+import { bin } from '../src/bin-path.js';
 
 const SID = 'cccccccc-1111-4111-8111-cccccccccccc';
 const OTHER = 'dddddddd-2222-4222-8222-dddddddddddd';
@@ -106,10 +107,10 @@ test('a command Claude wrote runs in a Terminal window, in the project folder', 
   // the block goes whole to the shell it names, one quoted word: the person's shell reads nothing of it
   const line = `cd ${launch.shellQuote(folder)} && bash -c ${launch.shellQuote(SSH)}`;
   if (process.platform === 'darwin') {
-    assert.equal(b.cmd, 'osascript');
+    assert.equal(b.cmd, bin('osascript'));
     // the AppleScript string carries the line exactly, quotes and all
     const literal = /do script (".*")$/.exec(b.args[1])[1];
-    assert.equal(execFileSync('osascript', ['-e', `return ${literal}`], { encoding: 'utf8' }).replace(/\n$/, ''), line);
+    assert.equal(execFileSync(bin('osascript'), ['-e', `return ${literal}`], { encoding: 'utf8' }).replace(/\n$/, ''), line);
   } else {
     assert.deepEqual(b.args.slice(0, 3), ['-e', 'bash', '-lc']);
     // the shell the window keeps on a line of its own: after `cmd &` or a `# comment` line it was a syntax error or swallowed

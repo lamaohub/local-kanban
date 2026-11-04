@@ -6,6 +6,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { bin } from '../src/bin-path.js';
 
 let tmp;
 let db;
@@ -20,7 +21,7 @@ const SID = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb';
 
 test('a task the words moved from Review goes back after the turn although the board was restarted in it', async () => {
   const repo = mkdtempSync(join(tmp, 'repo-'));
-  const git = (...a) => execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { stdio: 'ignore' });
+  const git = (...a) => execFileSync(bin('git'), ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { stdio: 'ignore' });
   git('init', '-q');
   writeFileSync(join(repo, 'a.txt'), 'one\n');
   git('add', '.');

@@ -31,9 +31,10 @@ before(async () => {
 });
 after(() => server?.close());
 
-const run = (args) => new Promise((resolve) => {
+const run = (args, session = null) => new Promise((resolve) => {
   const e = { ...process.env, KB_URL: base };
   delete e.CLAUDE_CODE_SESSION_ID; delete e.CLAUDE_CODE_HOST_SESSION_ID; delete e.KB_DEBUG;
+  if (session) e.CLAUDE_CODE_SESSION_ID = session;
   execFile(process.execPath, [KB, ...args], { env: e }, (err, stdout, stderr) => resolve({ code: err?.code ?? 0, stdout, stderr }));
 });
 const task = { id: 7, key: 'DM-7', status: 'review', project: 'demo', title: 'a task', labels: [], checklist: [], links: [] };
@@ -69,19 +70,32 @@ test('a saved note is the end of kb note: nothing is read after it that could fa
   assert.deepEqual(seen, ['POST /api/tasks/DM-7/comments']);
 });
 
-// note carries a key of its task, words and session: a retry from a new kb sends the same key, and the board's
+// note carries a key of its words and session: a retry from a new kb sends the same key, and the board's
 test('a retried note sends the same key, so the board finds the one already written', async () => {
   answer = (req) => (req.method === 'PATCH' ? { status: 200, body: task } : { status: 201, body: comment });
   bodies = [];
   for (const args of [['note', 'DM-7', 'halfway'], ['note', 'dm-7', 'halfway'], ['review', 'DM-7', 'halfway'],
-    ['note', 'DM-7', 'other words'], ['note', 'DM-8', 'halfway']]) assert.equal((await run(args)).code, 0);
+    ['note', 'DM-7', 'other words'], ['note', '7', 'halfway']]) assert.equal((await run(args)).code, 0);
   const keys = bodies.filter((b) => 'body' in b).map((b) => b.client_key);
   assert.equal(keys.length, 5);
   assert.ok(keys.every((k) => typeof k === 'string' && k.length <= 64), `a key fits the board's limit: ${keys}`);
   assert.equal(keys[0], keys[1], 'the same note retried got a new key — the board would write it twice');
   assert.equal(keys[0], keys[2], 'kb review sends its note with the same key');
   assert.notEqual(keys[0], keys[3], 'other words are another note');
-  assert.notEqual(keys[0], keys[4], 'the same words on another task are another note');
+  assert.equal(keys[0], keys[4], 'the task typed by its id got another key — the board would write the note twice');
+});
+
+// the same words from two sessions are two notes: two Claudes reporting «done» on one task are both heard
+test('the key of a note is the session\'s too: the same words of another session are another note', async () => {
+  answer = () => ({ status: 201, body: comment });
+  bodies = [];
+  const A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  for (const sid of [A, A, B]) assert.equal((await run(['note', 'DM-7', 'done'], sid)).code, 0);
+  const keys = bodies.filter((b) => 'body' in b).map((b) => b.client_key);
+  assert.equal(keys.length, 3);
+  assert.equal(keys[0], keys[1], 'the same note of one session retried got a new key');
+  assert.notEqual(keys[0], keys[2], 'the same words of another session got the key of the first — the board would drop that note');
 });
 
 test('a note deleted on the board is not reported written', async () => {

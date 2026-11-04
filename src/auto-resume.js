@@ -26,10 +26,10 @@ const own = { host: `127.0.0.1:${PORT}` };
 const WORDS = {
   ru: { resumed: 'Доска продолжила прерванную сессию сама.', told: 'Лимит сброшен: доска попросила Claude продолжить.', go: 'Доска: лимит подписки сбросился. Продолжай с того места, где остановился.', goOn: 'Доска: сессия была прервана. Продолжай с того места, где остановился.',
     upResume: 'Доска подняла прерванную сессию, но попросить Claude продолжить не смогла: он ждёт у приглашения.', upLimit: 'Лимит сброшен, но попросить Claude продолжить доска не смогла: он ждёт у приглашения.',
-    why: { tmux: 'tmux не отвечал', field: 'в поле Claude что-то набрано', err: 'слова не дошли до терминала', state: 'Claude так и не встал у приглашения' } },
+    why: { tmux: 'tmux не отвечал', field: 'в поле Claude что-то набрано', err: 'слова не дошли до терминала' } },
   en: { resumed: 'The board went on with the interrupted session by itself.', told: 'The limit has reset: the board told Claude to go on.', go: 'The board: the subscription limit has reset. Go on from where you stopped.', goOn: 'The board: the session was interrupted. Go on from where you stopped.',
     upResume: 'The board brought the interrupted session back but could not tell Claude to go on: it waits at its prompt.', upLimit: 'The limit has reset, but the board could not tell Claude to go on: it waits at its prompt.',
-    why: { tmux: 'tmux did not answer', field: "something is typed in Claude's field", err: 'the words did not reach the terminal', state: 'Claude never stood at its prompt' } },
+    why: { tmux: 'tmux did not answer', field: "something is typed in Claude's field", err: 'the words did not reach the terminal' } },
 };
 const say = () => WORDS[uiLang() === 'en' ? 'en' : 'ru'];
 
@@ -115,7 +115,7 @@ const forget = (sid) => { stopped.delete(sid); keepStopped(); };
 function giveUp(sid, was) {
   forget(sid);
   const t = resolveTask(was.key);
-  const why = was.held_by ? say().why[was.held_by.split(':')[0]] : '';
+  const why = was.held_by ? say().why[was.held_by] ?? '' : '';
   logError('server', 'automations', `gave up telling ${was.key} to go on (${was.why}): ${was.held_by || 'no look got that far'}`, sid);
   if (t) boardNote(t.id, `${was.why === 'limit' ? say().upLimit : say().upResume}${why ? ` (${why})` : ''}`);
 }
@@ -161,7 +161,8 @@ export async function tickResume(app, now, { waiting = new Set(), limited = fals
     if (!was) continue;
     const late = now - was.at > SAY_WAIT_MS;
     // the words of a resume belong to the minutes after it: a day later they would start work nobody expects
-    if (was.why === 'resume' && late) { giveUp(r.session, was); continue; }
+    // «it waits at its prompt» is said of a Claude at its prompt only: one at work (taken up by a person, a long turn) or gone
+    if (was.why === 'resume' && late) { if (r.claude === 'idle') giveUp(r.session, was); else forget(r.session); continue; }
     if (r.claude === 'limit') {
       // too early it stops at the limit again; the chain of tries holds how many times
       const at = resetAfter(r.resets, was.at - LINE_BACK_MS);

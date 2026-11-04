@@ -57,13 +57,14 @@ export function placeOf(t, main, side, onMain) {
   return t.branch === 'in' || main.some(mine) || side.some(mine) ? 'main' : 'none';
 }
 
-export const STAT_FORMAT = `%H%n%ct%n%s%n%B${SEP}`;
+export const STAT_FORMAT = `%H%n%ct %P%n%s%n%B${SEP}`;
 export function statCommit(out, words, { issue = null, since = null, known = null } = {}) {
-  const commits = parseLog(out, known); // `tip` holds the commit time here
+  const commits = parseLog(out, known); // `tip` holds the commit time and the parents here
   const own = commits.find((c) => words.some((w) => c.words.has(w)));
   if (own || issue || since == null) return own?.hash || null;
   const head = commits[0];
-  if (!head || Number(head.tip) < since || ownKeys(head.subject, known).length || /^Merge /.test(head.subject)) return null;
+  const [time, ...parents] = (head?.tip || '').split(' ').filter(Boolean);
+  if (!head || Number(time) < since || ownKeys(head.subject, known).length || parents.length > 1) return null;
   return head.hash;
 }
 

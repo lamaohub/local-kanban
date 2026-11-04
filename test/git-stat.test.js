@@ -78,11 +78,19 @@ test('without an issue: the newest commit since the work began, unless it claims
   const now = Math.floor(Date.now() / 1000);
   const plain = commit('Tidy up the readme');
   assert.ok(statCommit(log(), words, { known, since: now - 60 }).startsWith(plain), 'a commit that names nothing is the fallback, as before');
+  // a task with an issue has its own way to name a commit: HEAD is no fallback for it
+  assert.equal(statCommit(log(), wordsOf('GS-3', 7, 'octocat/hello-world', false), { issue: 7, known, since: now - 60 }), null,
+    'a task with an issue and no commit of its own took HEAD');
   assert.equal(statCommit(log(), words, { known, since: now + 3600 }), null, 'a commit older than the work is not the task\'s');
   commit('GS-2 another task');
   assert.equal(statCommit(log(), words, { known, since: now - 60 }), null, 'the newest commit of another task hung on this one');
-  commit('Merge branch \'side\'');
-  assert.equal(statCommit(log(), words, { known, since: now - 60 }), null, 'a merge is nobody\'s work');
+  git('checkout', '-q', '-b', 'side2');
+  commit('Side work');
+  git('checkout', '-q', 'main');
+  git('merge', '-q', '--no-ff', '-m', 'Bring in side2', 'side2');
+  assert.equal(statCommit(log(), words, { known, since: now - 60 }), null, 'a merge with any subject is nobody\'s work');
+  const named = commit('Merge the two lists of the drawer');
+  assert.ok(statCommit(log(), words, { known, since: now - 60 }).startsWith(named), 'a plain commit whose subject begins with «Merge» is work');
   const mine = commit('GS-3 the work');
   assert.ok(statCommit(log(), words, { known, since: now - 60 }).startsWith(mine));
 });
@@ -91,7 +99,10 @@ test('the card: a move to review hangs the task\'s commit, not a foreign pull re
   // HEAD claims GS-3; GS-1 has its own commit further down, and a foreign #12 at the very top
   const own = commit('GS-1 the real work');
   commit('GS-3 more work');
-  commit('Merge pull request #12 from someone/other');
+  git('checkout', '-q', '-b', 'pr12');
+  commit('Their change');
+  git('checkout', '-q', 'main');
+  git('merge', '-q', '--no-ff', '-m', 'Merge pull request #12 from someone/other', 'pr12');
   const move = (key) => app.inject({ method: 'PATCH', url: `/api/tasks/${key}`, payload: { status: 'review' } });
   assert.equal((await move('GS-1')).statusCode, 200);
   const body = await statOf('GS-1');

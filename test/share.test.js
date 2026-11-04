@@ -127,9 +127,24 @@ test('a browser without the pass is asked for the key, and the key typed by hand
   // the page of the door brings nothing of the board along, and a home-screen app is made from the manifest, asked for without cookies
   assert.equal((await ask('/manifest.webmanifest', { bare: true })).headers['x-from'], 'board');
   assert.equal((await ask('/manifest.webmanifest', { bare: true, method: 'POST' })).status, 401);
+  const head = await ask('/manifest.webmanifest', { bare: true, method: 'HEAD' });
+  assert.deepEqual([head.status, head.headers['x-from']], [200, 'board']);
   // a form of another site
   assert.equal((await ask('/door/key', { ...form(key), headers: { 'content-type': 'application/x-www-form-urlencoded', origin: 'http://evil.example' } })).status, 403);
   assert.equal((await ask('/door/key', { ...form(key), headers: { 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' } })).status, 403);
+});
+
+// a device that stood at the page of the key and then typed the right key is no longer listed in «Turned away»
+test('the right key takes the device off the list of refusals it stood in without the key', async () => {
+  const key = share.shareState().key;
+  for (const enter of [() => ask('/door/key', form(key)), () => ask(`/?k=${key.replaceAll('-', '')}`, { bare: true })]) {
+    share.clearRefusals();
+    assert.equal((await ask('/', { bare: true })).status, 401);
+    assert.deepEqual(share.refusalList().map((x) => x.why), ['nokey']);
+    assert.equal((await enter()).status, 303);
+    assert.deepEqual(share.refusalList(), [], 'a device that entered with the key stays listed as turned away');
+  }
+  share.clearRefusals();
 });
 
 test('the page of the door remembers where the browser was going, and never leaves the door', async () => {
@@ -362,7 +377,10 @@ test('a new key: the old link, key and pass stop working, and everyone connected
   const after = (await app.inject({ method: 'POST', url: '/api/share/reset', headers: page })).json();
   assert.notEqual(after.key, before.key);
   assert.notEqual(after.qr, before.qr, 'the QR code still shows the old key');
-  await cut;
+  let held;
+  const late = new Promise((resolve) => { held = setTimeout(() => resolve('open'), 3000); });
+  assert.notEqual(await Promise.race([cut, late]), 'open', 'a guest connected before the new key is still connected');
+  clearTimeout(held);
   assert.equal((await ask('/')).status, 401, 'the pass of the old key opens the door');
   assert.equal((await ask(oldLink.pathname + oldLink.search, { bare: true })).status, 401, 'the old link opens the door');
   pass = passOf(await ask('/door/key', form(after.key)));

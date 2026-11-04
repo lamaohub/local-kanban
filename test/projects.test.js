@@ -206,7 +206,31 @@ test("a guest reads the project docs without the owner's paths", async () => {
   // the owner still sees them
   const own = (await app.inject({ method: 'GET', url: '/api/projects/docs-proj/docs/CLAUDE.md' })).json();
   assert.ok(own.real_path && own.path.startsWith(projectsRoot));
+  // the page of the project (renderDocs, public/js/project.js) draws the guest's answer: a file that is there, its path
+  // not said, is not «not there»
+  const drawn = await drawDocs(body);
+  assert.match(drawn, /CLAUDE\.md/);
+  assert.doesNotMatch(drawn, /not there/, 'a guest is told that a file the project has is not there');
+  assert.match(await drawDocs({ ...body, paths_hidden: undefined, docs: body.docs.map((d) => ({ ...d, path: null })) }), /not there/,
+    'the owner is no longer told a file has no path');
 });
+
+// renderDocs of public/js/project.js, read out of the file and run on stand-ins with an answer of the route
+async function drawDocs(info) {
+  const { default: vm } = await import('node:vm');
+  const src = readFileSync(new URL('../public/js/project.js', import.meta.url), 'utf8');
+  const at = src.indexOf('async function renderDocs(');
+  assert.ok(at >= 0, 'renderDocs is gone from project.js');
+  const els = { 'ps-docs': { innerHTML: '', querySelectorAll: () => [] }, projset: { dataset: { slug: 'docs-proj' } } };
+  const box = {
+    $: (id) => els[id], api: async () => info, seg: (x) => x, ic: () => '', tr: (x) => x,
+    esc: (x) => String(x).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`),
+  };
+  vm.createContext(box);
+  vm.runInContext(`${src.slice(at, src.indexOf('\n}\n', at) + 2)}\nthis.renderDocs = renderDocs;`, box);
+  await box.renderDocs({ slug: 'docs-proj', path: '/somewhere' });
+  return els['ps-docs'].innerHTML;
+}
 
 test('CLAUDE.md is listed even when it is missing — that is a signal, not an empty answer', async () => {
   const { mkdirSync } = await import('node:fs');

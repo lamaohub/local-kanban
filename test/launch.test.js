@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import Fastify from 'fastify';
 import { boardOnly, effortOf, startEffort, checksOnly, launchPick, withBoardAddress } from '../public/js/launch-rules.js';
+import { bin as fullPath } from '../src/bin-path.js'; // `bin` is a folder in some tests here
 
 const KB = fileURLToPath(new URL('../bin/kb', import.meta.url));
 const NASTY = [
@@ -77,7 +78,7 @@ test('the terminal line starts claude in the project folder with exactly the pro
 
 test('an AppleScript string reads back as the same text in a real osascript', { skip: process.platform !== 'darwin' && 'osascript is macOS only' }, () => {
   for (const s of NASTY) {
-    const out = execFileSync('osascript', ['-e', `return ${launch.appleString(s)}`]).toString();
+    const out = execFileSync(fullPath('osascript'), ['-e', `return ${launch.appleString(s)}`]).toString();
     // osascript ends its answer with one newline of its own; everything before it is the text, byte for byte
     assert.equal(out.replace(/\n$/, ''), s);
   }
@@ -85,7 +86,7 @@ test('an AppleScript string reads back as the same text in a real osascript', { 
 
 test('the app link carries the prompt and the folder the way the app reads them', () => {
   const spec = launch.launchSpec({ mode: 'desktop', text: NASTY[0], folder }, 'darwin');
-  assert.equal(spec.cmd, 'open');
+  assert.equal(spec.cmd, fullPath('open'));
   assert.equal(spec.args.length, 1, 'one argument to open, not a line for a shell');
   const url = new URL(spec.args[0]);
   assert.equal(`${url.protocol}//${url.host}${url.pathname}`, 'claude://code/new');
@@ -93,7 +94,7 @@ test('the app link carries the prompt and the folder the way the app reads them'
   assert.deepEqual(url.searchParams.getAll('folder'), [folder]);
   assert.equal(launch.launchSpec({ mode: 'desktop', host: 'local_ab-12' }, 'darwin').args[0], 'claude://code/continue?session=local_ab-12');
   assert.throws(() => launch.launchSpec({ mode: 'desktop', text: 'x' }, 'linux'), /only on macOS/);
-  assert.equal(launch.launchSpec({ mode: 'terminal', text: 'x', folder }, 'linux').cmd, 'x-terminal-emulator');
+  assert.equal(launch.launchSpec({ mode: 'terminal', text: 'x', folder }, 'linux').cmd, fullPath('x-terminal-emulator'));
   assert.throws(() => launch.launchSpec({ mode: 'terminal', text: 'x' }, 'win32'), /no terminal/);
 });
 
@@ -208,7 +209,7 @@ test('Claude in the Terminal is given this board\'s address, through a real shel
       const line = launch.terminalCommand({ text: NASTY[0], folder, url });
       const script = launch.launchSpec({ mode: 'terminal', text: NASTY[0], folder, url }, 'darwin').args[1];
       assert.equal(script, `tell application "Terminal" to do script ${launch.appleString(line)}`);
-      assert.equal(execFileSync('osascript', ['-e', `return ${launch.appleString(line)}`]).toString().replace(/\n$/, ''), line);
+      assert.equal(execFileSync(fullPath('osascript'), ['-e', `return ${launch.appleString(line)}`]).toString().replace(/\n$/, ''), line);
     }
   } finally { rmSync(bin, { recursive: true, force: true }); }
 });

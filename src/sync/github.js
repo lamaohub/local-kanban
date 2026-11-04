@@ -2,12 +2,13 @@ import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { db, ghOwner, ghRepo, uiLang } from '../db.js';
 import { ghBinEnv } from '../config.js';
+import { bin } from '../bin-path.js';
 const GH_CANDIDATES = [
   '/opt/homebrew/bin/gh', '/usr/local/bin/gh', '/usr/bin/gh',
   '/home/linuxbrew/.linuxbrew/bin/gh', `${process.env.HOME}/.local/bin/gh`,
 ];
-const GH_FOUND = GH_CANDIDATES.find((p) => existsSync(p)) || 'gh';
-const ghBin = () => ghBinEnv() || GH_FOUND;
+const GH_FOUND = GH_CANDIDATES.find((p) => existsSync(p)) || null;
+const ghBin = () => ghBinEnv() || GH_FOUND || bin('gh');
 
 const PERMANENT = [
   /validation failed/i,

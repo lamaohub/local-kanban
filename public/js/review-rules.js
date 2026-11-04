@@ -91,6 +91,7 @@ const FAIL_WORDS = {
   manual: 'a task done by hand cannot be given to Claude',
   running: 'a Claude of the board already works on these tasks',
   'tmux-slow': 'tmux did not answer in time',
+  'tmux-broken': 'tmux was updated under the running terminals of the board',
 };
 /** The words for an automation's `error` — English, the Russian is in I18N_RU; null for a line that names no reason it knows. */
 export const failWord = (error) => FAIL_WORDS[String(error ?? '').match(/^([a-z-]+): /)?.[1]] ?? null;

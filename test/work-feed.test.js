@@ -100,6 +100,9 @@ test('a transcript line becomes feed items; the harness around the person is lef
   assert.equal(feed.lineItems(side, true)[0].text, 'b/c.js', 'reading a helper\'s own transcript keeps its lines');
   assert.equal(feed.toolSummary('mcp__Claude_Browser__navigate', { url: 'http://x' }), 'Claude Browser: navigate · http://x');
   assert.equal(feed.toolSummary('Grep', { pattern: 'foo', path: '/x/y/z' }), 'foo · y/z');
+  // a message to a helper says what it is about, or to whom it goes
+  assert.equal(feed.toolSummary('SendMessage', { to: 'reviewer', summary: 'check the tests', message: 'long words' }), 'check the tests', 'a message to a helper is a step with no words');
+  assert.equal(feed.toolSummary('SendMessage', { to: 'reviewer', message: 'long words' }), 'reviewer');
 });
 
 test('a request the person pasted is their words, not the harness around them', () => {

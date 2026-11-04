@@ -9,6 +9,7 @@ import { constants as osConstants, release, tmpdir, type as osType } from 'node:
 import { join } from 'node:path';
 import Fastify from 'fastify';
 import { screenCopy } from '../public/js/term-copy.js';
+import { bin } from '../src/bin-path.js';
 
 const TMUX = ['/opt/homebrew/bin/tmux', '/usr/local/bin/tmux', '/usr/bin/tmux'].find((p) => existsSync(p));
 const skip = !TMUX && 'tmux is not installed';
@@ -376,7 +377,7 @@ test('the tmux server of the board carries nothing of a task in its command line
   try {
     assert.equal(r.statusCode, 200, r.body);
     const pid = execFileSync(TMUX, ['-L', SOCKET, 'display-message', '-p', '#{pid}'], { encoding: 'utf8' }).trim();
-    const argv = execFileSync('ps', ['-o', 'command=', '-p', pid], { encoding: 'utf8' }).trim();
+    const argv = execFileSync(bin('ps'), ['-o', 'command=', '-p', pid], { encoding: 'utf8' }).trim();
     for (const word of ['claude', '--permission-mode', 'Bash(kb', 'PLN-1', 'ODD-1', '--name', 'new-session']) {
       assert.ok(!argv.includes(word), `the tmux server's command line has «${word}»: ${argv}`);
     }
@@ -529,7 +530,7 @@ async function exitDiagnosis(t, sid) {
     try { v = await f(); } catch (e) { v = `n/a (${String(e.message).split('\n')[0]})`; }
     t.diagnostic(`CK-466 ${what}: ${v}`);
   };
-  const sh = (cmd, args) => { try { return execFileSync(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] }).toString().trim(); } catch (e) { if (e.status === 1) return ''; throw e; } };
+  const sh = (cmd, args) => { try { return execFileSync(bin(cmd), args, { stdio: ['ignore', 'pipe', 'pipe'] }).toString().trim(); } catch (e) { if (e.status === 1) return ''; throw e; } };
   const tm = (...args) => sh(TMUX, ['-L', SOCKET, ...args]);
   const pane = `=kb-${sid}:`;
   const fields = 'dead=#{pane_dead} status=#{pane_dead_status} signal=#{pane_dead_signal}';
@@ -710,7 +711,7 @@ test('words typed to the terminal of a task back in To do move it to Preparation
 test('words typed after a hand-in, about the next task, leave the handed-in task in Review', { skip }, async () => {
   // a repository of its own: undoing the words must not hand this task the commit of the next one
   const repo = mkdtempSync(join(tmp, 'next-'));
-  const git = (...a) => execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { stdio: 'ignore' });
+  const git = (...a) => execFileSync(bin('git'), ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { stdio: 'ignore' });
   git('init', '-q');
   const pidp = db.prepare("INSERT INTO projects (slug, prefix, name, next_task_no, path) VALUES ('next', 'NXT', 'Next', 8, ?)").run(repo).lastInsertRowid;
   for (const n of [1, 2, 3, 4, 5, 6, 7]) db.prepare("INSERT INTO tasks (project_id, task_no, title, status) VALUES (?, ?, 'T', 'todo')").run(pidp, n);
@@ -775,7 +776,7 @@ test('words typed after a hand-in, about the next task, leave the handed-in task
 
 test('a turn that left the task untouched sends it back to Review; a commit, a changed file or a word to it keeps it in Doing', { skip }, async () => {
   const repo = mkdtempSync(join(tmp, 'turn-'));
-  const git = (...a) => execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { stdio: 'ignore' });
+  const git = (...a) => execFileSync(bin('git'), ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { stdio: 'ignore' });
   git('init', '-q');
   writeFileSync(join(repo, 'a.txt'), 'one\n');
   git('add', '.');
@@ -873,7 +874,7 @@ test('a turn that left the task untouched sends it back to Review; a commit, a c
 
 test('words about the task the session already works on leave the handed-in one in Review, files changed or not', { skip }, async () => {
   const repo = mkdtempSync(join(tmp, 'other-'));
-  const git = (...a) => execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { stdio: 'ignore' });
+  const git = (...a) => execFileSync(bin('git'), ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { stdio: 'ignore' });
   git('init', '-q');
   writeFileSync(join(repo, 'a.txt'), 'one\n');
   git('add', '.');

@@ -8,6 +8,22 @@ version it goes out as and opens an empty one again. Released sections are histo
 
 ## [Unreleased]
 
+## [2.0.0-beta.5]
+
+### Fixed
+
+- Going on with interrupted work: a card no longer says «Claude waits at its prompt» about a session that is at work after the board brought it back — the record is let go without a note, as it was before 2.0.0-beta.4.
+- A title or description the board refused no longer makes an open card send its edit again and again: it stays in the field as typed, the card says it is not saved, and the rest of the edit is saved once.
+- Health: the Russian text of the task «Fix» opens puts its counts of lines and characters in the right grammatical form.
+- Health: «Fix» opens one task even when it is pressed many times at once, and the board refuses it for a CLAUDE.md that is within the norms, by the same rule as the button.
+- Chat: a workflow or a background command still running in a turn older than the ones shown is listed while Claude waits for it, and work with no end and no word for over 2 hours is shown as «no word from it for over 2 h» instead of running for ever.
+- A tmux updated while its old server still runs no longer answers «try again in a few seconds» — the board says which tmux server to stop.
+- A limit line split by the terminal inside the date or the words is read whole, so the reset time is right.
+- Dropping a group of cards shows the page's and the board's refusals in one window.
+- Over Wi-Fi, a HEAD request for a page a guest may open passes like GET.
+- `kb note` with a task typed as `1` after `DM-1` no longer writes the same note twice.
+- A merge commit is told by its parents, not by a message starting with «Merge».
+
 ## [2.0.0-beta.4]
 
 ### Added

@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
 import vm from 'node:vm';
+import { bin } from '../src/bin-path.js';
 
 const S1 = '11111111-1111-4111-8111-111111111111';
 const S2 = '22222222-2222-4222-8222-222222222222';
@@ -135,7 +136,7 @@ test('GET /api/live gives the starting picture, checked against processes that r
 test('a registry file whose pid now belongs to another process is a closed session', async () => {
   // answers "alive", and the card said "working" about a stranger. Claude Code itself checks procStart, the
   // start of the process the way `ps -o lstart=` prints it in the C locale and UTC; so does the board now
-  const start = execFileSync('ps', ['-o', 'lstart=', '-p', String(process.pid)], { env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' } }).toString().trim();
+  const start = execFileSync(bin('ps'), ['-o', 'lstart=', '-p', String(process.pid)], { env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' } }).toString().trim();
   reg('101.json', { pid: process.pid, sessionId: S1, status: 'busy', statusUpdatedAt: 1000, procStart: 'Thu Jan  1 00:00:00 1970' });
   rmSync(join(claude, 'sessions', '202.json'), { force: true });
   assert.equal((await live.readRegistry()).get(S1).alive, false, 'a running process of another start is taken for the Claude of the file');
@@ -283,4 +284,25 @@ test('the end of a turn rings for a task in work, not for one in Ready to ship',
   assert.equal(box.ring(turn('doing')).size, 1);
   assert.equal(box.ring([{ id: 1, key: 'LV-1', status: 'ready', claude: 'limit', from: 'busy' }]).size, 1, 'a stop at the limit is news anyway');
   assert.equal(rang.length, 2);
+});
+
+// A task in Ready to ship takes the state of its session only while that session is on no other task: a Claude that went
+// on to the next task of its batch is at work there, and the card waiting for the word to ship says nothing of it.
+test('a task in Ready to ship has no state of its Claude once that Claude is on another task', async () => {
+  const S5 = '55555555-5555-4555-8555-555555555555';
+  db.prepare("INSERT INTO projects (slug, prefix, name, next_task_no) VALUES ('rdy','RD','Ready board',3)").run();
+  const pid = db.prepare("SELECT id FROM projects WHERE slug='rdy'").get().id;
+  for (const no of [1, 2]) db.prepare("INSERT INTO tasks (project_id, task_no, title, status) VALUES (?,?,?,'todo')").run(pid, no, `Ready ${no}`);
+  const move = (key, status) => app.inject({ method: 'PATCH', url: `/api/tasks/${key}`, headers: { 'x-claude-session': S5 }, payload: { status } });
+  for (const [key, status] of [['RD-1', 'prep'], ['RD-2', 'prep'], ['RD-1', 'doing'], ['RD-1', 'ready']]) assert.equal((await move(key, status)).statusCode, 200);
+  reg('505.json', { pid: 505, sessionId: S5, status: 'idle', statusUpdatedAt: 7000 });
+  try {
+    const at = async () => Object.fromEntries((await live.liveTasks(aliveOnly(505))).filter((x) => x.project === 'rdy').map((x) => [x.key, x.claude]));
+    assert.deepEqual(await at(), { 'RD-1': 'idle' }, 'a task in Ready to ship has no state while its Claude is on nothing else');
+    assert.equal((await move('RD-2', 'doing')).statusCode, 200);
+    assert.deepEqual(await at(), { 'RD-2': 'idle' }, 'a task in Ready to ship took the state of a Claude at work on another task');
+  } finally {
+    rmSync(join(claude, 'sessions', '505.json'), { force: true });
+    db.prepare("UPDATE tasks SET status = 'done' WHERE project_id = ?").run(pid);
+  }
 });

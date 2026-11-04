@@ -266,7 +266,7 @@ function handle(req, res) {
     forgetDoorStop(req.socket.remoteAddress);
     return letIn(res, port, req.url);
   }
-  const free = req.method === 'GET' && FREE_PATH.test(path);
+  const free = (req.method === 'GET' || req.method === 'HEAD') && FREE_PATH.test(path);
   if (!free && !hasPass(req, port)) {
     noteRefusal(req.socket.remoteAddress, cookieOf(req, cookieName(port)) ? 'oldpass' : 'nokey');
     if (path.startsWith('/api/')) return refuse(req, res, 401, 'the key of the board is needed');

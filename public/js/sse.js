@@ -649,6 +649,7 @@ const BOARD_WHY = {
   'no-claude': 'Claude Code (the claude command) is not found on this computer — install it, or pick another way to start tasks in Settings.',
   'too-long': "The prompt is too long for the board's terminal — start it in the Terminal or the Claude app (Settings), or shorten it.",
   'tmux-slow': 'tmux did not answer in time, so the board cannot tell whether a Claude already works on these tasks — press ▶ again in a few seconds.',
+  'tmux-broken': "tmux was updated while the board's terminals still run on the old one, and the new tmux cannot reach them. Close them with the command in Settings → Errors; the conversations are kept — «Continue» brings each one back.",
 };
 /** Continue the board's session `session` of the task `key` in its terminal; true — started. */
 export async function resumeOnBoard({ key, session, btn, again = false }) {

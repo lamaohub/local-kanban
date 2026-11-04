@@ -14,7 +14,8 @@ const SECRET = 'live-token-should-never-leave-the-machine';
 let app, tmp, claude, db, chat, queue, transcript, taskId;
 
 const line = (o) => `${JSON.stringify(o)}\n`;
-const at = (s) => `2026-10-22T10:00:${String(s).padStart(2, '0')}.000Z`;
+const BASE = Math.floor((Date.now() - 3600_000) / 60_000) * 60_000;
+const at = (s) => new Date(BASE + s * 1000).toISOString();
 const user = (s, text) => line({ type: 'user', timestamp: at(s), message: { role: 'user', content: text } });
 const said = (s, text) => line({ type: 'assistant', timestamp: at(s), message: { content: [{ type: 'text', text }] } });
 const call = (s, id, name, input) => line({ type: 'assistant', timestamp: at(s), message: { content: [{ type: 'tool_use', id, name, input }] } });
@@ -717,7 +718,9 @@ test('words with pictures sent while Claude worked stay in its turn, their pictu
     chatText: (s) => String(s), questionAsk: () => null, askBlock: () => null, renderAsks: () => {}, SHORT_MONTHS: [], document: { addEventListener: () => {} }, setTimeout, clearTimeout, modelLabel: () => '', sameModel: () => false, MODELS: [], drawerIsFull: () => false, setDrawerFull: () => {}, openDrawerFull: () => {}, setClaudeView: () => {}, pushLayer: () => {}, popLayer: () => {}, styledConfirm: async () => false, copyText: async () => true, plainLabel: (x) => String(x),
   };
   vm.runInNewContext(`${src}\nthis.turnHTML = turnHTML;`, box);
-  for (const t of [r.turns[0], { ...r.turns[0], open: true }]) {
+  const ended = { ...r.turns[0], open: false, ms: 9000 };
+  assert.match(box.turnHTML(ended, {}), /chat-done|chat-worked/, 'the ended turn is not drawn behind its bar');
+  for (const t of [r.turns[0], { ...r.turns[0], open: true }, ended]) {
     const html = box.turnHTML(t, { shot: (ref) => `/shot/${ref}`, working: Boolean(t.open) });
     assert.ok(html.includes(`/shot/${U}.1`) && html.includes('chat-mid') && !html.includes('[Image #'), html);
   }

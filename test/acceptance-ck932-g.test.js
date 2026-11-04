@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import vm from 'node:vm';
 import { paceWords } from '../public/js/pace-rules.js';
+import { bin } from '../src/bin-path.js';
 
 const here = (p) => new URL(`../${p}`, import.meta.url);
 const read = (p) => readFileSync(here(p), 'utf8');
@@ -19,7 +20,7 @@ function repo(pkgVersion, extra = () => {}) {
   copyFileSync(here('scripts/strip-comments.js'), join(dir, 'scripts/strip-comments.js'));
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'x', version: pkgVersion, type: 'module' }));
   extra(dir);
-  const g = (...a) => execFileSync('git', a, { cwd: dir, stdio: 'pipe' });
+  const g = (...a) => execFileSync(bin('git'), a, { cwd: dir, stdio: 'pipe' });
   g('init', '-q', '-b', 'dev'); g('add', '-A');
   g('-c', 'user.email=a@b', '-c', 'user.name=a', 'commit', '-qm', 'x');
   return dir;

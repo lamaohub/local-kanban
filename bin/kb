@@ -77,12 +77,12 @@ function key(id) {
 }
 // after the board wrote the note (code 1), and the retry is a new kb with nothing remembered — the same key lets
 // the board find what it already wrote instead of writing it twice. The same words from the same session again
-// stay one note; that repeats nothing a person would want twice.
-function noteKey(id, body) {
-  return 'kb-' + createHash('sha256').update(`${String(id).toUpperCase()}\n${SESSION}\n${body}`).digest('hex').slice(0, 40);
+// stay one note; that repeats nothing a person would want twice. The task is not in the key: the board keeps keys
+function noteKey(body) {
+  return 'kb-' + createHash('sha256').update(`${SESSION}\n${body}`).digest('hex').slice(0, 40);
 }
 async function postNote(id, body) {
-  const c = await api('POST', `/api/tasks/${key(id)}/comments`, { body, author: 'claude', client_key: noteKey(id, body) }, NOTE);
+  const c = await api('POST', `/api/tasks/${key(id)}/comments`, { body, author: 'claude', client_key: noteKey(body) }, NOTE);
   if (c.deleted) die(`kb: the same note was on ${id} and was deleted there — not written again; change the words to add it`);
   return c;
 }

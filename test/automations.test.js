@@ -748,9 +748,10 @@ test('what is typed in the field is not sent with the words of the board: they w
   kept.run.claude = 'idle';
   kept.deps.fieldEmpty = async () => false;
   await kept.r.tickResume(app, T0 + 2 * MIN);
-  await kept.r.tickResume(app, T0 + 11 * MIN);
+  await inEnglish(() => kept.r.tickResume(app, T0 + 11 * MIN));
   assert.equal(kept.told.length, 0);
   assert.equal(keptNow()[kept.sid], undefined, 'a field that stays full keeps the record past its wait');
+  assert.match(lastNote(kept.task.id), /waits at its prompt\. \(something is typed in Claude's field\)$/, 'a record given up on over a full field said nothing of why');
   await resumeOff(kept.r);
 });
 
@@ -776,8 +777,9 @@ test('a limit record, hours old by the reset, gets its full wait over a full fie
   full.run.claude = 'idle';
   full.deps.fieldEmpty = async () => false;
   await full.r.tickResume(app, late);
-  await full.r.tickResume(app, late + 11 * MIN);
+  await inEnglish(() => full.r.tickResume(app, late + 11 * MIN));
   assert.equal(keptNow()[full.sid], undefined, 'a full field holds a limit record for good');
+  assert.match(lastNote(full.task.id), /^The limit has reset, but .*\(something is typed in Claude's field\)$/, 'a limit record given up on over a full field said nothing');
   await resumeOff(full.r);
 });
 
@@ -790,6 +792,31 @@ test('words of a resume are for the minutes after it, not for a day later', asyn
   assert.equal(keptNow()[c.sid], undefined, 'the record stayed');
   assert.equal(boardNotes(c.task.id), 1, 'the record was given up on in silence');
   assert.match(lastNote(c.task.id), /could not tell Claude to go on/);
+  await resumeOff(c.r);
+});
+
+test('a resume record past its wait over a Claude at work goes in silence; one at its prompt says it and is in the journal', async () => {
+  const errs = () => db.prepare("SELECT message FROM app_errors WHERE message LIKE 'gave up telling %'").all().map((x) => x.message);
+  for (const state of ['busy', 'waiting']) { // a gone one is brought back anew: a new record, not this one
+    const c = await resumeCase();
+    await c.r.tickResume(app, T0);
+    c.run.claude = state;
+    await c.r.tickResume(app, T0 + 2 * MIN);
+    await inEnglish(() => c.r.tickResume(app, T0 + 11 * MIN));
+    assert.equal(keptNow()[c.sid], undefined, `a record over a Claude ${state} stayed past its wait`);
+    assert.equal(boardNotes(c.task.id), 0, `a Claude ${state} was said to wait at its prompt`);
+    await resumeOff(c.r);
+  }
+  // at work at one look, at its prompt by the end of the wait: it waits there, and an old state is no reason
+  const c = await resumeCase();
+  await c.r.tickResume(app, T0);
+  c.run.claude = 'busy';
+  await c.r.tickResume(app, T0 + 2 * MIN);
+  assert.equal(keptNow()[c.sid]?.held_by, 'state:busy');
+  c.run.claude = 'idle';
+  await inEnglish(() => c.r.tickResume(app, T0 + 11 * MIN));
+  assert.equal(lastNote(c.task.id), 'The board brought the interrupted session back but could not tell Claude to go on: it waits at its prompt.');
+  assert.ok(errs().some((m) => m.includes(`${c.task.key} to go on (resume): state:busy`)), 'the journal does not keep what held the words');
   await resumeOff(c.r);
 });
 
@@ -807,6 +834,7 @@ test('words of the limit failing again and again are given up on, and the card s
   assert.equal(keptNow()[c.sid], undefined);
   assert.equal(boardNotes(c.task.id), 1);
   assert.match(lastNote(c.task.id), /limit has reset, but the board could not/);
+  assert.match(lastNote(c.task.id), /\(the words did not reach the terminal\)$/, 'a record given up on over failing words said nothing of why');
   await resumeOff(c.r);
 });
 

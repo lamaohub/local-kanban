@@ -292,7 +292,7 @@ export default async function projectRoutes(app) {
     if (!spec) return reply.code(501).send({ error: `no folder dialog on ${process.platform}` });
     const [cmd, args] = spec;
     const res = await new Promise((done) => {
-      execFile(cmd, args, { timeout: 180000 }, (err, out, errOut) => done({ err, out: String(out || '').trim(), errOut: String(errOut || '') }));
+      execFile(bin(cmd), args, { timeout: 180000 }, (err, out, errOut) => done({ err, out: String(out || '').trim(), errOut: String(errOut || '') }));
     });
     if (res.err) {
       if (!res.out) return { path: null, cancelled: true };

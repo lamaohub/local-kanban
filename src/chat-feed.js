@@ -4,7 +4,7 @@ import { watch } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { emit } from './bus.js';
 import { helpersOf, humanText, ownWords, readTail, resultText, toolSummary } from './work-feed.js';
-import { inBackground, STOPS, wentBackground } from './own-wait.js';
+import { inBackground, OWN_WAIT_MAX_MS, STOPS, wentBackground } from './own-wait.js';
 
 export const CHAT_TEXT_MAX = 20000;  // a message longer than this is cut, with "…"
 export const TURNS_DEFAULT = 15;     // the newest turns a chat gets; "earlier" asks for more
@@ -571,15 +571,22 @@ export async function transcriptChat(path, { turns = TURNS_DEFAULT } = {}) {
   const n = Math.min(TURNS_MAX, Math.max(1, turns));
   const shown = all.slice(-n);
   const isHelper = (it) => it.kind === 'tool' && HELPER_TOOLS.has(it.tool);
-  // One that ended counts only for a while: reading every helper of a long session to see if it woke costs too much
+  // One that ended counts only for a while: reading every helper of a long session to see if it woke costs too much.
+  // background…» by it (own-wait.js) over an empty list
   const clock = Date.now();
-  const older = all.slice(0, Math.max(0, all.length - n)).flatMap((t) => t.items.filter((it) => isHelper(it) && (it.running || clock - (it.ended ?? 0) < WAKE_LOOK_MS)));
-  const wanted = new Set([...shown.flatMap((t) => t.items.filter(isHelper)), ...older].map((it) => it.id));
+  const ends = new Map(); // id of work running in the background → the end of the turn that started it
+  const turnEnd = (t) => t.items.reduce((m, it) => Math.max(m, it.at), t.at);
+  for (const t of all) for (const it of t.items) if (it.kind === 'tool' && it.running) ends.set(it.id, turnEnd(t));
+  const older = all.slice(0, Math.max(0, all.length - n)).flatMap((t) => t.items.filter((it) => it.kind === 'tool'
+    && (it.running || (isHelper(it) && clock - (it.ended ?? 0) < WAKE_LOOK_MS))));
+  const wanted = new Set([...shown.flatMap((t) => t.items.filter(isHelper)), ...older.filter(isHelper)].map((it) => it.id));
   let helpers = new Map();
   if (wanted.size) try { helpers = await helpersOf(path, wanted); } catch { /* a helper we cannot read is left out */ }
   const fresh = (id) => clock - (helpers.get(id)?.last ?? 0) < HELPER_LIVE_MS;
+  const lost = (id) => ends.has(id) && clock - Math.max(ends.get(id), helpers.get(id)?.last ?? 0) >= OWN_WAIT_MAX_MS;
   const stepOut = ({ id, steps, asked, picture, markdown, before, resumed, ended, ...it }) => {
     const h = helpers.get(id);
+    if (it.running && lost(id)) { it.running = false; it.lost = true; }
     // too). While it writes: one that woke and went with its Claude leaves no second end
     const woke = !it.running && ended !== undefined && h?.last > ended && fresh(id);
     if (woke) { it.running = true; delete it.ms; }
@@ -590,8 +597,8 @@ export async function transcriptChat(path, { turns = TURNS_DEFAULT } = {}) {
       ...(markdown && !it.error && it.ms !== undefined ? { doc: id } : {}) };
   };
   const out = shown.map((t) => ({ ...t, at: new Date(t.at).toISOString(), items: t.items.map(stepOut) }));
-  // one that wrote nothing for a while is not counted: a Claude gone with the machine leaves no end of its helpers
-  const going = older.filter((it) => fresh(it.id)).map(stepOut).filter((it) => it.running);
+  // a helper that wrote nothing for a while is not counted: a Claude gone with the machine leaves no end of its helpers.
+  const going = older.filter((it) => (isHelper(it) && helpers.has(it.id) ? fresh(it.id) : !isHelper(it))).map(stepOut).filter((it) => it.running);
   const waiting = c.waits.map((w) => ({ text: w.text, at: new Date(w.at).toISOString() }));
   return { turns: out, ...(going.length ? { going } : {}), earlier_n: Math.max(0, all.length - n), model: c.model || null, waiting };
 }

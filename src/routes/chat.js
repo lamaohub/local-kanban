@@ -1,6 +1,6 @@
 
 import { resolveTask, taskAttachmentPaths } from './tasks.js';
-import { CHAT_COLS, REPLY_MAX, TMUX_SLOW, claudeAtPrompt, paceOnScreen, phantomResize, phantomScreen, phantomSend, taskTerminal, watched } from '../phantom.js';
+import { CHAT_COLS, REPLY_MAX, claudeAtPrompt, paceOnScreen, phantomResize, phantomScreen, phantomSend, taskTerminal, tmuxRefusal, watched } from '../phantom.js';
 import { SESSION_ID_RE, taskSessions, transcriptNow } from '../claude-sessions.js';
 import { DOC_MAX, PICTURE_MAX, PICTURE_TYPES, SHOT_RE, TURNS_DEFAULT, TURNS_MAX, chatDoc, chatHash, chatPicture, chatShot, isMarkdown, pictureKindOf, saidCommand, transcriptChat, watchChat } from '../chat-feed.js';
 import { createReadStream } from 'node:fs';
@@ -88,7 +88,7 @@ export default async function chatRoutes(app) {
     return t;
   };
   const noClaude = (reply, term) => (term?.unknown
-    ? reply.code(409).send({ error: TMUX_SLOW, reason: 'tmux-slow' })
+    ? reply.code(409).send(tmuxRefusal(term))
     : reply.code(409).send({ error: 'no Claude of the board works on this task — the chat can only be read', reason: 'gone' }));
 
   app.get('/api/tasks/:id/chat', async (req, reply) => {

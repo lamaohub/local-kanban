@@ -9,7 +9,7 @@ let tmp, claude, dir, chat, wait;
 let n = 0;
 
 const line = (o) => `${JSON.stringify(o)}\n`;
-const T0 = Date.parse('2026-11-02T13:00:00.000Z');
+const T0 = Math.floor((Date.now() - 3600_000) / 1000) * 1000;
 const at = (s) => new Date(T0 + s * 1000).toISOString();
 const user = (s, text) => line({ type: 'user', timestamp: at(s), message: { role: 'user', content: text } });
 const said = (s, text) => line({ type: 'assistant', timestamp: at(s), message: { content: [{ type: 'text', text }] } });
@@ -181,4 +181,46 @@ test('Claude waits for a helper launched with no flag, and for one it brought ba
   const again = user(1, 'Go on') + stop + call(3, 'b1', 'SendMessage', { to: 'a1', message: 'Go on' }) + resumed(4, 'b1', 'a1') + said(5, 'Waiting.');
   assert.equal(wait.ownWaitIn(ln(again))?.own, true, 'a stop before the helper came back counted for the run after it');
   assert.equal(wait.ownWaitIn(ln(again + note(90, 'a1', 'completed')))?.own, false, 'an end naming only the helper was not seen');
+});
+
+const ago = (h, s = 0) => new Date(Date.now() - h * 3600_000 + s * 1000).toISOString();
+const turnsPast = (from) => { let t = ''; for (let i = 0; i < chat.TURNS_DEFAULT + 2; i += 1) t += user(from + i * 2, `Turn ${i}`) + said(from + 1 + i * 2, 'ok') + end(from + 1 + i * 2); return t; };
+const wfLaunch = (when, id, task, name) => line({ type: 'assistant', timestamp: when, message: { content: [{ type: 'tool_use', id, name: 'Workflow', input: { script: 'x' } }] } })
+  + line({ type: 'user', timestamp: when, toolUseResult: { status: 'async_launched', taskId: task, summary: name }, message: { content: [{ type: 'tool_result', tool_use_id: id, content: `Workflow launched in background. Task ID: ${task}` }] } });
+
+test('a workflow or a command still in the background in a turn past the shown ones is said', async () => {
+  const start = user(1, 'Go') + wfLaunch(at(2), 'w1', 'wf1', 'Audit of the board')
+    + call(3, 'c1', 'Bash', { command: 'npm test', description: 'Run the suite', run_in_background: true }) + answer(3, 'c1', 'Command running in background with ID: b1.') + end(4);
+  const c = await chat.transcriptChat(session(start + turnsPast(10)));
+  assert.ok(!tools(c).some((i) => i.tool === 'Workflow'), 'the turn is past the shown ones');
+  assert.deepEqual(c.going?.map((i) => i.text).sort(), ['Audit of the board', 'Run the suite'], 'the chat said «in the background» over an empty list');
+  const done = await chat.transcriptChat(session(start + note(5, 'wf1', 'completed', 'w1') + turnsPast(10)));
+  assert.deepEqual(done.going?.map((i) => i.text), ['Run the suite'], 'a workflow that ended is still said');
+  // launched three hours ago and never heard of — Claude is not counted waiting for it either (OWN_WAIT_MAX_MS)
+  const old = user(1, 'Go').replace(at(1), ago(3)) + wfLaunch(ago(3, 1), 'w1', 'wf1', 'Audit of the board') + end(5).replace(at(5), ago(3, 2));
+  assert.equal((await chat.transcriptChat(session(old + turnsPast(10)))).going, undefined, 'work silent for hours is said to run');
+});
+
+test('a helper of the shown turns with no end and no word for hours is not in the background for ever', async () => {
+  const text = user(1, 'Go').replace(at(1), ago(30)) + call(2, 'h1', 'Agent', { description: 'Gone helper', prompt: 'x' }).replace(at(2), ago(30))
+    + launched(3, 'h1', 'a1').replace(at(3), ago(30)) + end(4).replace(at(4), ago(30));
+  let c = await chat.transcriptChat(session(text, { a1: ['h1', sideAt(ago(29), 'Bash', 'Last step')] }));
+  assert.deepEqual([agent(c).running, agent(c).lost], [false, true], 'a helper silent for a day still runs');
+  assert.equal(agent(c).ms, undefined, 'it read as ended');
+  // the same, with a line of its own a minute ago: it runs
+  c = await chat.transcriptChat(session(text, { a1: ['h1', sideNow('Still at it')] }));
+  assert.deepEqual([agent(c).running, agent(c).lost], [true, undefined]);
+});
+
+test('the page counts a SendMessage and a workflow at work as helpers', async () => {
+  const { readFileSync } = await import('node:fs');
+  const vm = (await import('node:vm')).default;
+  const src = readFileSync(new URL('../public/js/chat.js', import.meta.url), 'utf8');
+  const at0 = (head) => { const i = src.indexOf(head); assert.ok(i >= 0, head); return i; };
+  const take = (head) => { const i = at0(head); return src.slice(i, src.indexOf(head.startsWith('export function') ? '\n}\n' : '\n', i) + (head.startsWith('export function') ? 3 : 1)); };
+  const box = {};
+  vm.createContext(box);
+  vm.runInContext(`${take('const HELPER_TOOLS')}${take('const isHelper')}${take('const goingSteps')}${take('export function running').replace('export ', '')}\nthis.running = running;`, box);
+  const d = { going: [{ kind: 'tool', tool: 'Workflow', running: true }], turns: [{ items: [{ kind: 'tool', tool: 'SendMessage', running: true }, { kind: 'tool', tool: 'Bash', running: true }, { kind: 'tool', tool: 'Agent', running: false }] }] };
+  assert.deepEqual({ ...box.running(d) }, { helpers: 2, commands: 1 }, 'a helper brought back or a workflow counted as a command');
 });

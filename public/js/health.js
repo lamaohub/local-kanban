@@ -6,7 +6,7 @@ import { selectProject, styledAlert, styledConfirm } from './sidebar.js';
 import { refusalLine } from './unsaved.js';
 import { openDrawer } from './drawer.js';
 import { launchInClaude, taskPromptText } from './sse.js';
-import { fileState, healthCounts, healthGroups, startTotal } from './health-rules.js';
+import { fileState, fixable, healthCounts, healthGroups, startTotal } from './health-rules.js';
 
 const FRESH_MS = 30000;
 const DOCS_URL = 'https://code.claude.com/docs/en/memory';
@@ -51,7 +51,7 @@ function projectHTML(p, d) {
     : `<span class="hl-size muted">${esc(tr('no CLAUDE.md of its own'))}</span>`;
   const start = `<span class="hl-start${total.over ? ' hl-heavy' : ''}" title="${esc(tr('Everything a session reads when it starts in this folder, with your own files'))}">`
     + `${esc(tr('at the start'))}: ${esc(num(total.chars))} ${esc(plural(total.chars, 'character', 'characters'))}</span>`;
-  const fix = st === 'heavy' || st === 'long'
+  const fix = p.main && fixable(p.main, norms)
     ? `<button type="button" class="btn-ghost hl-fix" data-slug="${esc(p.slug)}" title="${esc(tr('Open the task «Shrink CLAUDE.md» and start Claude on it — only while nobody works in the folder of the project'))}">${esc(tr('Fix'))}</button>`
     : '';
   const files = [...p.files, ...p.nested];

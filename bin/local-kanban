@@ -13,6 +13,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, writeFileSync, mkdirSync, symlinkSync } from 'node:fs';
 import { join, dirname, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { bin } from '../src/bin-path.js'; // a program by its full path, as the board starts them
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -56,7 +57,7 @@ function ghReady() {
   // the sync needs more than authentication: without the project scope create_issue succeeds
   // but the card never lands on the Projects v2 board, and the user hunts for the cause
   try {
-    const out = execFileSync('gh', ['auth', 'status'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    const out = execFileSync(bin('gh'), ['auth', 'status'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     return { ok: true, project: /\bproject\b/.test(out) };
   } catch {
     return { ok: false, project: false };
