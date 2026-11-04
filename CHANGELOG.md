@@ -8,6 +8,12 @@ version it goes out as and opens an empty one again. Released sections are histo
 
 ## [Unreleased]
 
+## [2.0.0-beta.8]
+
+### Fixed
+
+- A task you had handed in that went back to Doing because you wrote to its Claude: every `kb` command on it now tells that Claude the task is in Doing and how to hand it in again — before, it went on reporting the task as in Review.
+
 ## [2.0.0-beta.7]
 
 ### Added

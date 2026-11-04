@@ -304,6 +304,20 @@ export function moveTyped(t, sid) {
   return { prep, doing };
 }
 
+const pad2 = (n) => String(n).padStart(2, '0');
+/** The warning for a Claude session (`sid`) about task `t` that typed words moved from Review back to doing and that
+    is still there, or null. The way back follows the project's gate: with «ships on the word» doing → review is refused. */
+export function typedBackWarning(t, sid) {
+  if (!sid || t?.status !== 'doing') return null;
+  const e = db.prepare('SELECT e.created_at, m.kind FROM task_events e LEFT JOIN typed_moves m ON m.event_id = e.id WHERE e.task_id = ? ORDER BY e.id DESC LIMIT 1').get(t.id);
+  if (e?.kind !== 'typed') return null;
+  const at = new Date(String(e.created_at).replace(' ', 'T') + 'Z');
+  const when = Number.isNaN(at.getTime()) ? '' : ` at ${pad2(at.getHours())}:${pad2(at.getMinutes())}`;
+  const again = gateOfProject(t.project_id) ? `kb mv ${t.key} ready` : `kb review ${t.key} "…"`;
+  return { text: `${t.key} is in doing — the person's words moved it back from review${when}; when the work on them is done, hand it in again: ${again}` };
+}
+const typedWarned = (t, sid) => { const w = typedBackWarning(t, sid); return w ? { warning: w } : {}; };
+
 const typedBack = new Map(); // task id → { sid, event, at, seconds, truncated, print }: moved from Review to doing by typed words
 function holdTyped(id, m) {
   typedBack.set(id, m);
@@ -512,7 +526,7 @@ export default async function taskRoutes(app) {
 
   app.get('/api/tasks/:id', async (req, reply) => {
     const t = taskOr404(req, reply); if (!t) return reply;
-    return fullTask(t);
+    return { ...(await fullTask(t)), ...typedWarned(t, requestSession(req)) };
   });
 
   app.get('/api/live', async () => ({ tasks: await liveTasks(), questions: await terminalQuestions(), projects: currentWorkProjects() }));
@@ -631,10 +645,10 @@ export default async function taskRoutes(app) {
     const plan = planPatch(t, b, sid);
     if (plan.error) { const { code, ...body } = plan; return reply.code(code).send(body); }
     const host = requestHostSession(req);
-    if (!plan.updates.length) { bindSession(t.id, t.status, sid, host, { claim: b.status !== undefined }); return { ...t, labels: JSON.parse(t.labels || '[]'), ...flag }; }
+    if (!plan.updates.length) { bindSession(t.id, t.status, sid, host, { claim: b.status !== undefined }); return { ...t, labels: JSON.parse(t.labels || '[]'), ...typedWarned(t, sid), ...flag }; }
     const fresh = db.transaction(() => commitPatch(t, b, plan, sid, host))();
     afterPatch(t, b, fresh, { sid });
-    const warning = secondCheck(t, fresh);
+    const warning = secondCheck(t, fresh) || typedBackWarning(fresh, sid);
     return { ...fresh, labels: JSON.parse(fresh.labels || '[]'), ...(warning ? { warning } : {}), ...flag };
   });
 
@@ -712,7 +726,7 @@ export default async function taskRoutes(app) {
       return reply.code(400).send({ error: `client_key must be a string of up to ${COMMENT_KEY_MAX} characters` });
     }
     const sent = clientKey && db.prepare('SELECT * FROM task_comments WHERE task_id = ? AND client_key = ?').get(t.id, clientKey);
-    if (sent) return reply.code(200).send(sent);
+    if (sent) return reply.code(200).send({ ...sent, ...typedWarned(t, requestSession(req)) });
     // and a comment deleted in between stays deleted: the resend is delivered, with nothing written
     if (clientKey && db.prepare('SELECT 1 FROM comment_keys_deleted WHERE task_id = ? AND client_key = ?').get(t.id, clientKey)) {
       return reply.code(200).send({ deleted: true, client_key: clientKey });
@@ -724,7 +738,7 @@ export default async function taskRoutes(app) {
     enqueue('add_comment', t.id, { ...snapshot(t), comment_author: c.author, comment_body: c.body });
     kick();
     emit('task.comment', { task_id: t.id, key: t.key, project: t.project, comment: c, comments_n: commentsN(t.id) });
-    return reply.code(201).send(c);
+    return reply.code(201).send({ ...c, ...typedWarned(t, requestSession(req)) });
   });
 
   app.delete('/api/tasks/:id/comments/:commentId', (req, reply) => {
