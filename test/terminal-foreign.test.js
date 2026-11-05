@@ -129,3 +129,31 @@ test('«Continue» does not clear the exited pane of another board to start its 
   assert.equal(ours.statusCode, 200, `«Continue» of this board's own exited Claude was refused: ${ours.body}`);
   assert.equal(ours.json().resumed, true);
 });
+
+// The panes here run `sleep`: no registry, nothing on the screen, so each reads as a Claude at its prompt
+test('the room the fix of an automation makes never closes another board\'s or nobody\'s terminal', { skip }, async () => {
+  const { ADOPT_TOKEN } = await import('../src/claude-sessions.js');
+  const { setLookHold } = await import('../src/phantom.js');
+  setLookHold(0); // a look of an earlier test does not hold the terminal: only the port decides
+  for (const sid of [THEIRS_LIVE, NO_URL]) {
+    const r = await inject('POST', '/api/launch', { mode: 'board', text: 'go', project: 'frn', keys: [keys[sid]], makeRoom: ADOPT_TOKEN });
+    assert.equal(r.statusCode, 409, `${sid}: ${r.body}`);
+    assert.ok(alive(sid) && !dead(sid), `the room of a fix closed ${sid === NO_URL ? 'a terminal no board says is its own' : 'a live Claude another board started'}`);
+  }
+});
+
+test('the room the fix of an automation makes does close this board\'s own Claude at its prompt', { skip }, async () => {
+  const { ADOPT_TOKEN } = await import('../src/claude-sessions.js');
+  const { setLookHold } = await import('../src/phantom.js');
+  setLookHold(0);
+  const sid = 'aaaaaaaa-0000-4000-8000-0000000000a6';
+  const pid = db.prepare("SELECT id FROM projects WHERE slug = 'frn'").get().id;
+  const id = db.prepare("INSERT INTO tasks (project_id, task_no, title, status) VALUES (?, 6, 'T', 'review')").run(pid).lastInsertRowid;
+  const { tieLaunched, markBoardSession } = await import('../src/claude-sessions.js');
+  tieLaunched(id, sid);
+  markBoardSession(sid);
+  pane(sid, OUR_PORT, 'sleep 600');
+  const r = await inject('POST', '/api/launch', { mode: 'board', text: 'go', project: 'frn', keys: ['FRN-6'], makeRoom: ADOPT_TOKEN });
+  assert.equal(r.statusCode, 200, `the stand: a fix found no room by this board's own resting Claude: ${r.body}`);
+  assert.ok(!alive(sid), 'the room of a fix left this board\'s own resting Claude');
+});

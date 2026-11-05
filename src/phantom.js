@@ -168,6 +168,8 @@ function unknownPane(text) {
 }
 /** The refusal of a request about such a terminal: {error, reason} — `tmux-broken` for good, `tmux-slow` for this once. */
 export const tmuxRefusal = (term) => (term?.broken ? { error: tmuxBrokenWords(), reason: 'tmux-broken' } : { error: TMUX_SLOW, reason: 'tmux-slow' });
+/** A failed start (runPhantom) that tmux refused for good: the refusal `tmux-broken` (logged as a look would), or null. */
+export const startRefusal = (text) => (unknownPane(String(text || '')).broken ? tmuxRefusal({ broken: true }) : null);
 const pane = (sid) => `=${sessionName(sid)}:`; // `=` — this very session, not one whose name starts so
 
 const STATE_FORMAT = '#{pane_dead}|#{pane_dead_status}|#{window_width}|#{pane_pid}|#{pid}|#{pane_dead_signal}';

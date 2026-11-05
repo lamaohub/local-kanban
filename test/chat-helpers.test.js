@@ -135,17 +135,19 @@ test('a workflow is a helper in the background, named by its launch, ended by it
 });
 
 test('a helper at work in a turn past the shown ones is still said', async () => {
-  let text = user(1, 'Go') + call(2, 'h1', 'Agent', { description: 'Old helper', prompt: 'x' }) + launched(3, 'h1', 'a1') + call(4, 'h2', 'Agent', { description: 'Dead helper', prompt: 'x' }) + launched(5, 'h2', 'a2') + end(6);
+  let text = user(1, 'Go') + call(2, 'h1', 'Agent', { description: 'Old helper', prompt: 'x' }) + launched(3, 'h1', 'a1') + call(4, 'h2', 'Agent', { description: 'Quiet helper', prompt: 'x' }) + launched(5, 'h2', 'a2') + end(6);
   for (let i = 0; i < chat.TURNS_DEFAULT + 2; i += 1) text += user(10 + i * 2, `Turn ${i}`) + said(11 + i * 2, 'ok') + end(11 + i * 2);
   // now, and hours ago: a helper Claude never heard of again is not at work for ever
   const live = line({ type: 'assistant', isSidechain: true, timestamp: new Date().toISOString(), message: { content: [{ type: 'tool_use', id: 'x', name: 'Bash', input: { description: 'Live step' } }] } });
+  // header counts Claude waiting for it (OWN_WAIT_MAX_MS), and so does the same helper in a shown turn
   const c = await chat.transcriptChat(session(text, { a1: ['h1', live], a2: ['h2', side(40, 'Bash', 'Long ago')] }));
   assert.ok(!tools(c).some((i) => i.tool === 'Agent'), 'the turn is past the shown ones');
-  assert.deepEqual(c.going.map((i) => i.text), ['Old helper'], 'a helper silent for hours counted, or a live one was lost');
+  assert.deepEqual(c.going.map((i) => i.text), ['Old helper', 'Quiet helper'], 'a live helper was lost, or one on a long quiet step left the list');
   assert.deepEqual(c.going[0].helper.now, { tool: 'Bash', text: 'Live step' });
   assert.ok(!JSON.stringify(c.going).includes('"id"'), 'the ids of the steps went to the page');
-  // ended, then woke, past the shown turns; the note came a minute ago
+  // ended, then woke, past the shown turns; the note came a minute ago (the quiet one has ended by then)
   const ago = new Date(Date.now() - 60_000).toISOString();
+  text += line({ type: 'queue-operation', operation: 'enqueue', timestamp: ago, content: '<task-notification>\n<task-id>a2</task-id>\n<tool-use-id>h2</tool-use-id>\n<status>completed</status>\n</task-notification>' });
   const ended = line({ type: 'queue-operation', operation: 'enqueue', timestamp: ago, content: '<task-notification>\n<task-id>a1</task-id>\n<tool-use-id>h1</tool-use-id>\n<status>completed</status>\n</task-notification>' });
   const woke = await chat.transcriptChat(session(text + ended, { a1: ['h1', live] }));
   assert.deepEqual(woke.going?.map((i) => i.text), ['Old helper'], 'a helper that woke past the shown turns was lost');
@@ -223,4 +225,29 @@ test('the page counts a SendMessage and a workflow at work as helpers', async ()
   vm.runInContext(`${take('const HELPER_TOOLS')}${take('const isHelper')}${take('const goingSteps')}${take('export function running').replace('export ', '')}\nthis.running = running;`, box);
   const d = { going: [{ kind: 'tool', tool: 'Workflow', running: true }], turns: [{ items: [{ kind: 'tool', tool: 'SendMessage', running: true }, { kind: 'tool', tool: 'Bash', running: true }, { kind: 'tool', tool: 'Agent', running: false }] }] };
   assert.deepEqual({ ...box.running(d) }, { helpers: 2, commands: 1 }, 'a helper brought back or a workflow counted as a command');
+});
+
+test('a step with no word for over 2 h says so on the page, in both languages (CK-959)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const vm = (await import('node:vm')).default;
+  const src = readFileSync(new URL('../public/js/chat.js', import.meta.url), 'utf8');
+  const core = readFileSync(new URL('../public/js/core.js', import.meta.url), 'utf8');
+  const open = core.indexOf('const I18N_RU = ') + 'const I18N_RU = '.length;
+  const RU = new Function(`return (${core.slice(open, core.indexOf('\n};', open) + 2)})`)();
+  const take = (head, end = '\n}\n') => { const i = src.indexOf(head); assert.ok(i >= 0, head); return src.slice(i, src.indexOf(end, i) + end.length); };
+  const rowWith = (tr) => {
+    const box = { tr, esc: String, ic: () => '', plural: (n, a, b) => (n === 1 ? a : b), dur: () => '', timesWords: () => '', TIMES_TITLE: '' };
+    vm.createContext(box);
+    vm.runInContext(`${take('const STEP_KIND = {', '\n};\n')}${take('function clockOf(')}${take('function stepRow(')}\nthis.row = stepRow;`, box);
+    return box.row;
+  };
+  const lost = { kind: 'tool', tool: 'Agent', text: 'Check the app', running: false, lost: true, helper: { steps: 3 } };
+  const en = rowWith((s) => s);
+  assert.match(en(lost), /class="chat-bg">no word from it for over 2 h</, 'a helper gone silent reads as ended');
+  assert.doesNotMatch(en({ ...lost, lost: undefined, ms: 5000 }), /no word from it/, 'an ended helper reads as lost');
+  assert.doesNotMatch(en({ ...lost, running: true, lost: undefined, at: new Date().toISOString() }), /no word from it/, 'a running helper reads as lost');
+  const ru = rowWith((s) => (Object.hasOwn(RU, s) ? RU[s] : `MISSING<${s}>`))(lost);
+  assert.doesNotMatch(ru, /MISSING</, `words with no translation: ${ru}`);
+  const words = RU['no word from it for over 2 h'];
+  assert.ok(words && ru.includes(words) && /[\u0400-\u04ff]/.test(words), 'the Russian chat says it in English');
 });

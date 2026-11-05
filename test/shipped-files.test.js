@@ -103,14 +103,32 @@ test('the request to support the project points at a page that exists', () => {
     'the About section stopped linking to the page');
 });
 
+// grep -q leaves on the first match and curl dies writing the rest (code 23): under pipefail a good page failed the
+// step whenever curl had not finished in time. A shell line goes on after a trailing backslash, and the workflows
+// wrap long commands that way: the lines are joined before looking, or `curl … \` + `| grep -q …` slips past.
+const pipesCurlIntoQuietGrep = (sh) => /curl[^\n|]*\|\s*grep(\s+-[\w-]+)*\s+(-\w*q\w*|--quiet|--silent)\b/
+  .test(sh.replace(/\\\r?\n/g, ' '));
+
 test('the install check asks for the page, not only for the API', () => {
   for (const wf of ['test.yml', 'publish.yml']) {
     const yml = readFileSync(new URL(`../.github/workflows/${wf}`, import.meta.url), 'utf8');
     assert.match(yml, /<div id="board"/, `${wf} would stay green on a package built without public/`);
-    // grep -q leaves on the first match and curl dies writing the rest (code 23): under pipefail
-    // a good page failed the step whenever curl had not finished in time
-    assert.doesNotMatch(yml, /curl[^\n|]*\|\s*grep\s+-q/, `${wf} pipes curl into grep -q, which fails at random under pipefail`);
+    assert.equal(pipesCurlIntoQuietGrep(yml), false, `${wf} pipes curl into grep -q, which fails at random under pipefail`);
   }
+  const caught = [
+    'curl -fsS http://127.0.0.1:3199/ | grep -q board',
+    'curl -fsS http://127.0.0.1:3199/ \\\n            | grep -q board \\\n            || exit 1',
+    'curl -fsS http://127.0.0.1:3199/ | \\\n  grep -q board',
+    'curl -fsS http://127.0.0.1:3199/ |grep -Fq board',
+    'curl -fsS http://127.0.0.1:3199/ | grep -F --quiet board',
+  ];
+  for (const sh of caught) assert.equal(pipesCurlIntoQuietGrep(sh), true, `not seen: ${JSON.stringify(sh)}`);
+  const fine = [
+    'curl -fsS -o "$RUNNER_TEMP/page.html" http://127.0.0.1:3199/ \\\n  || { echo no; exit 1; }\ngrep -q board "$RUNNER_TEMP/page.html"',
+    'curl -fsS http://127.0.0.1:3199/ >/dev/null\necho ok | grep -q ok',
+    'curl -fsS http://127.0.0.1:3199/ | grep board',
+  ];
+  for (const sh of fine) assert.equal(pipesCurlIntoQuietGrep(sh), false, `seen where there is none: ${JSON.stringify(sh)}`);
 });
 
 test('the release script leaves npm to CI and says how to check it', (t) => {

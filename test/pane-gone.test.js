@@ -25,6 +25,8 @@ before(async () => {
     '  exiting) echo "lost server" >&2; exit 1;;',
   '  empty) echo "no current target" >&2; exit 1;;',
     '  mismatch) echo "protocol version mismatch (client 8, server 7)" >&2; exit 1;;',
+    // the first call finds no session, every next one is refused for good: «Continue» looks at its pane after the task's look
+    `  gonethenmismatch) echo mismatch > '${said}'; echo "can't find session: =kb-x" >&2; exit 1;;`,
     '  dead) echo "1|1|120|4242|4141";;',
     '  up) echo "0||120|4242|4141";;',
     `  chain) case "$*" in *list-panes*) echo "kb-${SID}|0";; *) echo "can't find pane: kb-x" >&2; exit 1;; esac;;`,
@@ -128,4 +130,76 @@ test('a terminal tmux did not answer about is not «not running», and the chat 
     assert.deepEqual((await app.inject({ method: 'GET', url: '/api/tasks/PG-1/terminal' })).json(), { session: null });
     assert.equal((await app.inject({ method: 'GET', url: `/api/tasks/PG-1/chat?session=${SID}` })).json().send, false);
   } finally { await app.close(); }
+});
+
+// the mismatch — and answered 500 with tmux's raw words, no `tmux-broken`, nothing in the error log. Said as a look says it.
+test('a start inside the board that tmux refuses for good says what to do, and moves nothing', async () => {
+  process.env.KB_CLAUDE_DIR = join(dir, 'claude');
+  mkdirSync(join(dir, 'claude', 'projects'), { recursive: true });
+  const fake = join(dir, 'bin', 'claude');
+  writeFileSync(fake, '#!/bin/sh\nexit 0\n');
+  chmodSync(fake, 0o755);
+  process.env.KB_CLAUDE_BIN = fake; // never the real one
+  delete process.env.KB_LAUNCH_DRYRUN;
+  const folder = join(dir, 'proj');
+  mkdirSync(folder, { recursive: true });
+  const { db } = await import('../src/db.js');
+  const { ghState } = await import('../src/sync/worker.js');
+  ghState.available = false; ghState.lastCheck = Date.now() + 1e9;
+  db.prepare("INSERT INTO projects (slug, prefix, name, next_task_no, path) VALUES ('pb','PB','start',2,?)").run(folder);
+  const pid = db.prepare("SELECT id FROM projects WHERE slug='pb'").get().id;
+  const id = db.prepare("INSERT INTO tasks (project_id, task_no, title, status) VALUES (?,1,'Start me','todo')").run(pid).lastInsertRowid;
+  const Fastify = (await import('fastify')).default;
+  const app = Fastify();
+  await app.register((await import('../src/routes/system.js')).default);
+  await app.ready();
+  try {
+    answer('mismatch');
+    const r = await app.inject({ method: 'POST', url: '/api/launch', payload: { mode: 'board', text: 'Do PB-1', project: 'pb', keys: ['PB-1'] } });
+    assert.deepEqual([r.statusCode, r.json().reason], [409, 'tmux-broken'], `a start tmux refused for good: ${r.body}`);
+    assert.match(r.json().error, new RegExp(`tmux -L ${process.env.KB_TMUX_SOCKET} kill-server`), 'the refusal does not say what to do');
+    assert.ok(!r.json().error.includes('protocol version'), 'tmux\'s raw words went to the page');
+    assert.equal(db.prepare('SELECT status FROM tasks WHERE id = ?').get(id).status, 'todo', 'a start that did not happen moved the task');
+    // the error log says it once an hour, as a look does (the look of the test above said it already)
+    assert.ok(db.prepare("SELECT 1 FROM app_errors WHERE message LIKE 'tmux was updated%'").get(), 'the error log does not say it');
+  } finally { await app.close(); }
+});
+
+// tmux that cannot reach its old server is refused for good with what to do, not «try again in a few seconds»
+test('a start or «Continue» inside the board over a terminal tmux refuses for good says so, not «tmux was slow»', async () => {
+  const SID2 = '6a6e0000-0000-4000-8000-000000000961';
+  const folder = join(dir, 'folder-961');
+  mkdirSync(folder);
+  process.env.KB_LAUNCH_DRYRUN = '1'; // no Claude and no terminal is started: every refusal here comes before the start
+  const { db } = await import('../src/db.js');
+  const { ghState } = await import('../src/sync/worker.js');
+  ghState.available = false; ghState.lastCheck = Date.now() + 1e9;
+  const pid = db.prepare("INSERT INTO projects (slug, prefix, name, path, next_task_no) VALUES ('pl','PL','launch',?,2)").run(folder).lastInsertRowid;
+  const id = db.prepare("INSERT INTO tasks (project_id, task_no, title, status) VALUES (?,1,'Tied','todo')").run(pid).lastInsertRowid;
+  db.prepare('INSERT INTO task_sessions (task_id, session_id) VALUES (?, ?)').run(id, SID2);
+  sessions.markBoardSession(SID2);
+  const Fastify = (await import('fastify')).default;
+  const app = Fastify();
+  await app.register((await import('../src/routes/system.js')).default);
+  await app.ready();
+  const launch = (payload) => app.inject({ method: 'POST', url: '/api/launch', payload: { mode: 'board', project: 'pl', keys: ['PL-1'], ...payload } });
+  const refusedForGood = (r, what) => {
+    assert.equal(r.statusCode, 409, `${what}: ${r.body}`);
+    assert.equal(r.json().reason, 'tmux-broken', `${what}: a refusal for good read as one for a few seconds`);
+    assert.match(r.json().error, new RegExp(`tmux -L ${process.env.KB_TMUX_SOCKET} kill-server`), `${what}: the refusal does not say what to do`);
+    assert.deepEqual(r.json().keys, ['PL-1'], what);
+  };
+  try {
+    answer('mismatch');
+    refusedForGood(await launch({ text: 'go' }), 'a start');
+    answer('late');
+    const slow = await launch({ text: 'go' });
+    assert.deepEqual([slow.statusCode, slow.json().reason], [409, 'tmux-slow'], 'a tmux slow this once read as broken for good');
+    // «Continue»: the look at the task finds no terminal, the look at the session's own pane is refused for good
+    answer('gonethenmismatch');
+    refusedForGood(await launch({ resume: SID2 }), '«Continue»');
+  } finally {
+    await app.close();
+    delete process.env.KB_LAUNCH_DRYRUN;
+  }
 });

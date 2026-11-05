@@ -201,9 +201,9 @@ One line of summary at the end.
   themselves, with no command from you (a note of yours moves nothing). Finished the turn those words
   asked for → `kb review TIC-3 "…"` again (`kb mv TIC-3 ready` where `kb info` says "ships on the
   word"). Words about something else, with nothing changed for this task, and the board puts it back in
-  `review` on its own. While it waits in `doing`, every `kb` command on it (`note`, `show`, `check`…)
-  prints `kb: warning — TIC-3 is in doing …` to stderr: hand it in again, and name its status in your
-  report from `kb show`, not from memory.
+  `review` on its own. While it waits in `doing`, every `kb` command you run (on it or on any other
+  task — `kb add` then also offers `kb link`) prints `kb: warning — TIC-3 is in doing …` to stderr: hand
+  it in again, and name its status in your report from `kb show`, not from memory.
 - "do TIC-3" (a specific task in any status except done) → `kb show TIC-3` (the `👤` note comes
   first; open `📎` screenshots with Read) and **`kb mv TIC-3 prep` right away**, then steps 2–6
   (`already taken` means another Claude session holds it — see above).

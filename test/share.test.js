@@ -118,6 +118,16 @@ test('a browser without the pass is asked for the key, and the key typed by hand
   assert.equal((await ask('/?k=wrong', { bare: true })).status, 401);
   assert.deepEqual(share.refusalList().map((x) => [x.why, x.n]), [['key', 2]], 'a wrong key is not in «Turned away»');
   const key = share.shareState().key;
+  // the whole key is compared, not its start: a key right but for one character is as wrong as any other
+  const flip = (c) => (c === '0' ? '1' : '0');
+  const raw = key.replaceAll('-', '');
+  for (const at of [4, 12, 15]) {
+    const near = raw.slice(0, at) + flip(raw[at]) + raw.slice(at + 1);
+    assert.equal((await ask('/door/key', form(near))).status, 401, `a key wrong only at character ${at + 1} opened the door`);
+    assert.equal((await ask(`/?k=${near}`, { bare: true })).status, 401, `a link wrong only at character ${at + 1} opened the door`);
+  }
+  assert.equal((await ask('/door/key', form(raw.slice(0, 15)))).status, 401, 'a key one character short opened the door');
+  share.clearRefusals();
   for (const typed of [key, key.toLowerCase(), key.replaceAll('-', ' '), ` ${key} `]) {
     const ok = await ask('/door/key', form(typed));
     assert.equal(ok.status, 303, `«${typed}» did not open the door`);
@@ -143,6 +153,27 @@ test('the right key takes the device off the list of refusals it stood in withou
     assert.deepEqual(share.refusalList().map((x) => x.why), ['nokey']);
     assert.equal((await enter()).status, 303);
     assert.deepEqual(share.refusalList(), [], 'a device that entered with the key stays listed as turned away');
+  }
+  share.clearRefusals();
+});
+
+// what the right key takes off the list is only what this device earned by standing at the door without it: a pass of
+// an old key (`oldpass`, told apart from `nokey`) goes too; a wrong key it typed stays, and so does another device
+test('the right key forgets this device\'s nokey and oldpass, not its wrong key and not another device', async () => {
+  const key = share.shareState().key;
+  for (const enter of [() => ask('/door/key', form(key)), () => ask(`/?k=${key.replaceAll('-', '')}`, { bare: true })]) {
+    share.clearRefusals();
+    share.noteRefusal('192.168.1.50', 'nokey');
+    share.noteRefusal('192.168.1.50', 'oldpass');
+    assert.equal((await ask('/door/key', form('AAAA-AAAA-AAAA-AAAA'))).status, 401);
+    assert.equal((await ask('/', { bare: true, headers: { cookie: `kb_share_${door}=of-an-old-key` } })).status, 401);
+    assert.equal((await ask('/api/projects', { bare: true })).status, 401);
+    const mine = () => share.refusalList().filter((x) => x.ip === '127.0.0.1').map((x) => x.why).sort();
+    assert.deepEqual(mine(), ['key', 'nokey', 'oldpass'], 'a browser with a pass of an old key is listed as one without any');
+    assert.equal((await enter()).status, 303);
+    assert.deepEqual(mine(), ['key'], 'the right key took off more or less than the stops of the key it lacked');
+    assert.deepEqual(share.refusalList().filter((x) => x.ip !== '127.0.0.1').map((x) => [x.ip, x.why]).sort(),
+      [['192.168.1.50', 'nokey'], ['192.168.1.50', 'oldpass']], 'one device\'s right key took another device off the list');
   }
   share.clearRefusals();
 });

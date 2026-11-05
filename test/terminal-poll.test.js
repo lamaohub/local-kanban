@@ -86,6 +86,8 @@ function terminalCard(term) {
     state: { drawerKey: 'CK-1' }, document: { hidden: false }, URLSearchParams, Date, seg: String,
     wholeAnswer, holdUntil, reprinted, termCols: () => null, stopTermPoll: () => {},
     renderTerminal: (r) => { box.drawn = r; },
+    note: { dataset: {}, innerHTML: '', hidden: true, classList: { contains: () => box.note.hidden, remove: () => { box.note.hidden = false; } }, querySelector: () => ({}) },
+    $: (id) => (id === 'term-note' ? box.note : null), esc: String, tr: (t) => `«${t}»`, openSettingsModal: () => {},
     api: async (method, path) => {
       const q = new URL(path, 'http://x').searchParams;
       asked.push({ seen: q.get('seen'), delta: q.get('delta') });
@@ -96,7 +98,7 @@ function terminalCard(term) {
   };
   vm.runInNewContext(`let termKey = 'CK-1'; let termReq = 0; let termSeen = null; let termBase = null; let termWinOf = null; let termWin = null;
 let termHold = 0; let termScreen = null; let termFollow = true; var termInfo = null;
-${takeFn('async function pollTerminal(')}${takeFn('function heldScreen(')}
+${takeFn('async function pollTerminal(')}${takeFn('function heldScreen(')}${src.match(/const TMUX_BROKEN_NOTE = .*\n/)[0]}${takeFn('function termBrokenNote(')}
 this.look = pollTerminal;`, box);
   return { box, asked, kinds, look: box.look };
 }
@@ -150,4 +152,24 @@ test('a look tmux did not answer is not drawn — the card keeps what it shows',
   c.box.term = screenOf(`${history()}\nstatus 1`);
   await c.look();
   assert.equal(c.box.drawn.screen, c.box.term.screen);
+});
+
+test('a look tmux refuses for good keeps the screen and says what to do above it', async () => {
+  const c = terminalCard(screenOf(`${history()}\nstatus 0`));
+  await c.look();
+  const had = c.box.drawn;
+  c.box.tamper = () => ({ session: 's', unknown: true, reason: 'tmux-broken', error: 'tmux was updated while …' });
+  await c.look();
+  assert.equal(c.box.drawn, had, 'the screen was dropped');
+  assert.equal(c.box.note.hidden, false, 'nothing said above the screen');
+  assert.equal(c.box.note.dataset.kind, 'tmux-broken');
+  assert.match(c.box.note.innerHTML, /«tmux was updated under the running terminals of the board — close them, the command is in Settings → Errors»/);
+  const core = readFileSync(new URL('../public/js/core.js', import.meta.url), 'utf8');
+  assert.ok(core.includes("'tmux was updated under the running terminals of the board — close them, the command is in Settings → Errors': '"), 'no Russian for the note');
+  // a silence for this once says nothing new
+  const quiet = terminalCard(screenOf('x'));
+  await quiet.look();
+  quiet.box.tamper = () => ({ session: 's', unknown: true, reason: 'tmux-slow' });
+  await quiet.look();
+  assert.equal(quiet.box.note.hidden, true, 'a tmux slow this once got the words of one broken for good');
 });

@@ -9,7 +9,7 @@ import { errorHandler } from './error-handler.js';
 import { compressAnswer } from './compress.js';
 import { appShellHeaders, headerSetter } from './static-headers.js';
 import projectRoutes from './routes/projects.js';
-import taskRoutes from './routes/tasks.js';
+import taskRoutes, { typedBackHeader } from './routes/tasks.js';
 import dashboardRoutes from './routes/dashboard.js';
 import systemRoutes from './routes/system.js';
 import skillRoutes from './routes/skills.js';
@@ -39,6 +39,7 @@ const app = Fastify({ logger: { level: 'warn' } });
 app.addHook('onRequest', makeOriginGuard(PORT));
 app.addHook('onRequest', guestGuard);
 // root instance, before the plugins, or it would not cover the static files and their routes
+app.addHook('onSend', typedBackHeader);
 app.addHook('onSend', compressAnswer);
 
 const CSP = [

@@ -13,7 +13,7 @@ import { listBackups, backupNow, backupPath, backupState, ATTACH_MIRROR } from '
 import { inspectBackup, startPreview, stopPreview, currentPreview, UPLOAD_PREFIX } from '../restore.js';
 import { langOverride, ghOwnerEnv, ghRepoEnv, launchDryRun, PORT } from '../config.js';
 import { claudeWord, launchOptions, launchProblem, launchSpec, runLaunch } from '../launch.js';
-import { TMUX_COMMAND_MAX, boardProblem, claudeAtPrompt, folderTrusted, lookedLately, markTaskless, phantomAvailable, phantomPane, phantomSpec, phantomStop, otherBoard, otherBoardRefusal, runPhantom, startedHere, taskTerminal, tmuxBin, tmuxCommandBytes, tmuxRefusal } from '../phantom.js';
+import { TMUX_COMMAND_MAX, boardProblem, claudeAtPrompt, folderTrusted, lookedLately, markTaskless, phantomAvailable, phantomPane, phantomSpec, phantomStop, otherBoard, otherBoardRefusal, runPhantom, startedHere, taskTerminal, tmuxBin, tmuxCommandBytes, tmuxRefusal, startRefusal } from '../phantom.js';
 import { ADOPT_TOKEN, freshTerminalSessions, isBoardSession, markBoardSession, markResumed, prepHolder, tieLaunched } from '../claude-sessions.js';
 import { CHECK_LABEL, OPEN_CHECK, doneRules, isCheck, leadCheck } from '../review-check.js';
 import { liveTick, readRegistry } from '../claude-live.js';
@@ -628,6 +628,8 @@ export default async function systemRoutes(app) {
       if (launchDryRun()) return { ok: true, dry: true, session: sid, folder: p.path, trusted, keys, ...spec };
       const res = await runPhantom(spec);
       if (res.err) {
+        const broken = startRefusal(res.text);
+        if (broken) return reply.code(409).send({ ...broken, keys });
         logError('server', 'launch', `launch inside the board failed: ${res.err.message}`, res.text);
         return reply.code(500).send({ error: failureReason(res.text, res.err.message) });
       }
@@ -674,6 +676,8 @@ export default async function systemRoutes(app) {
     if (pane) await phantomStop(sid); // a session left behind fails the start below with its own words
     const res = await runPhantom(spec);
     if (res.err) {
+      const broken = startRefusal(res.text);
+      if (broken) return reply.code(409).send({ ...broken, keys });
       logError('server', 'launch', `resume inside the board failed: ${res.err.message}`, res.text);
       return reply.code(500).send({ error: failureReason(res.text, res.err.message) });
     }

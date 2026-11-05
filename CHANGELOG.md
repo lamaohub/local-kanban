@@ -8,6 +8,15 @@ version it goes out as and opens an empty one again. Released sections are histo
 
 ## [Unreleased]
 
+## [2.0.0-beta.10]
+
+### Fixed
+
+- A task your words in its terminal sent back from Review to Doing no longer stays there because another Claude session changed files elsewhere in the same repository: when a project is one folder of a bigger repository, only its own folder and the commits that touch it say whether the turn worked on it. While such a task waits in Doing, every `kb` command of that session tells its Claude — not only the commands about the task itself — and `kb add` offers to link the new task to it; other Claude sessions are no longer told.
+- A helper of an earlier turn whose step stays quiet for more than ten minutes — a long command inside it — stays in the chat's list of work in the background instead of leaving the list empty under «Claude works in the background…».
+- ▶ inside the board with tmux updated under its running terminals now says what to do, as the card and the chat do, instead of tmux's raw error; the card's Terminal tab says it as soon as it is opened.
+- Health on a phone no longer breaks a size between a number and its word, nor starts a line with «·».
+
 ## [2.0.0-beta.9]
 
 ### Fixed

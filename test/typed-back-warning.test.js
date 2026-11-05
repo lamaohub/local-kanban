@@ -4,7 +4,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,6 +24,7 @@ before(async () => {
   const routes = await import('../src/routes/tasks.js');
   moveTyped = routes.moveTyped;
   app = Fastify();
+  app.addHook('onSend', routes.typedBackHeader);
   await app.register(routes.default);
   await app.listen({ port: 0, host: '127.0.0.1' });
   base = `http://127.0.0.1:${app.server.address().port}`;
@@ -107,4 +108,89 @@ test('a project that ships on the word: the way back is ready, not review', asyn
   } finally {
     db.prepare('UPDATE projects SET ready_gate = NULL WHERE id = ?').run(pid);
   }
+});
+
+test('the session hears of the task its words left in doing from any kb it runs, and kb add offers to link them', async () => {
+  const { key, id } = handedIn();
+  moveTyped(row(id), SID);
+  const add = await kb(['add', 'demo', 'Add more sites to the white list']);
+  assert.equal(add.code, 0, add.stderr);
+  const made = add.stdout.split(' ')[0];
+  assert.ok(warned(add, key), `kb add did not name the task left in doing: ${JSON.stringify(add.stderr)}`);
+  assert.ok(add.stderr.includes(`link them: kb link ${key} ${made}\n`), `kb add did not offer the link: ${add.stderr}`);
+  for (const args of [['pri', made, 'high'], ['ls', 'demo'], ['show', made], ['show', key]]) {
+    const r = await kb(args);
+    assert.equal(r.code, 0, `${args.join(' ')}: ${r.stderr}`);
+    assert.ok(warned(r, key), `kb ${args.join(' ')} did not name ${key}: ${JSON.stringify(r.stderr)}`);
+    assert.equal(r.stderr.split('kb: warning').length - 1, 1, `kb ${args.join(' ')} said it more than once: ${r.stderr}`);
+  }
+  const desc = await kb(['desc', made, 'the list']);
+  assert.ok(warned(desc, key) && !desc.stderr.includes('link them'), `only kb add offers the link: ${desc.stderr}`);
+
+  const OTHER = '99999999-2222-4333-8444-666666666666';
+  for (const args of [['show', key], ['note', key, 'a checker\'s word'], ['add', 'demo', 'Theirs'], ['ls', 'demo']]) {
+    const r = await kb(args, OTHER);
+    assert.equal(r.code, 0, r.stderr);
+    assert.ok(!r.stderr.includes('warning') && !r.stderr.includes('link them'), `kb ${args[0]} of another session was warned: ${r.stderr}`);
+  }
+
+  assert.equal((await kb(['review', key, 'Handed in again.'])).code, 0);
+  const quiet = await kb(['ls', 'demo']);
+  assert.ok(!quiet.stderr.includes('warning'), `handed in again, and still named: ${quiet.stderr}`);
+});
+
+const asSession = async (method, path, body) => {
+  const r = await fetch(`${base}${path}`, {
+    method, headers: { 'x-claude-session': SID, ...(body ? { 'content-type': 'application/json' } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  return { status: r.status, json: await r.json() };
+};
+const bodyWarned = (r, key) => typeof r.json.warning?.text === 'string'
+  && r.json.warning.key === key && r.json.warning.text.startsWith(`${key} is in doing — the person's words moved it back from review`);
+
+test('a move that changes nothing and a note sent again still say the task is in doing — in the answer itself', async () => {
+  const { key, id } = handedIn();
+  moveTyped(row(id), SID);
+  // `kb mv X doing` on a task already in doing writes the status again (planPatch); a second `kb lbl X +bug` writes nothing
+  // at all — the PATCH answers from the row as it is (no updates), and that answer still says why the task is there
+  const mv = await asSession('PATCH', `/api/tasks/${key}`, { status: 'doing' });
+  assert.equal(mv.status, 200, JSON.stringify(mv.json));
+  assert.ok(bodyWarned(mv, key), `kb mv to the column it is in did not carry the warning: ${JSON.stringify(mv.json)}`);
+  assert.ok(bodyWarned(await asSession('PATCH', `/api/tasks/${key}`, { labels_add: ['bug'] }), key));
+  const updated = row(id).updated_at;
+  const same = await asSession('PATCH', `/api/tasks/${key}`, { labels_add: ['bug'] });
+  assert.equal(same.status, 200, JSON.stringify(same.json));
+  assert.deepEqual([row(id).status, row(id).labels, row(id).updated_at], ['doing', '["bug"]', updated], 'the second +bug wrote something: no longer the path of no updates');
+  assert.ok(bodyWarned(same, key), `a PATCH that changed nothing did not carry the warning: ${JSON.stringify(same.json)}`);
+  const note = { author: 'claude', body: 'the same word twice', client_key: 'typed-warn-same-key' };
+  const first = await asSession('POST', `/api/tasks/${key}/comments`, note);
+  assert.equal(first.status, 201);
+  assert.ok(bodyWarned(first, key), JSON.stringify(first.json));
+  const again = await asSession('POST', `/api/tasks/${key}/comments`, note);
+  assert.equal(again.status, 200, 'the note sent again was written twice');
+  assert.equal(again.json.id, first.json.id);
+  assert.ok(bodyWarned(again, key), `a note sent again did not carry the warning: ${JSON.stringify(again.json)}`);
+});
+
+test('words that took a task from To do into prep say nothing of Review', async () => {
+  no += 1;
+  const id = db.prepare("INSERT INTO tasks (project_id, task_no, title, status) VALUES (?,?,?,'todo')").run(pid, no, `Task ${no}`).lastInsertRowid;
+  const key = `DM-${no}`;
+  assert.deepEqual(moveTyped(row(id), SID), { prep: [key], doing: [] });
+  const last = db.prepare('SELECT e.session_id, m.kind FROM task_events e LEFT JOIN typed_moves m ON m.event_id = e.id WHERE e.task_id = ? ORDER BY e.id DESC LIMIT 1').get(id);
+  assert.deepEqual({ ...last }, { session_id: SID, kind: 'typed' }, 'the case is gone: the move to prep is no typed move of the session');
+  for (const [method, path, body] of [['GET', `/api/tasks/${key}`], ['POST', `/api/tasks/${key}/comments`, { author: 'claude', body: 'a word' }],
+    ['PATCH', `/api/tasks/${key}`, { status: 'prep' }]]) {
+    const r = await asSession(method, path, body);
+    assert.ok(r.status < 300, `${method} ${path}: ${JSON.stringify(r.json)}`);
+    assert.equal(r.json.warning, undefined, `${method} ${path} said a task in prep is in doing: ${JSON.stringify(r.json.warning)}`);
+  }
+  const shown = await kb(['show', key]);
+  assert.ok(!shown.stderr.includes('warning'), shown.stderr);
+});
+
+test('the board puts the header on its root instance, so every route of it carries the word', () => {
+  const src = readFileSync(fileURLToPath(new URL('../src/server.js', import.meta.url)), 'utf8');
+  assert.match(src, /^app\.addHook\('onSend', typedBackHeader\);$/m);
 });

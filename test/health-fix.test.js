@@ -2,9 +2,10 @@
 // Code's registry written into a stand-in Claude folder: a live Claude is this very process.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import vm from 'node:vm';
 import Fastify from 'fastify';
 
 let tmp, app, db, folder, claude, health, host;
@@ -188,7 +189,7 @@ test('the page shows «Fix» on a long CLAUDE.md and on a heavy one, not on one 
   const src = readFileSync(new URL('../public/js/health.js', import.meta.url), 'utf8');
   const at = src.indexOf('function projectHTML(');
   const fixAt = src.indexOf('const statusWord =');
-  const box = { ...rules, tr: (s) => s, esc: (s) => String(s), ic: () => '', plural: (n, a, b) => (n === 1 ? a : b), num: String, size: () => '',
+  const box = { ...rules, tr: (s) => s, esc: (s) => String(s), ic: () => '', plural: (n, a, b) => (n === 1 ? a : b), num: String, size: () => '', DOT: ' · ',
     stateHTML: () => '', fileHTML: () => '', opened: new Set(), fixes: {}, STATUS_LABELS: { todo: 'To do', doing: 'Doing', review: 'Review' },
     liveBadge: () => '' };
   vm.createContext(box);
@@ -231,6 +232,21 @@ test('the row of a project says what became of its fix: the task, and Claude on 
   assert.equal(rules.fixStage({ status: 'backlog' }), 'todo');
 });
 
+test('the size of a CLAUDE.md breaks only after a «·», never between a number and its word', async () => {
+  const { readFileSync } = await import('node:fs');
+  const vm = (await import('node:vm')).default;
+  const src = readFileSync(new URL('../public/js/health.js', import.meta.url), 'utf8');
+  const from = src.indexOf('const NB =');
+  const box = { plural: (n, a, b) => (n === 1 ? a : b), tr: (s) => s, LANG: 'ru' };
+  vm.createContext(box);
+  vm.runInContext(`${src.slice(src.indexOf('const num ='), src.indexOf('\n', src.indexOf('const num =')))}\n${src.slice(from, src.indexOf('\n', src.indexOf('const size =', from)))}\nthis.size = size; this.DOT = DOT;`, box);
+  const text = box.size({ lines: 250, chars: 180250 });
+  const pieces = text.split(' '); // a plain space is the only place a line breaks
+  assert.deepEqual(pieces.map((p) => p.endsWith('\u00b7')), [true, false], `a line may break elsewhere than after «·»: ${JSON.stringify(text)}`);
+  assert.ok(!pieces.some((p) => p.startsWith('\u00b7')), 'a line may start with «·»');
+  assert.match(src, /\$\{esc\(p\.main\.path\)\}\$\{DOT\}\$\{esc\(size\(p\.main\)\)\}/, 'the name of the file and its size are joined by a plain « · »');
+});
+
 test('GET /api/health/fixes names the open fix of each project, the newest, not a done or cancelled one (CK-967)', async () => {
   const RU_TITLE = '\u0423\u0436\u0430\u0442\u044c CLAUDE.md'; // the Russian title of the task, spelt by its code points: the public slice keeps the Russian to the locale
   const { openFixes } = await import('../src/auto-health.js');
@@ -244,4 +260,194 @@ test('GET /api/health/fixes names the open fix of each project, the newest, not 
   assert.equal(openFixes().fixes967.key, 'FXS-2', 'a cancelled fix hid the open one');
   db.prepare("UPDATE tasks SET status = 'done' WHERE project_id = ? AND task_no = 2").run(pid);
   assert.equal(openFixes().fixes967, undefined, 'a project with no open fix has one');
+});
+
+test('GET /api/health/fixes answers what openFixes knows — the page asks it on every look (CK-967)', async () => {
+  const r = await app.inject({ method: 'GET', url: '/api/health/fixes', headers: { host } });
+  assert.equal(r.statusCode, 200, 'the page asks a route the server does not have: every row of a fix stays as it was');
+  assert.deepEqual(r.json(), { fixes: JSON.parse(JSON.stringify(health.openFixes())) });
+  assert.ok(Object.keys(r.json().fixes).length, 'no open fix to answer with — the test proves nothing');
+});
+
+const PAGE_DIR = new URL('../public/js/', import.meta.url);
+const pageSrc = (f) => readFileSync(new URL(f, PAGE_DIR), 'utf8');
+const RU = (() => {
+  const core = pageSrc('core.js');
+  const open = core.indexOf('const I18N_RU = ') + 'const I18N_RU = '.length;
+  return new Function(`return (${core.slice(open, core.indexOf('\n};', open) + 2)})`)();
+})();
+const trRu = (s) => (Object.hasOwn(RU, s) ? RU[s] : `MISSING<${s}>`);
+
+/** The tags of an HTML string as elements for querySelectorAll: tag, classes, data-*, the same objects until the next write. */
+function fakeBox() {
+  let html = '';
+  let cache = new Map();
+  const tags = () => [...html.matchAll(/<(\w+)((?:\s+[\w-]+(?:="[^"]*")?)*)\s*\/?>/g)].map((m) => {
+    const attrs = Object.fromEntries([...m[2].matchAll(/([\w-]+)(?:="([^"]*)")?/g)].map((a) => [a[1], a[2] ?? '']));
+    const dataset = {};
+    for (const [k, v] of Object.entries(attrs)) if (k.startsWith('data-')) dataset[k.slice(5).replace(/-(\w)/g, (_, c) => c.toUpperCase())] = v;
+    return { tag: m[1], attrs, classes: (attrs.class || '').split(/\s+/).filter(Boolean), dataset, disabled: false, onclick: null };
+  });
+  const matches = (el, sel) => sel.split(/\s*,\s*/).some((one) => {
+    const [, tag, cls, attr] = one.match(/^(\w+)?(?:\.([\w-]+))?(?:\[([\w-]+)\])?$/);
+    return (!tag || el.tag === tag) && (!cls || el.classes.includes(cls)) && (!attr || attr in el.attrs);
+  });
+  return {
+    all: [],
+    get innerHTML() { return html; },
+    set innerHTML(v) { html = v; cache = new Map(); this.all = tags(); },
+    get firstChild() { return html ? {} : null; },
+    addEventListener() {},
+    querySelectorAll(sel) { if (!cache.has(sel)) cache.set(sel, this.all.filter((el) => matches(el, sel))); return cache.get(sel); },
+    querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
+  };
+}
+/** Wait for what the page does after a click without awaiting it (the start, the look that follows) — at most 5 s. */
+const until = async (ok) => { for (const end = Date.now() + 5000; !ok() && Date.now() < end;) await new Promise((r) => setTimeout(r, 5)); };
+const click = (el) => {
+  const ev = { prevented: false, stopped: false, currentTarget: el, preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; } };
+  el.onclick(ev);
+  return ev;
+};
+
+/** A fresh instance of the page module; `asked` — the requests it sent, `opened`/`launched` — what its clicks did. */
+async function healthPage({ tr = (s) => s } = {}) {
+  const rules = await import('../public/js/health-rules.js');
+  const box = fakeBox();
+  const state = { slug: 'health', live: {} };
+  const asked = [];
+  const opened = [];
+  const launched = [];
+  const api = async (method, url, body) => {
+    asked.push(`${method} ${url}`);
+    const r = await app.inject({ method, url, headers: { host }, ...(body ? { payload: body } : {}) });
+    if (r.statusCode >= 400) throw Object.assign(new Error(r.body), { body: r.json() });
+    return r.json();
+  };
+  const stubs = {
+    $: (id) => { assert.equal(id, 'health'); return box; }, HEALTH: 'health', LANG: 'en', api, state, tr, ic: () => '',
+    esc: (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;'),
+    liveBadge: (t) => (state.live[t.id] ? `<span class="card-live">${state.live[t.id].claude}</span>` : ''),
+    keepFocus: (_el, fn) => fn(), plural: (n, a, b) => (n === 1 ? a : b),
+    selectProject: () => {}, styledAlert: (s) => { throw new Error(`alert: ${s}`); }, styledConfirm: async () => false,
+    refusalLine: (s) => s, openDrawer: (key) => opened.push(key),
+    STATUS_LABELS: { backlog: 'Backlog', todo: 'To do', prep: 'Prep', doing: 'Doing', review: 'Review' },
+    launchInClaude: async (o) => { launched.push({ keys: [...o.keys], project: o.project, text: o.text }); },
+    taskPromptText: (k) => `Take ${k}`,
+    ...rules, renderStands: async () => {}, stopStands: () => {}, localStore: { getItem: () => null, setItem() {} },
+  };
+  const src = pageSrc('health.js');
+  const imported = [...src.matchAll(/^import \{([^}]*)\} from '[^']+';$/gm)].flatMap((m) => m[1].split(',').map((n) => n.trim()).filter(Boolean));
+  assert.ok(imported.length > 10, 'the imports of health.js are not where the test reads them');
+  assert.deepEqual(imported.filter((n) => !(n in stubs)), [], 'health.js imports a name the test does not give');
+  const body = src.replace(/^import .*;$/gm, '').replace(/^export /gm, '');
+  const ctx = vm.createContext({ ...stubs, setTimeout, clearTimeout });
+  vm.runInContext(`${body}\nthis.page = { renderHealth, repaintHealth };`, ctx);
+  return { page: ctx.page, box, state, asked, opened, launched };
+}
+/** The row of one project as the page drew it. */
+const rowOf = (box, slug) => {
+  const at = box.innerHTML.indexOf(`<details class="hl-proj" data-slug="${slug}"`);
+  assert.ok(at >= 0, `no row of ${slug}`);
+  return box.innerHTML.slice(at, box.innerHTML.indexOf('</details>', at));
+};
+let pageProject;
+/** A project of its own for the page: a long CLAUDE.md, no task yet. */
+function pageFolder() {
+  if (pageProject) return pageProject;
+  const dir = join(tmp, 'work', 'page');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'CLAUDE.md'), `${'a line\n'.repeat(230)}`);
+  pageProject = { id: db.prepare("INSERT INTO projects (slug, prefix, name, path, next_task_no) VALUES ('pg','PG','Page',?,1)").run(dir).lastInsertRowid };
+  return pageProject;
+}
+/** The open fix of the page's project, opened through the API when there is none — each test stands on its own. */
+async function pageFix() {
+  if (!fixOfPage()) assert.equal((await fix('pg')).statusCode, 200);
+  return fixOfPage();
+}
+const setFix = (status) => db.prepare("UPDATE tasks SET status = ? WHERE project_id = ? AND title LIKE '% CLAUDE.md' AND status NOT IN ('done', 'cancelled')").run(status, pageFolder().id);
+const fixOfPage = () => db.prepare("SELECT t.id, p.prefix || '-' || t.task_no AS key FROM tasks t JOIN projects p ON p.id = t.project_id WHERE p.id = ? AND t.status NOT IN ('done', 'cancelled') AND t.title LIKE '% CLAUDE.md'").get(pageFolder().id);
+
+test('«Fix» on the page opens the task and starts Claude on it; the row then names the task, its key opens the card (CK-960, CK-967)', async () => {
+  clearClaudes();
+  pageFolder();
+  const { page, box, asked, opened, launched } = await healthPage();
+  await page.renderHealth();
+  assert.match(rowOf(box, 'pg'), /class="btn-ghost hl-fix" data-slug="pg"/, 'a long CLAUDE.md with no fix has no «Fix»');
+  const btn = box.querySelectorAll('.hl-fix').find((b) => b.dataset.slug === 'pg');
+  assert.equal(typeof btn?.onclick, 'function', 'the button «Fix» does nothing when pressed');
+  const ev = click(btn);
+  assert.ok(ev.prevented && ev.stopped, 'a press of «Fix» inside <summary> folds the row as well');
+  await until(() => asked.filter((a) => a === 'GET /api/health/fixes').length > 1); // the look after the start
+  assert.ok(asked.includes('POST /api/health/fix'), `«Fix» asked the server nothing: ${asked.join(', ')}`);
+  const fx = fixOfPage();
+  assert.ok(fx, 'no task of the fix opened');
+  assert.deepEqual(launched, [{ keys: [fx.key], project: 'pg', text: `Take ${fx.key}` }], 'Claude was not started on the task of the fix');
+  assert.match(rowOf(box, 'pg'), new RegExp(`class="hl-fix-key" href="#" data-key="${fx.key}"`), 'the row does not name the task right after «Fix»');
+  const key = box.querySelectorAll('a.hl-fix-key').find((a) => a.dataset.key === fx.key);
+  const kev = click(key);
+  assert.deepEqual(opened, [fx.key], 'the key of the fix does not open its card');
+  assert.ok(kev.prevented && kev.stopped, 'a click on the key follows href="#" or folds the row');
+});
+
+test('a look within 30 s asks the fixes again, not the folders: a fix moved meanwhile shows (CK-967)', async () => {
+  clearClaudes();
+  await pageFix();
+  setFix('doing');
+  const { page, box, asked } = await healthPage();
+  await page.renderHealth();
+  assert.match(rowOf(box, 'pg'), /Doing · Claude is not running/);
+  setFix('review'); // handed in by its Claude: an event of the board brings the section to look again
+  await page.renderHealth();
+  assert.equal(asked.filter((a) => a === 'GET /api/health').length, 1, 'the folders were walked again within 30 s');
+  assert.equal(asked.filter((a) => a === 'GET /api/health/fixes').length, 2, 'the second look did not ask the fixes');
+  assert.match(rowOf(box, 'pg'), /waits for your review/, 'the row kept a fix in work that is handed in');
+});
+
+test('task.live redraws the row of a fix: «Claude is not running» gives way to Claude at work, and back (CK-967)', async () => {
+  // the complaint itself: the row said «Claude is not running» over a working Claude
+  clearClaudes();
+  const fx = await pageFix();
+  setFix('doing');
+  const { page, box, state } = await healthPage();
+  await page.renderHealth();
+  assert.match(rowOf(box, 'pg'), /Claude is not running/);
+  // the real handler of the stream (public/js/sse.js), its neighbours given by the test
+  const sse = pageSrc('sse.js');
+  const at = sse.indexOf('function streamMessage(data) {');
+  assert.ok(at >= 0, 'the handler of the stream is not where the test looks for it');
+  const noop = () => {};
+  const ctx = vm.createContext({
+    state, lastSseAt: Date.now(), liveEvents: 0, silentTooLong: () => false, refresh: async () => {}, renderComments: noop,
+    applyLive: (tasks) => { state.live = Object.fromEntries((tasks || []).map((x) => [x.id, { claude: x.claude }])); },
+    applyTerminalQuestions: noop, maybeWaitingAlert: noop, maybeQuestionAlert: noop, markNowEntry: noop, peekTerminal: noop,
+    loadTasks: async () => {}, DASH: 'dash', NOW: 'now', REVIEW: 'review', repaintHealth: page.repaintHealth,
+  });
+  vm.runInContext(`${sse.slice(at, sse.indexOf('\n}\n', at) + 3)}\nthis.message = streamMessage;`, ctx);
+  const live = (tasks) => ctx.message(JSON.stringify({ type: 'task.live', data: { tasks, projects: [], questions: [] } }));
+  live([{ id: fx.id, claude: 'working' }]);
+  assert.match(rowOf(box, 'pg'), /card-live">working/, 'the row still says «Claude is not running» over a Claude at work');
+  assert.doesNotMatch(rowOf(box, 'pg'), /Claude is not running/);
+  live([{ id: fx.id, claude: 'waiting' }]);
+  assert.match(rowOf(box, 'pg'), /card-live">waiting/, 'a change of the state of Claude alone did not redraw the row');
+  live([]);
+  assert.match(rowOf(box, 'pg'), /Claude is not running/, 'a Claude gone still reads as at work');
+});
+
+test('the words of the row of a fix are in the Russian dictionary (CK-967)', async () => {
+  clearClaudes();
+  await pageFix();
+  const { page, box } = await healthPage({ tr: trRu });
+  for (const status of ['doing', 'review', 'todo']) {
+    setFix(status);
+    await page.renderHealth({ force: true });
+    assert.deepEqual([...rowOf(box, 'pg').matchAll(/MISSING<([^>]*)>/g)].map((m) => m[1]), [], `a fix in ${status}: words with no translation`);
+  }
+  setFix('doing');
+  await page.renderHealth({ force: true });
+  const row = rowOf(box, 'pg');
+  for (const words of ['Claude is not running', 'Open the task of the fix']) assert.ok(row.includes(RU[words]), `«${words}» is not said in Russian`);
+  assert.match(RU['Claude is not running'], /[\u0400-\u04ff]/, 'the Russian of «Claude is not running» is English');
+  setFix('cancelled');
 });

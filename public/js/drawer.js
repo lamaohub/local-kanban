@@ -601,7 +601,8 @@ async function pollTerminal() {
   let r;
   try { r = await api('GET', `/api/tasks/${seg(key)}/terminal${qs ? `?${qs}` : ''}`, undefined, { quiet: true }); } catch { return; }
   if (n !== termReq || key !== termKey || key !== state.drawerKey) return;
-  if (r.unknown) return;
+  // advice was seen only after typing or ▶
+  if (r.unknown) { if (r.reason === 'tmux-broken') termBrokenNote(); return; }
   if (!r.same) {
     r = wholeAnswer(r, termBase, termSeen);
     if (!r) { termSeen = null; return; } // not against what this card has: the next look gets it whole
@@ -611,6 +612,17 @@ async function pollTerminal() {
   if (r.same) return;
   termSeen = r.v || null;
   renderTerminal(r);
+}
+
+const TMUX_BROKEN_NOTE = 'tmux was updated under the running terminals of the board — close them, the command is in Settings → Errors';
+/** The note above the screen of a terminal tmux cannot reach for good; the next answer with a screen draws its own. */
+function termBrokenNote() {
+  const noteEl = $('term-note');
+  if (noteEl.dataset.kind === 'tmux-broken' && !noteEl.classList.contains('hidden')) return;
+  noteEl.dataset.kind = 'tmux-broken';
+  noteEl.innerHTML = `${esc(tr(TMUX_BROKEN_NOTE))} <button type="button" class="btn-primary term-login">${esc(tr('Open Settings'))}</button>`;
+  noteEl.querySelector('.term-login').onclick = () => openSettingsModal('errors');
+  noteEl.classList.remove('hidden');
 }
 
 function heldScreen(r) {

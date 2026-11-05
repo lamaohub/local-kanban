@@ -845,6 +845,24 @@ test('a turn that left the task untouched sends it back to Review; a commit, a c
   git('commit', '-q', '--allow-empty', '-m', 'release v1.2.5');
   assert.deepEqual(await turn('idle', Date.now() + 1), []);
   assert.equal(row().status, 'doing', 'a commit of the task sent it back to Review');
+  // were about it; a commit naming another issue of the mirror is not. The mirror comes from the board's settings here, so
+  // a KB_GH_* of the shell that runs the test must not stand in for it
+  const ghEnv = { KB_GH_OWNER: process.env.KB_GH_OWNER, KB_GH_REPO: process.env.KB_GH_REPO };
+  delete process.env.KB_GH_OWNER; delete process.env.KB_GH_REPO;
+  db.prepare("INSERT OR REPLACE INTO kv (key, value) VALUES ('gh.owner', 'acme'), ('gh.repo', 'turn')").run();
+  try {
+    at = await words('and the footer, by its issue');
+    git('commit', '-q', '--allow-empty', '-m', 'the footer (acme/turn#77)');
+    git('commit', '-q', '--allow-empty', '-m', 'release v1.2.6');
+    assert.deepEqual(await turn('idle', Date.now() + 1), [], 'a commit naming the task by its mirror issue sent it back to Review');
+    assert.equal(row().status, 'doing');
+    at = await words('and the sidebar of the other one');
+    git('commit', '-q', '--allow-empty', '-m', 'the sidebar (acme/turn#78)');
+    assert.deepEqual(await turn('idle', Date.now() + 1), ['TRN-1'], 'a commit naming another issue of the mirror kept the task in Doing');
+  } finally {
+    db.prepare("DELETE FROM kv WHERE key IN ('gh.owner', 'gh.repo')").run();
+    for (const [k, v] of Object.entries(ghEnv)) if (v !== undefined) process.env[k] = v;
+  }
   // another task's commit and a file left changed: the file may be this task's
   at = await words('and the footer');
   git('commit', '-q', '--allow-empty', '-m', 'TRN-2: more');
@@ -908,6 +926,23 @@ test('a turn that left the task untouched sends it back to Review; a commit, a c
   writeFileSync(join(repo, 'sub', 'x.txt'), 'x, edited\n');
   assert.deepEqual(await turn('idle', Date.now() + 1), []);
   assert.equal(row().status, 'doing', 'an untracked file edited in a project folder inside its repository sent the task back');
+  // folder during the turn; the project's own folder is as the words found it: back to Review
+  at = await words('which other sites go on the white list?');
+  await pause(20);
+  writeFileSync(join(repo, 'a.txt'), `the neighbour's edit ${Date.now()}\n`);
+  mkdirSync(join(repo, 'next'), { recursive: true });
+  writeFileSync(join(repo, 'next', 'new.txt'), 'theirs\n');
+  writeFileSync(join(repo, 'next', 'done.txt'), `committed ${Date.now()}\n`);
+  git('add', 'next/done.txt');
+  git('commit', '-q', '-m', 'the neighbour\'s work');
+  assert.deepEqual(await turn('idle', Date.now() + 1), ['TRN-1'], 'another session\'s work in the same repository held the task in Doing');
+  // … and a commit of the project's own folder that names nothing: may be the task's (no issue) — the words stand
+  at = await words('and the list itself');
+  writeFileSync(join(repo, 'sub', 'list.txt'), `the list ${Date.now()}\n`);
+  git('add', 'sub/list.txt');
+  git('commit', '-q', '-m', 'the list');
+  assert.deepEqual(await turn('idle', Date.now() + 1), []);
+  assert.equal(row().status, 'doing', 'a commit in the project\'s own folder sent the task back to Review');
   db.prepare('UPDATE projects SET path = ? WHERE id = ?').run(repo, pidp);
   assert.equal((await inject('DELETE', '/api/tasks/TRN-1/terminal')).statusCode, 200);
 });

@@ -597,8 +597,7 @@ export async function transcriptChat(path, { turns = TURNS_DEFAULT } = {}) {
       ...(markdown && !it.error && it.ms !== undefined ? { doc: id } : {}) };
   };
   const out = shown.map((t) => ({ ...t, at: new Date(t.at).toISOString(), items: t.items.map(stepOut) }));
-  // a helper that wrote nothing for a while is not counted: a Claude gone with the machine leaves no end of its helpers.
-  const going = older.filter((it) => (isHelper(it) && helpers.has(it.id) ? fresh(it.id) : !isHelper(it))).map(stepOut).filter((it) => it.running);
+  const going = older.map(stepOut).filter((it) => it.running);
   const waiting = c.waits.map((w) => ({ text: w.text, at: new Date(w.at).toISOString() }));
   return { turns: out, ...(going.length ? { going } : {}), earlier_n: Math.max(0, all.length - n), model: c.model || null, waiting };
 }

@@ -12,15 +12,18 @@ const git = (path, args) => new Promise((resolve) => {
 
 const UNTRACKED_MAX = 5000; // untracked files whose state the print takes; more — no print
 
-/** A fingerprint of the working tree of the project at `path` — its commit, its files' state and their changes — or
-    null: not a git repository, or git did not answer. Two equal prints: nothing was committed or changed between them. */
+const HERE = ['--', '.'];
+
+/** A fingerprint of the working tree of the project at `path` — its commit, its files' state and their changes under
+    `path` — or null: not a git repository, or git did not answer. Two equal prints: nothing was committed, and nothing
+    under `path` changed between them. */
 export async function treePrint(path) {
   if (!path) return null;
   // all three at once, at the moment of the call: one after another, a commit made meanwhile split the print in two
   const [status, head, diff, top] = await Promise.all([
-    git(path, ['status', '--porcelain=v1', '-z', '--untracked-files=all']),
+    git(path, ['status', '--porcelain=v1', '-z', '--untracked-files=all', ...HERE]),
     git(path, ['rev-parse', '--verify', '-q', 'HEAD']), // none in a repository without commits
-    git(path, ['diff', 'HEAD', '--no-color', '--no-ext-diff', '--binary']),
+    git(path, ['diff', 'HEAD', '--no-color', '--no-ext-diff', '--binary', ...HERE]),
     git(path, ['rev-parse', '--show-toplevel']), // porcelain paths are the repository's: a project may be a folder in it
   ]);
   if (!status || (head && !diff)) return null;
@@ -39,6 +42,9 @@ export async function turnCommits(path, before, now, format) {
   const [b, restB] = cut(now);
   if (!a || !b || a === b || restA !== restB) return null;
   if (await git(path, ['merge-base', '--is-ancestor', a, b]) === null) return null; // a branch switched, a reset: cannot tell
-  const out = await git(path, ['log', `--format=${format}`, `${a}..${b}`]);
+  // a pathspec drops a commit that changes nothing (an empty one): at the root of its repository the project is all of it
+  const prefix = await git(path, ['rev-parse', '--show-prefix']);
+  if (prefix === null) return null;
+  const out = await git(path, ['log', `--format=${format}`, `${a}..${b}`, ...(prefix.toString('utf8').trim() ? HERE : [])]);
   return out === null ? null : out.toString('utf8');
 }

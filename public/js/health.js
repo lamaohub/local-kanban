@@ -44,7 +44,9 @@ let drawnSig = '';
 const opened = new Set(); // the projects whose files are unfolded — kept through repaints
 
 const num = (n) => Number(n || 0).toLocaleString(LANG === 'ru' ? 'ru-RU' : 'en-US');
-const size = (f) => `${num(f.lines)} ${plural(f.lines, 'line', 'lines')} · ${num(f.chars)} ${plural(f.chars, 'character', 'characters')}`;
+const NB = '\u00a0';
+const DOT = `${NB}· `;
+const size = (f) => `${num(f.lines)}${NB}${plural(f.lines, 'line', 'lines')}${DOT}${num(f.chars)}${NB}${plural(f.chars, 'character', 'characters')}`;
 
 const STATE_WORDS = {
   heavy: 'over 40,000 characters — Claude Code warns',
@@ -76,7 +78,7 @@ function projectHTML(p, d) {
   const total = startTotal(p, d.everywhere, norms);
   const st = p.main ? fileState(p.main, norms) : null;
   const what = p.main
-    ? `<span class="hl-size">${esc(p.main.path)} · ${esc(size(p.main))}</span>${stateHTML(st)}`
+    ? `<span class="hl-size">${esc(p.main.path)}${DOT}${esc(size(p.main))}</span>${stateHTML(st)}`
     : `<span class="hl-size muted">${esc(tr('no CLAUDE.md of its own'))}</span>`;
   const start = `<span class="hl-start${total.over ? ' hl-heavy' : ''}" title="${esc(tr('Everything a session reads when it starts in this folder, with your own files'))}">`
     + `${esc(tr('at the start'))}: ${esc(num(total.chars))} ${esc(plural(total.chars, 'character', 'characters'))}</span>`;

@@ -134,8 +134,26 @@ async function api(method, path, body, expect = null) {
   if (!parsed) {
     die(`kb: the board answered ${res.status} with something that is not JSON — is KB_URL (${BASE}) the board?`, EXIT.BOARD_ERROR);
   }
-  if (typeof data?.warning?.text === 'string') process.stderr.write(`kb: warning — ${data.warning.text}\n`);
+  if (typeof data?.warning?.text === 'string') warn(data.warning);
+  // about the task itself never reached a Claude that went on with another task (TBF-169)
+  TYPED_BACK = typedBackOf(res.headers.get('x-kb-typed-back'));
+  for (const w of TYPED_BACK) warn(w);
   return shaped(data);
+}
+// a task's warning once per command: kb show reads the task and its comments, and both answers name it
+const warned = new Set();
+function warn(w) {
+  if (typeof w.key === 'string' && warned.has(w.key)) return;
+  if (typeof w.key === 'string') warned.add(w.key);
+  process.stderr.write(`kb: warning — ${w.text}\n`);
+}
+let TYPED_BACK = [];
+function typedBackOf(v) {
+  if (!v) return [];
+  try {
+    const list = JSON.parse(decodeURIComponent(v));
+    return Array.isArray(list) ? list.filter((w) => typeof w?.key === 'string' && typeof w?.text === 'string') : [];
+  } catch { return []; }
 }
 
 // kb take takes it first. Claude learns about the pin only from this mark.
@@ -545,6 +563,7 @@ const commands = {
     }
     const t = await api('POST', '/api/tasks', body, TASK);
     console.log(`${t.key} ${t.status} ${t.project}`);
+    for (const w of TYPED_BACK) process.stderr.write(`kb: if ${t.key} is what the person's words on ${w.key} asked for, link them: kb link ${w.key} ${t.key}\n`);
   },
 
   async mv() {

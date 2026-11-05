@@ -309,14 +309,33 @@ const pad2 = (n) => String(n).padStart(2, '0');
     is still there, or null. The way back follows the project's gate: with «ships on the word» doing → review is refused. */
 export function typedBackWarning(t, sid) {
   if (!sid || t?.status !== 'doing') return null;
-  const e = db.prepare('SELECT e.created_at, m.kind FROM task_events e LEFT JOIN typed_moves m ON m.event_id = e.id WHERE e.task_id = ? ORDER BY e.id DESC LIMIT 1').get(t.id);
-  if (e?.kind !== 'typed') return null;
+  const e = db.prepare('SELECT e.created_at, e.session_id, m.kind FROM task_events e LEFT JOIN typed_moves m ON m.event_id = e.id WHERE e.task_id = ? ORDER BY e.id DESC LIMIT 1').get(t.id);
+  if (e?.kind !== 'typed' || e.session_id !== sid) return null;
   const at = new Date(String(e.created_at).replace(' ', 'T') + 'Z');
   const when = Number.isNaN(at.getTime()) ? '' : ` at ${pad2(at.getHours())}:${pad2(at.getMinutes())}`;
   const again = gateOfProject(t.project_id) ? `kb mv ${t.key} ready` : `kb review ${t.key} "…"`;
-  return { text: `${t.key} is in doing — the person's words moved it back from review${when}; when the work on them is done, hand it in again: ${again}` };
+  return { key: t.key, text: `${t.key} is in doing — the person's words moved it back from review${when}; when the work on them is done, hand it in again: ${again}` };
 }
 const typedWarned = (t, sid) => { const w = typedBackWarning(t, sid); return w ? { warning: w } : {}; };
+
+export const TYPED_BACK_HEADER = 'x-kb-typed-back';
+/** The warnings (typedBackWarning) for every task typed words to session `sid` moved from Review to doing and left there. */
+export function typedBacksOf(sid) {
+  if (!sid) return [];
+  const ids = db.prepare(`SELECT e.task_id AS id FROM typed_moves m JOIN task_events e ON e.id = m.event_id JOIN tasks t ON t.id = e.task_id
+    WHERE m.kind = 'typed' AND e.session_id = ? AND t.status = 'doing' AND e.id = (SELECT MAX(id) FROM task_events WHERE task_id = e.task_id)`).all(sid);
+  return ids.map(({ id }) => typedBackWarning(resolveTask(String(id)), sid)).filter(Boolean);
+}
+/** onSend hook, on the root instance (server.js): an answer to a Claude session names the tasks its words left in doing. */
+export async function typedBackHeader(req, reply, payload) {
+  const sid = req.url.startsWith('/api/') ? requestSession(req) : null;
+  if (!sid) return payload;
+  try {
+    const list = typedBacksOf(sid);
+    if (list.length) reply.header(TYPED_BACK_HEADER, encodeURIComponent(JSON.stringify(list)));
+  } catch { /* a word of advice: never the answer's failure */ }
+  return payload;
+}
 
 const typedBack = new Map(); // task id → { sid, event, at, seconds, truncated, print }: moved from Review to doing by typed words
 function holdTyped(id, m) {
@@ -388,8 +407,10 @@ export async function settleTurns(states) {
         const log = await turnCommits(path, before, now, STAT_FORMAT);
         const t = log === null ? null : resolveTask(String(st.id));
         if (!t) continue; // changed files — or cannot tell
-        const { words, known } = await taskWords(t, path);
-        if (namesTask(log, words, { issue: t.gh_issue_number, known })) continue; // committed for it
+        if (log.trim()) {
+          const { words, known } = await taskWords(t, path);
+          if (namesTask(log, words, { issue: t.gh_issue_number, known })) continue; // committed for it
+        }
       }
     }
     back.push({ id: st.id, ...m });
