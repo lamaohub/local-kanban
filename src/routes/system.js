@@ -667,7 +667,7 @@ export default async function systemRoutes(app) {
     if (pane?.unknown) return reply.code(409).send({ ...tmuxRefusal(pane), keys });
     if (pane && !pane.dead) return reply.code(409).send({ error: `Claude of the board already works on ${keys.join(', ')}`, running: keys });
     // should not have took the owner's session away from its board; the board's own resume of cut work goes this way too
-    const other = pane ? await otherBoard(sid) : null;
+    const other = pane ? await otherBoard(sid, pane.pid) : null;
     if (other) return reply.code(409).send({ ...otherBoardRefusal(other), keys });
     const name = keys.length > 1 ? `${keys[0]} +${keys.length - 1}` : keys[0];
     const spec = phantomSpec({ sid, name, folder: p.path, permission: b.permission, port: PORT, allow: doneRules(tasks), effort: b.effort, resume: true });

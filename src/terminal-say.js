@@ -1,5 +1,5 @@
 import { moveTyped } from './routes/tasks.js';
-import { deliverChat, phantomScreen, phantomSend, questionOpen } from './phantom.js';
+import { deliverChat, otherBoard, phantomScreen, phantomSend, questionOpen } from './phantom.js';
 import { isManual } from './task-shape.js';
 import { resolveSkillPath } from './skills.js';
 
@@ -21,7 +21,9 @@ export function chatCommand(text) {
   return MODEL_CMD.test(t) || COMPACT_CMD.test(t) || chatSkill(t) !== null;
 }
 
-export async function sayToTerminal(t, session, { text, key, chat = false, images = [] }) {
+export async function sayToTerminal(t, session, { text, key, chat = false, images = [], checked = false }) {
+  const other = checked ? null : await otherBoard(session);
+  if (other) return other.silent ? { refused: 'tmux-slow' } : { refused: 'other-board', port: other.port };
   if (chat && typeof text === 'string') text = chatWords(t.key, text);
   // "no" to "Teach auto mode…?" after the hand-in sent the task from Review back to Doing). Read before typing: the
   // sign-in button types /login, and /exit typed in Review sent the task to Doing while its Claude left

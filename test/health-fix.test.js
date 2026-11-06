@@ -12,9 +12,9 @@ let tmp, app, db, folder, claude, health, host;
 const sessionsDir = () => join(claude, 'sessions');
 let n = 0;
 /** A Claude of Claude Code's registry: in `cwd`, with `status`; `pid` — alive (this process) or not. */
-function claudeAt(cwd, status, pid = process.pid) {
+function claudeAt(cwd, status, pid = process.pid, updatedAt = Date.now()) {
   n += 1;
-  writeFileSync(join(sessionsDir(), `${n}.json`), JSON.stringify({ pid, sessionId: `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`, cwd, status, updatedAt: Date.now() }));
+  writeFileSync(join(sessionsDir(), `${n}.json`), JSON.stringify({ pid, sessionId: `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`, cwd, status, updatedAt }));
 }
 const clearClaudes = () => { rmSync(sessionsDir(), { recursive: true, force: true }); mkdirSync(sessionsDir(), { recursive: true }); };
 const fix = (project = 'hf') => app.inject({ method: 'POST', url: '/api/health/fix', headers: { host }, payload: { project } });
@@ -91,6 +91,24 @@ test('a Claude at work in the folder holds «Fix»; one at its prompt, one gone,
   claudeAt(join(tmp, 'work', 'proj-2'), 'busy');
   r = await fix();
   assert.equal(r.statusCode, 200, `held by a Claude at its prompt, a dead one, or one beside the folder: ${r.body}`);
+  clearClaudes();
+});
+
+// let go of such a Claude after 2 h — the same bound for the button
+test('a Claude at its prompt with commands in the background holds «Fix» for 2 h of quiet, not for ever', async () => {
+  const H = 3600_000;
+  for (const [ago, want, why] of [[1.9 * H, 409, 'quiet under 2 h no longer held it'], [2.1 * H, 200, 'quiet past 2 h still held it'], [50 * H, 200, 'a dev server of two days still held it']]) {
+    clearClaudes();
+    claudeAt(folder, 'shell', process.pid, Date.now() - ago);
+    const r = await fix();
+    assert.equal(r.statusCode, want, `${why}: ${r.body}`);
+  }
+  // the bound is the background's only: a Claude at work or asking holds the folder however long ago it changed
+  for (const status of ['busy', 'waiting']) {
+    clearClaudes();
+    claudeAt(folder, status, process.pid, Date.now() - 50 * H);
+    assert.equal((await fix()).statusCode, 409, `a Claude «${status}» of long ago let the button go`);
+  }
   clearClaudes();
 });
 

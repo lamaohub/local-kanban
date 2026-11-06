@@ -50,6 +50,8 @@ before(async () => {
   const proc = stand('served', 'claude/served');
   // nothing at all: a clean branch at main
   stand('empty', 'claude/empty');
+  // `git branch -d master` — such a branch is never a stand to remove
+  stand('on-master', 'master');
   // the folder deleted by hand, its branch with work not in main (a prunable worktree)
   commit(stand('gone', 'claude/gone'), 'g.txt', 'gone\n', 'Work left on a branch whose folder went');
   rmSync(wt('gone'), { recursive: true, force: true });
@@ -142,7 +144,7 @@ test('each stand reads as free, not handed in, or busy — by its folder, its co
   assert.equal(d.repos.length, 1);
   assert.equal(d.repos[0].main, 'origin/main');
   const by = Object.fromEntries(d.stands.map((s) => [s.path.split('/').pop(), s]));
-  assert.deepEqual(Object.keys(by).sort(), ['STA-1', 'cache', 'cyr-data', 'dirty', 'emptied', 'empty', 'gone', 'half', 'issued', 'kept-data', 'lost', 'retitled-9f3e1a', 'served', 'sessioned', 'squashed', 'sta-2-busy', 'tail-data', 'wip'], 'the main checkout is no stand');
+  assert.deepEqual(Object.keys(by).sort(), ['STA-1', 'cache', 'cyr-data', 'dirty', 'emptied', 'empty', 'gone', 'half', 'issued', 'kept-data', 'lost', 'on-master', 'retitled-9f3e1a', 'served', 'sessioned', 'squashed', 'sta-2-busy', 'tail-data', 'wip'], 'the main checkout is no stand');
   assert.equal(by.gone.state, 'unsent', 'a stand whose folder went read as free, its branch never compared with main');
   assert.deepEqual(by.gone.why, ['commits']);
   assert.equal(by.wip.state, 'unsent', '«WIP» in main read as this very work');
@@ -174,6 +176,8 @@ test('each stand reads as free, not handed in, or busy — by its folder, its co
   assert.equal(by.sessioned.state, 'busy', 'a Claude session in the folder does not hold it');
   assert.deepEqual(by.sessioned.why, ['session']);
   assert.equal(by.empty.state, 'free');
+  assert.equal(by['on-master'].state, 'busy', 'a worktree on master read as a stand to remove — the cleanup would delete the branch');
+  assert.deepEqual(by['on-master'].why, ['main']);
   assert.equal(by.lost.state, 'unsent');
   assert.deepEqual(by.lost.why, ['commits']);
   assert.equal(by.dirty.state, 'unsent');
@@ -195,7 +199,7 @@ test('the task of a cleanup takes only the free stands, names the others for the
   const task = db.prepare("SELECT t.status, t.description FROM tasks t JOIN projects p ON p.id = t.project_id WHERE p.prefix || '-' || t.task_no = ?").get(t.key);
   assert.equal(task.status, 'todo');
   for (const name of ['STA-1', 'squashed', 'cache', 'empty']) assert.ok(task.description.includes(`${wt(name)} —`), `${name} is not in the task`);
-  for (const name of ['served', 'sta-2-busy', 'sessioned']) assert.ok(!task.description.includes(wt(name)), `a busy stand ${name} got into the task`);
+  for (const name of ['served', 'sta-2-busy', 'sessioned', 'on-master']) assert.ok(!task.description.includes(wt(name)), `a busy stand ${name} got into the task`);
   for (const name of ['kept-data', 'half', 'issued']) assert.ok(!task.description.includes(`${wt(name)} —`), `${name} got into the task to be removed`);
   const asks = task.description.slice(task.description.lastIndexOf('\n\n', task.description.indexOf(wt('lost'))));
   assert.ok(asks.includes(wt('lost')) && asks.includes(wt('dirty')), 'the stands with work not in main are not named for the owner');
@@ -320,6 +324,10 @@ test('the task of a cleanup says each rule of the check, in both languages, and 
     say(/git merge-tree --write-tree --merge-base=<sha>\^ origin\/main <sha>/, 'a «+» commit is not checked by its changes');
     say(/git fetch origin/, 'origin is not fetched');
     say(/5 MB/, 'a small stand is not in MB');
+    say(/master/, 'the check does not keep master out');
+    const ask = { path: '/r/.claude/worktrees/X-3', branch: 'claude/X-3', read: true, dirty: 1, commits: [{ found: null }], sessions: 0, processes: 0, ignored: { files: 1, paths: [] } };
+    const asks = stands.cleanupWords(lang, { top: '/r', main: 'origin/main' }, [st], [ask]).split('\n').find((l) => l.startsWith(`- ${ask.path} `));
+    assert.doesNotMatch(asks, /(: |, )(dirty|ignored|commits)(,|$)/, `${lang}: the reasons are codes, not words: ${asks}`);
     assert.doesNotMatch(w, /\(\u0441 --force\)|\(with --force\)/, `${lang}: --force is advised`);
     const goneLine = w.split('\n').find((l) => l.startsWith(`- ${gone.path} `));
     assert.match(goneLine, /git worktree remove/, `${lang}: the folder-less stand is not told how to drop its record alone`);
@@ -327,5 +335,50 @@ test('the task of a cleanup says each rule of the check, in both languages, and 
     const local = stands.cleanupWords(lang, { top: '/r', main: 'main' }, [st], []);
     assert.doesNotMatch(local, /git fetch origin/, `${lang}: a repository without origin is told to fetch it`);
     assert.match(local, /git cherry main/);
+  }
+});
+
+test('a stand a project of the board lives in is busy, not free', async () => {
+  mkdirSync(join(wt('empty'), 'app'));
+  const id = db.prepare("INSERT INTO projects (slug, prefix, name, path, next_task_no) VALUES ('sth', 'STH', 'Lives in a stand', ?, 1)").run(join(wt('empty'), 'app')).lastInsertRowid;
+  try {
+    const d = await walked();
+    const s = d.stands.find((x) => x.path === wt('empty'));
+    assert.equal(s.state, 'busy', 'the folder of a project read as free');
+    assert.deepEqual(s.why, ['project']);
+  } finally {
+    db.prepare('UPDATE projects SET archived = 1 WHERE id = ?').run(id);
+    rmSync(join(wt('empty'), 'app'), { recursive: true, force: true });
+  }
+});
+
+// a stand with a live process was «free». A stand-in lsof first in PATH answers each way in turn
+test('lsof is believed only whole: exit 0 with folders, or exit 1 with some', async () => {
+  const fake = join(tmp, 'fakebin');
+  mkdirSync(fake, { recursive: true });
+  const mode = join(fake, 'mode');
+  writeFileSync(join(fake, 'lsof'), `#!/bin/sh\ncase "$(cat '${mode}')" in\n  ok) printf 'p1\\nn${tmp}\\np2\\nn${wt('served')}\\n'; exit 0;;\n  partial1) printf 'p2\\nn${wt('served')}\\n'; exit 1;;\n  partial2) printf 'p1\\nn${tmp}\\n'; exit 2;;\n  empty) exit 0;;\nesac\n`, { mode: 0o755 });
+  const path = process.env.PATH;
+  process.env.PATH = `${fake}:${path}`;
+  const look = async (m) => {
+    writeFileSync(mode, m);
+    stands.forgetStands();
+    const d = await walked();
+    return Object.fromEntries(d.stands.map((x) => [x.path.split('/').pop(), x]));
+  };
+  try {
+    for (const m of ['ok', 'partial1']) {
+      const by = await look(m);
+      assert.deepEqual([by.served.state, by.served.why], ['busy', ['process']], `${m}: the process in the folder was not seen`);
+      assert.equal(by['STA-1'].state, 'free', `${m}: a whole answer of lsof was not believed`);
+    }
+    for (const m of ['partial2', 'empty']) {
+      const by = await look(m);
+      assert.ok(!Object.values(by).some((x) => x.state === 'free'), `${m}: a failed lsof let a stand read as free — ${Object.values(by).filter((x) => x.state === 'free').map((x) => x.path).join(', ')}`);
+      assert.ok(by['STA-1'].why.includes('unknown'), `${m}: the stand does not say lsof could not tell`);
+    }
+  } finally {
+    process.env.PATH = path;
+    stands.forgetStands();
   }
 });

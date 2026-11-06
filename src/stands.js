@@ -15,6 +15,7 @@ const AT_ONCE = 4; // folders walked side by side
 export const STANDS_FRESH_MS = 10 * 60_000; // an older picture is walked again on the next look
 export const FORCE_EVERY_MS = 15_000; // «Check again» — not more often
 const WORK = new Set(['prep', 'doing', 'ready', 'deploy']);
+const KEPT_BRANCHES = new Set(['main', 'master']); // never a stand's branch to delete
 const DIFF_MAX = 200_000;
 
 /* Ignored files a removal may take without a word: what a build or an install makes again, and the settings Claude Code
@@ -220,6 +221,8 @@ async function repoGit(top, ref) {
 export function standState(s) {
   if (s.read === false) return { state: 'reading', why: [] }; // the walk has not come to it yet
   const why = [];
+  if (s.keeps) why.push('main');
+  if (s.home) why.push('project'); // a project of the board lives in the folder
   if (s.sessions) why.push('session');
   if (s.processes) why.push('process');
   if (s.task && WORK.has(s.task.status)) why.push('task');
@@ -261,11 +264,12 @@ async function mainLog(top, ref) {
 /** The folders where some process stands (its cwd) — one call to lsof; null when lsof did not answer. */
 async function processFolders() {
   const r = await run(bin('lsof'), ['-n', '-P', '-a', '-d', 'cwd', '-Fn'], { timeout: 30_000, max: 64 * 1024 * 1024 });
-  // lsof exits 1 when some processes could not be read — the rest is still there; killed by the timeout, the list is partial
-  if (r.err && (!r.out || r.err.killed || r.err.signal)) return null;
+  // lsof exits 1 when some processes could not be read — the rest is still there; killed by the timeout, the list is partial.
+  // process read «free»; and an empty list is no answer: a working lsof sees the board's own folder at least
+  if (r.err && (r.err.code !== 1 || !r.out || r.err.killed || r.err.signal)) return null;
   const out = [];
   for (const line of r.out.split('\n')) if (line.startsWith('n/')) out.push(line.slice(1));
-  return out;
+  return out.length ? out : null;
 }
 
 let picture = null; // the last walk: {at, done, total, repos, stands, running}
@@ -324,18 +328,23 @@ async function walk() {
     try { const f = await statfs(top); free = Number(f.bavail) * Number(f.bsize); } catch { /* not known */ }
     const r = { top, main: ref, free, projects: repo.projects.map(({ slug, name }) => ({ slug, name })), log: null };
     next.repos.push(r);
+    // main went. A branch the repository keeps (main, master: the ones mainRef measures by; the branch of the main checkout
+    // git lets no worktree hold) and a folder a project of the board lives in are never a stand to remove
+    const homes = await Promise.all(repo.projects.map((p) => real(p.path)));
     for (const w of all.slice(1)) {
       if (w.bare) continue;
       const key = keyIn([basename(w.path), w.branch], new Set(prefixes.keys()));
       const t = key ? taskOf.get(key.split('-')[0], Number(key.split('-')[1])) : null;
       // the project of the stand: its key's, else the project of the repository whose folder is its top, else the first
       const own = (t && repo.projects.find((p) => p.slug === t.slug)) || repo.projects.find((p) => p.path === top) || repo.projects[0];
+      const wreal = await real(w.path); // a project behind a link is compared as it really is (homes are real)
       next.stands.push({
         path: w.path, top, branch: w.branch || null, head: w.head || null, detached: Boolean(w.detached),
         locked: w.locked ? (w.locked === true ? '' : w.locked) : null, prunable: Boolean(w.prunable),
         project: { slug: own.slug, name: own.name }, key,
         task: t ? { id: t.id, status: t.status, title: t.title } : null,
         read: false, dirty: null, changes: null, ignored: null, commits: null, sessions: 0, processes: 0, size: null, changed_at: null, missing: false,
+        keeps: KEPT_BRANCHES.has(w.branch), home: homes.some((h) => within(w.path, h) || within(wreal, h)),
       });
     }
   }
@@ -448,6 +457,10 @@ export async function standDiff(path) {
 /* The task of the cleanup: one per repository, in the project of most of its chosen stands. Its Claude checks each stand
    again right before removing it — the picture may be minutes old, and a session may have opened in a folder since. */
 const TITLES = { ru: 'Убрать старые стенды', en: 'Remove old stands' };
+const WHY_WORDS = {
+  en: { locked: 'the worktree is locked', unknown: 'could not tell what is in it', dirty: 'not committed', ignored: 'ignored data not in the main checkout', commits: 'commits not in main', detached: 'detached HEAD with commits of its own' },
+  ru: { locked: 'рабочая копия заперта', unknown: 'не удалось понять, что в ней', dirty: 'есть незакоммиченное', ignored: 'игнорируемые данные, которых нет в основном чекауте', commits: 'коммиты, которых нет в main', detached: 'отделённый HEAD со своими коммитами' },
+};
 export const STAND_TITLES = TITLES;
 const gb = (n) => (!n ? '?' : n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(1)} GB` : `${Math.max(1, Math.round(n / 1024 ** 2))} MB`);
 export function cleanupWords(lang, repo, chosen, unsent) {
@@ -457,14 +470,15 @@ export function cleanupWords(lang, repo, chosen, unsent) {
   const gone = en ? ' · no folder: `git worktree remove <folder>` drops its record alone (not `git worktree prune`: it drops every such record of the repository)'
     : ' · папки нет: `git worktree remove <папка>` уберёт только её запись (не `git worktree prune`: он убирает все такие записи репозитория)';
   const list = chosen.map((s) => `- ${s.path} — ${s.branch ? `branch ${s.branch}` : 'detached HEAD'}${s.head ? ` @ ${s.head.slice(0, 12)}` : ''}${s.size ? ` · ${gb(s.size)}` : ''}${s.missing ? gone : ''}`).join('\n');
-  const asks = unsent.map((s) => `- ${s.path}${s.branch ? ` (${s.branch})` : ''}: ${standState(s).why.join(', ')}`).join('\n');
+  const words = WHY_WORDS[en ? 'en' : 'ru'];
+  const asks = unsent.map((s) => `- ${s.path}${s.branch ? ` (${s.branch})` : ''}: ${standState(s).why.map((w) => words[w] || w).join(', ')}`).join('\n');
   if (en) {
     return `Remove the old stands (git worktrees) of ${repo.top}, chosen in Health → Stands: ${chosen.length}.\n\n${list}\n\n`
       + 'For EACH stand, right before removing it, check all four again — skip it and say why if any fails:\n'
       + '1. nothing uncommitted or untracked: `git -C <folder> status --porcelain` is empty;\n'
       + '2. no ignored data: `git worktree remove` deletes ignored files without asking. Every path of `git -c core.quotePath=false -C <folder> status --porcelain --ignored` (names as they are, Cyrillic too) marked «!!» is what a build or an install makes again (node_modules, dist, build, __pycache__, .venv, .DS_Store, package-lock.json…), `.claude/settings.local.json` or `.claude/launch.json`, or a file the main checkout holds with the same bytes (`cmp <folder>/<path> ' + repo.top + '/<path>`); anything else — a `.env`, `data/`, `var/`, a database — keep the stand and name the files;\n'
       + `3. every commit of the branch is in ${ref}: ${fetch ? '`git fetch origin`, then ' : ''}\`git cherry ${ref} <branch>\`; a «+» commit counts only if main already holds its changes — \`git merge-tree --write-tree --merge-base=<sha>^ ${ref} <sha>\` prints the tree of \`git rev-parse ${ref}^{tree}\`. The same title or issue number in the log of main is no proof: every commit of a task carries its issue;\n`
-      + '4. not busy: no Claude session and no process in the folder (`lsof +D <folder>`), the task of its key is not in prep/doing/ready/deploy.\n\n'
+      + '4. not busy: no Claude session and no process in the folder (`lsof +D <folder>`), the task of its key is not in prep/doing/ready/deploy, the branch is not main, master or the branch of the main checkout, no project of the board lives in the folder.\n\n'
       + 'Then `git worktree remove <folder>` (never --force) and `git branch -d <branch>` (never -D; refused — leave the branch and say so). '
       + 'Do not touch the main checkout, the branch main, other projects or the stash.\n\n'
       + 'In the report: per stand — removed or kept and why, and the last commit of each removed branch (`<sha> <branch>`): it lives on in the reflog and can be brought back with `git branch <branch> <sha>`.'
@@ -476,7 +490,7 @@ export function cleanupWords(lang, repo, chosen, unsent) {
     + '1. нет незакоммиченного и неотслеживаемого: `git -C <папка> status --porcelain` пуст;\n'
     + '2. нет игнорируемых данных: `git worktree remove` удаляет игнорируемые файлы без вопроса. Каждый путь с «!!» в `git -c core.quotePath=false -C <папка> status --porcelain --ignored` (имена как есть, и кириллица) — то, что сборка или установка сделают заново (node_modules, dist, build, __pycache__, .venv, .DS_Store, package-lock.json…), `.claude/settings.local.json` или `.claude/launch.json`, либо файл, который основной чекаут держит теми же байтами (`cmp <папка>/<путь> ' + repo.top + '/<путь>`); что-то другое — `.env`, `data/`, `var/`, база — стенд оставить и назвать файлы;\n'
     + `3. каждый коммит ветки есть в ${ref}: ${fetch ? '`git fetch origin`, затем ' : ''}\`git cherry ${ref} <ветка>\`; коммит с «+» считается, только если его правки в main уже есть — \`git merge-tree --write-tree --merge-base=<sha>^ ${ref} <sha>\` печатает дерево \`git rev-parse ${ref}^{tree}\`. Тот же заголовок или номер issue в логе main — не доказательство: номер своей задачи несёт каждый её коммит;\n`
-    + '4. не занят: в папке нет сессии Claude и процесса (`lsof +D <папка>`), задача ключа не в prep/doing/ready/deploy.\n\n'
+    + '4. не занят: в папке нет сессии Claude и процесса (`lsof +D <папка>`), задача ключа не в prep/doing/ready/deploy, ветка — не main, не master и не ветка основного чекаута, в папке не живёт проект доски.\n\n'
     + 'Затем `git worktree remove <папка>` (без --force) и `git branch -d <ветка>` (не -D; отказал — ветку оставить и сказать). '
     + 'Основной чекаут, ветку main, чужие проекты и stash не трогать.\n\n'
     + 'В отчёте: по каждому стенду — удалён или оставлен и почему, и последний коммит каждой удалённой ветки (`<sha> <ветка>`): она ещё живёт в reflog, вернуть — `git branch <ветка> <sha>`.'

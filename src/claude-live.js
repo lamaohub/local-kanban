@@ -17,6 +17,8 @@ import { bin } from './bin-path.js';
 const KNOWN = new Set(['busy', 'waiting', 'idle']);
 const STATUS_AS = { shell: 'background' };
 export const LEFTOVER_MS = 2 * 3600_000;
+/** Whether a Claude's status has stood still LEFTOVER_MS and more — past it, at its prompt it is a finished run. */
+export const leftOver = (entry, at = Date.now()) => Boolean(entry?.since && at - entry.since >= LEFTOVER_MS);
 
 function alive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -106,7 +108,7 @@ export function worksPastTasks(entry, bgOnScreen, at = Date.now(), overOnScreen 
   const st = screenState(entry, { bg: bgOnScreen, over: overOnScreen });
   if (st === 'busy') return 'busy';
   if (st !== 'background') return null;
-  return entry.since && at - entry.since >= LEFTOVER_MS ? null : 'background';
+  return leftOver(entry, at) ? null : 'background';
 }
 
 /** A Claude past its tasks in work that waits at its prompt for the person — 'idle', or 'waiting' when its registry
@@ -114,7 +116,7 @@ export function worksPastTasks(entry, bgOnScreen, at = Date.now(), overOnScreen 
 export function waitsPastTasks(entry, bgOnScreen, at = Date.now(), overOnScreen = false) {
   const st = screenState(entry, { bg: bgOnScreen, over: overOnScreen });
   if (st !== 'idle' && st !== 'waiting') return null;
-  return entry.since && at - entry.since >= LEFTOVER_MS ? null : st;
+  return leftOver(entry, at) ? null : st;
 }
 
 /** The board's own terminal of a session it started is closed: no pane, or Claude in it has exited. A session the

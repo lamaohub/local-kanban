@@ -139,6 +139,23 @@ test('«go on» goes only to an idle Claude with an empty field, and its refusal
   await brk.recoverDue(due);
   assert.equal(brk.breakState('r', { uuid: 'r-1' }, { board: true, task: 1 }, due), 'stuck', 'the words did not reach Claude');
 
+  // board's; nobody here is called
+  // board's, as of a Claude the board did not start: the chain stays (dropped, the next look made it anew and typed again)
+  fresh('o');
+  let asked = 0;
+  fakes({ say: async () => { asked += 1; return { refused: 'other-board', port: 3100 }; } });
+  await brk.recoverDue(due);
+  assert.equal(brk.breakChain('o')?.board, false, 'a break in another board\'s terminal still reads as the board\'s own to type to');
+  assert.equal(brk.breakState('o', { uuid: 'o-1' }, { board: true, task: 1 }, due + 1000), 'stuck', 'the chain was made anew');
+  await brk.recoverDue(due + brk.RECOVER_PAUSES_MS.at(-1) * 2);
+  assert.equal(asked, 1, 'another board\'s terminal was asked to go on again');
+  // tmux did not say whose the terminal is: nothing was typed — the next look, and no try spent
+  fresh('s');
+  fakes({ say: async () => ({ refused: 'tmux-slow' }) });
+  await brk.recoverDue(due);
+  assert.equal(brk.breakState('s', { uuid: 's-1' }, { board: true, task: 1 }, due), 'retrying', 'a silent tmux called the person');
+  assert.deepEqual([brk.breakChain('s').tries, brk.breakChain('s').sent], [0, false], 'a silent tmux spent a try');
+
   fresh('x');
   fakes({ say: async () => { throw new Error('tmux went away'); } });
   await brk.recoverDue(due);
@@ -158,7 +175,7 @@ test('«go on» goes only to an idle Claude with an empty field, and its refusal
   assert.equal(typed.length, 1);
   assert.equal(brk.breakChain('g'), undefined);
   brk.setBreakDeps(null);
-  for (const s of ['q', 'f', 'r', 'x']) brk.settleBreak(s);
+  for (const s of ['q', 'f', 'r', 'x', 'o', 's']) brk.settleBreak(s);
 });
 
 test('a «go on» that never got typed, and a break found long after, are the person\'s', () => {

@@ -3,7 +3,7 @@ import { relative, isAbsolute, sep } from 'node:path';
 import { PORT } from './config.js';
 import { db, kvGet, kvSet, logError, uiLang } from './db.js';
 import { NORMS, healthView } from './health.js';
-import { readRegistry, stateOf } from './claude-live.js';
+import { readRegistry, stateOf, leftOver } from './claude-live.js';
 import { noclaudeFilter } from './task-shape.js';
 import { fixable } from '../public/js/health-rules.js';
 
@@ -50,10 +50,16 @@ const within = (folder, cwd) => {
   const rel = relative(folder, cwd);
   return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 };
-/** The sessions at work in `folder` among the registry's entries ({cwd, alive, status}): their count. Pure. */
-export function claudesAt(folder, entries) {
+/** The sessions at work in `folder` among the registry's entries ({cwd, alive, status, since}): their count. Pure. */
+export function claudesAt(folder, entries, at = Date.now()) {
   let n = 0;
-  for (const e of entries) if (e.cwd && within(folder, e.cwd) && !['gone', 'idle'].includes(stateOf(e))) n += 1;
+  for (const e of entries) {
+    if (!e.cwd || !within(folder, e.cwd)) continue;
+    const st = stateOf(e);
+    if (st === 'gone' || st === 'idle') continue;
+    if (st === 'background' && leftOver(e, at)) continue; // the bound of «Claude now» itself
+    n += 1;
+  }
   return n;
 }
 const real = async (p) => { try { return await realpath(p); } catch { return p; } };

@@ -649,6 +649,37 @@ test('a start refused because tmux was slow takes no try, up to five of them; an
   await resumeOff(other.r);
 });
 
+// go on with: the words refused by sayToTerminal leave no note and no error each minute, and «Continue» is not asked again
+test('another board\'s Claude: the words refused as other-board go without a note, and its start is not asked again', async () => {
+  const c = await resumeCase();
+  Object.assign(c.run, { claude: 'limit', resets: '3pm', ended: undefined });
+  const at = new Date(2026, 10, 2, 10, 0).getTime();
+  await c.r.tickResume(app, at, { limited: true });
+  c.deps.say = async () => ({ refused: 'other-board', port: 3100 });
+  const errors = () => db.prepare("SELECT COUNT(*) AS n FROM app_errors WHERE message LIKE '%did not reach Claude%'").get().n;
+  const was = errors();
+  await c.r.tickResume(app, at + 6 * 3600_000);
+  assert.equal(keptNow()[c.sid], undefined, 'the record of another board\'s Claude stayed');
+  assert.equal(boardNotes(c.task.id), 0, 'a note said the board could not ask another board\'s Claude to go on');
+  assert.equal(errors(), was, 'another board\'s terminal was logged as words that did not reach Claude');
+  // tmux did not say whose the terminal is: nothing was typed — held as a silent tmux, no try spent, no error
+  const slow = await resumeCase();
+  Object.assign(slow.run, { claude: 'limit', resets: '3pm', ended: undefined });
+  await slow.r.tickResume(app, at, { limited: true });
+  slow.deps.say = async () => ({ refused: 'tmux-slow' });
+  await slow.r.tickResume(app, at + 6 * 3600_000);
+  assert.equal(keptNow()[slow.sid]?.held_by, 'tmux', 'a silent tmux was not held as one');
+  assert.equal(keptNow()[slow.sid]?.failed, undefined, 'a silent tmux spent a try of the words');
+  await resumeOff(slow.r);
+  await resumeOff(c.r);
+  const cut = await resumeCase();
+  let calls = 0;
+  const theirs = { inject: async () => { calls += 1; return { statusCode: 409, body: JSON.stringify({ error: 'this terminal was started by another board (port 3100)', reason: 'other-board', port: 3100 }) }; } };
+  for (let i = 0; i < 6; i += 1) await cut.r.tickResume(theirs, T0 + i * MIN);
+  assert.equal(calls, 1, 'the session of another board was asked to go on again and again');
+  await resumeOff(cut.r);
+});
+
 test('a record given up on says what held the words', async () => {
   const c = await resumeCase();
   await c.r.tickResume(app, T0);

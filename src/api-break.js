@@ -158,6 +158,7 @@ async function goOn(sid, c, now) {
       markSaid(sid, now);
       const said = await deps.say(t, sid, { text: continueText(), chat: true });
       markSaid(sid); // and at the end: delivery checked on the screen takes seconds, the queue's next words wait theirs
+      if (said?.refused === 'tmux-slow') { c.sent = false; c.sentAt = 0; c.tries -= 1; return { later: true }; }
       return said;
     });
   } catch (e) {
@@ -165,6 +166,8 @@ async function goOn(sid, c, now) {
   }
   if (r?.later) return;
   if (r?.gone) { chains.delete(sid); return; }
+  // the board did not start (board: false): dropped, the next look made it anew and typed every 15 s
+  if (r?.refused === 'other-board') { c.board = false; c.sent = false; return; }
   // something typed in its field is the person at work there: the board does not wipe it — it calls them
   if (r?.typedThere) { c.failed = true; return; }
   if (r?.refused || r?.err) {

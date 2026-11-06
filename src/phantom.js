@@ -542,24 +542,29 @@ export async function startedHere(sids) {
   const ports = await boardPorts(sids);
   return sids.filter((sid) => ports.get(sid) === PORT);
 }
-const portSeen = new Map(); // sid → {port, at}: a pane keeps the environment it was started with
+const portSeen = new Map(); // `${sid} ${pane pid}` → {port, at}
 const PORT_SEEN_MS = 60_000;
-/** Whether the terminal of `sid` — a pane known to be there — is another board's: {port} — the port in its KB_URL (null:
-    none, or tmux did not say: nobody's, as for a pass), or null — this board started it. Asked of the pane a card looks
-    at every second, so a known answer is kept a minute. */
-export async function otherBoard(sid) {
-  const seen = portSeen.get(sid);
+/** Whether the terminal of `sid` — a pane known to be there, `pid` — the program in it — is another board's: {port} —
+    the port in its KB_URL (null: none — nobody's, as for a pass), {port: null, silent: true} — tmux did not say, or null —
+    this board started it. Asked of the pane a card looks at every second, so a known answer is kept a minute. */
+export async function otherBoard(sid, pid = null) {
+  const k = pid ? `${sid} ${pid}` : null;
+  const seen = k ? portSeen.get(k) : null;
   let port;
   if (seen && Date.now() - seen.at < PORT_SEEN_MS) port = seen.port;
   else {
     const ports = await boardPorts([sid]);
-    if (ports.has(sid)) { port = ports.get(sid); portSeen.set(sid, { port, at: Date.now() }); }
+    if (!ports.has(sid)) return { port: null, silent: true };
+    port = ports.get(sid);
+    if (k) portSeen.set(k, { port, at: Date.now() });
     if (portSeen.size > 500) portSeen.delete(portSeen.keys().next().value);
   }
   return port === PORT ? null : { port: port ?? null };
 }
-/** The refusal of an action on another board's terminal: 409 with `reason: 'other-board'` and its port. */
-export const otherBoardRefusal = ({ port }) => ({
+/** Whether a terminal of taskTerminal is another board's for sure — for what only looks (the chat's field, the hold of a
+    look, the width): a tmux that did not say leaves it as it is; an action still refuses it (otherBoardRefusal). */
+export const foreign = (term) => Boolean(term?.other && !term.other.silent);
+export const otherBoardRefusal = ({ port, silent }) => (silent ? tmuxRefusal({}) : {
   error: port ? `this terminal was started by another board (port ${port}): stop, continue or answer it there`
     : 'this terminal was not started by this board: stop, continue or answer it where it was started',
   reason: 'other-board', port: port || null,
@@ -752,7 +757,7 @@ export async function taskTerminal(taskId, { screen = false } = {}) {
     const st = screen ? await phantomView(r.session_id) : await phantomPane(r.session_id);
     if (st?.unknown) return { session: r.session_id, unknown: true, ...(st.broken ? { broken: true } : {}) };
     if (st) {
-      const other = await otherBoard(r.session_id);
+      const other = await otherBoard(r.session_id, st.pid);
       return { session: r.session_id, ...(other ? { other } : {}), dead: st.dead, ...(st.dead ? { exit: st.exit, interrupted: endedBySignal(st) } : {}), cols: st.cols,
         ...(screen ? { screen: st.screen, wraps: st.wraps, links: st.links } : {}),
         ...(screen && !st.dead ? { activity: await terminalActivity(st.pid, st.screen) } : {}) };

@@ -187,6 +187,8 @@ export async function tickResume(app, now, { waiting = new Set(), limited = fals
       if (now - was.held > SAY_WAIT_MS) giveUp(r.session, was); else keepStopped();
       continue;
     }
+    if (said.refused === 'other-board') { forget(r.session); continue; }
+    if (said.refused === 'tmux-slow') { heldBy(was, 'tmux'); continue; } // nothing typed: as a silent fieldEmpty
     if (said.err || said.refused) {
       logError('server', 'automations', `the words of ${was.key} did not reach Claude: ${said.refused || said.err?.message || said.err}`, r.session);
       was.failed = (was.failed || 0) + 1;
@@ -224,6 +226,7 @@ export async function tickResume(app, now, { waiting = new Set(), limited = fals
       logError('server', 'automations', `resume of ${keys.join(', ')}: ${res.statusCode} ${res.body.slice(0, 200)}`);
       let reason = null;
       try { reason = JSON.parse(res.body)?.reason; } catch { /* not ours */ }
+      if (reason === 'other-board') { map[r.session] = { ...map[r.session], n: RESUME_TRIES }; kvSet(CHAINS_KEY, JSON.stringify(map)); }
       if (reason === 'tmux-slow' && (map[r.session].slow || 0) < SLOW_TRIES) {
         map[r.session] = { ...map[r.session], n: map[r.session].n - 1, slow: (map[r.session].slow || 0) + 1 };
         kvSet(CHAINS_KEY, JSON.stringify(map));

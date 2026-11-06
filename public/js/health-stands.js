@@ -37,6 +37,8 @@ function whyWords(s) {
     process: tr('a process runs in the folder'),
     task: `${tr('its task is in work')}${s.task ? ` (${statusWord(s.task.status)})` : ''}`,
     locked: tr('the worktree is locked'),
+    main: `${tr('a branch the repository keeps')}${s.branch ? ` (${s.branch})` : ''}`,
+    project: tr('a project of the board lives in the folder'),
     unknown: tr('could not tell what is in it'),
     dirty: `${tr('not committed')}: ${s.changes?.files ?? '?'} ${plural(s.changes?.files ?? 0, 'file', 'files')}`,
     ignored: `${tr('ignored data not in the main checkout')}: ${s.ignored?.files ?? '?'} ${plural(s.ignored?.files ?? 0, 'file', 'files')}`,

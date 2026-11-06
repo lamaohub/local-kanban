@@ -1501,6 +1501,8 @@ const I18N_RU = {
   'a process runs in the folder': 'в папке запущен процесс',
   'its task is in work': 'задача в работе',
   'the worktree is locked': 'рабочая копия заперта',
+  'a branch the repository keeps': 'ветка, которую репозиторий хранит',
+  'a project of the board lives in the folder': 'в папке живёт проект доски',
   'could not tell what is in it': 'не удалось понять, что в ней',
   'not committed': 'не закоммичено',
   'not in main': 'нет в main',

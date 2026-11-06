@@ -8,6 +8,20 @@ version it goes out as and opens an empty one again. Released sections are histo
 
 ## [Unreleased]
 
+## [2.0.0-beta.11]
+
+### Changed
+
+- Health's «Fix» is no longer held for ever by a Claude waiting at its prompt with commands left in the background (a dev server): after 2 hours without a change of its status the folder counts as free, the same bound «Claude now» uses. A task of the project in work still holds the button.
+
+### Fixed
+
+- Health → Stands no longer offers to remove a worktree on `main` or `master` — its cleanup would have deleted the branch — nor a folder a project of the board lives in; both are listed as busy.
+- Health → Stands no longer reads a failed `lsof` (an exit code other than 1, or no output at all) as «no process in the folder»: the stand says it could not tell, instead of «can be removed».
+- The cleanup task of Stands names the reasons a stand is kept in words of the board's language, not as codes.
+- A board no longer types into a terminal another board on the same tmux socket started: the «go on» after a broken connection to the API and the words after a usage limit resets asked nothing of whose the terminal is; now every word the board types does, and such a session is left to its own board quietly.
+- A board remembers whose a terminal is by the terminal itself, not by its session: another board starting the same session again no longer lets this one type into it or close it for a minute; a tmux that did not answer is said as a slow tmux, not as another board's terminal.
+
 ## [2.0.0-beta.10]
 
 ### Fixed

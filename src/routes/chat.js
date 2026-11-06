@@ -1,6 +1,6 @@
 
 import { resolveTask, taskAttachmentPaths } from './tasks.js';
-import { CHAT_COLS, REPLY_MAX, claudeAtPrompt, paceOnScreen, phantomResize, phantomScreen, phantomSend, otherBoardRefusal, taskTerminal, tmuxRefusal, watched } from '../phantom.js';
+import { CHAT_COLS, REPLY_MAX, claudeAtPrompt, foreign, paceOnScreen, phantomResize, phantomScreen, phantomSend, otherBoardRefusal, taskTerminal, tmuxRefusal, watched } from '../phantom.js';
 import { SESSION_ID_RE, taskSessions, transcriptNow } from '../claude-sessions.js';
 import { DOC_MAX, PICTURE_MAX, PICTURE_TYPES, SHOT_RE, TURNS_DEFAULT, TURNS_MAX, chatDoc, chatHash, chatPicture, chatShot, isMarkdown, pictureKindOf, saidCommand, transcriptChat, watchChat } from '../chat-feed.js';
 import { createReadStream } from 'node:fs';
@@ -58,6 +58,8 @@ export const NOT_DELIVERED = {
   'no-box': "Claude's input field is not on its screen — nothing was typed",
   'not-typed': "the words did not show in Claude's input field — not sent",
   'not-sent': "the words are in Claude's input field, but Enter did not send them — press Enter in the terminal",
+  'other-board': 'this terminal was started by another board: answer it there',
+  'tmux-slow': 'tmux did not answer in time — try again',
 };
 
 /** {status, body} of words typed now. */
@@ -110,7 +112,7 @@ export default async function chatRoutes(app) {
     // did not answer about is still the board's — the chat said «does not run inside the board» over a Claude at work;
     // its state is not known this look (null), a word sent now is refused as tmux-slow
     const term = await taskTerminal(t.id);
-    const send = Boolean(term && !term.dead && !term.other && term.session === s.session_id);
+    const send = Boolean(term && !term.dead && !foreign(term) && term.session === s.session_id);
     const state = send && !term.unknown ? await claudeAtPrompt(s.session_id) : null;
     // terminal beside it must answer Claude's question itself: what the screen shows of it, and keys under it
     const screen = state === 'question' ? (await phantomScreen(s.session_id, 0, { escapes: true })) ?? '' : null;

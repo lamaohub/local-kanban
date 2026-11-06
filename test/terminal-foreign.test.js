@@ -110,7 +110,9 @@ test('the card types into another board\'s Claude nowhere — not its answer, no
   assert.equal(look.statusCode, 200, look.body);
   assert.equal(width(), was, 'a look from this board laid out the window of another board\'s Claude');
   const { otherBoard } = await import('../src/phantom.js');
-  assert.deepEqual(await otherBoard('ffffffff-0000-4000-8000-0000000000ff'), { port: null }, 'a pane tmux did not say about read as this board\'s');
+  assert.deepEqual(await otherBoard('ffffffff-0000-4000-8000-0000000000ff'), { port: null, silent: true }, 'a pane tmux did not say about read as this board\'s');
+  const { otherBoardRefusal } = await import('../src/phantom.js');
+  assert.equal(otherBoardRefusal({ port: null, silent: true }).reason, 'tmux-slow', 'a silent tmux said the board\'s own terminal is another board\'s');
   const { refusalText } = await import('../public/js/unsaved.js');
   const said = refusalText(Object.assign(new Error(typed.json().error), { status: 409, body: typed.json() }));
   assert.match(said.reason, /started by another board/, 'the page says the refusal as «the board did not accept it»');
@@ -156,4 +158,44 @@ test('the room the fix of an automation makes does close this board\'s own Claud
   const r = await inject('POST', '/api/launch', { mode: 'board', text: 'go', project: 'frn', keys: ['FRN-6'], makeRoom: ADOPT_TOKEN });
   assert.equal(r.statusCode, 200, `the stand: a fix found no room by this board's own resting Claude: ${r.body}`);
   assert.ok(!alive(sid), 'the room of a fix left this board\'s own resting Claude');
+});
+
+// connection and the words after a limit went into a terminal another board started. Both go through sayToTerminal
+test('the board itself types into another board\'s terminal nowhere: sayToTerminal refuses it, and types into its own', { skip }, async () => {
+  const { sayToTerminal } = await import('../src/terminal-say.js');
+  const screen = (sid) => tmux('capture-pane', '-p', '-t', `=kb-${sid}:`);
+  const t = { id: 0, key: 'FRN-9', status: 'doing', labels: '[]' };
+  const r = await sayToTerminal(t, THEIRS_LIVE, { text: 'zzboardwords', key: 'Enter' });
+  assert.deepEqual(r, { refused: 'other-board', port: Number(THEIR_PORT) });
+  assert.doesNotMatch(screen(THEIRS_LIVE), /zzboardwords/, 'the board typed into a terminal another board started');
+  const none = await sayToTerminal(t, NO_URL, { text: 'zzboardwords', key: 'Enter' });
+  assert.equal(none.refused, 'other-board', 'the board typed into a terminal no board says is its own');
+  const sid = 'aaaaaaaa-0000-4000-8000-0000000000b1';
+  pane(sid, OUR_PORT, 'cat');
+  const own = await sayToTerminal(t, sid, { text: 'zzownwords', key: 'Enter' });
+  assert.ok(own.ok, `the board's own terminal was refused: ${JSON.stringify(own)}`);
+  for (let i = 0; i < 40 && !/zzownwords/.test(screen(sid)); i += 1) await new Promise((r2) => { setTimeout(r2, 50); });
+  assert.match(screen(sid), /zzownwords/, 'nothing reached the board\'s own terminal');
+  tmux('kill-session', '-t', `=kb-${sid}`);
+});
+
+// same session again, and for that minute this board typed into the new terminal and could close it
+test('a session started again by another board is asked anew: the answer is kept by the pane, not by the session', { skip }, async () => {
+  const sid = 'aaaaaaaa-0000-4000-8000-0000000000b2';
+  const pid = db.prepare("SELECT id FROM projects WHERE slug = 'frn'").get().id;
+  const id = db.prepare("INSERT INTO tasks (project_id, task_no, title, status) VALUES (?, 7, 'T', 'doing')").run(pid).lastInsertRowid;
+  const { tieLaunched, markBoardSession } = await import('../src/claude-sessions.js');
+  tieLaunched(id, sid);
+  markBoardSession(sid);
+  pane(sid, OUR_PORT, 'sleep 600');
+  const look = await inject('GET', '/api/tasks/FRN-7/terminal');
+  assert.equal(look.statusCode, 200, look.body);
+  tmux('kill-session', '-t', `=kb-${sid}`);
+  pane(sid, THEIR_PORT, 'sleep 600');
+  const typed = await inject('POST', '/api/tasks/FRN-7/terminal', { text: 'yes' });
+  assert.equal(typed.statusCode, 409, `the answer of the pane before let the card type into another board's new one: ${typed.body}`);
+  assert.equal(typed.json().reason, 'other-board');
+  const stop = await inject('DELETE', '/api/tasks/FRN-7/terminal');
+  assert.equal(stop.statusCode, 409, stop.body);
+  assert.ok(alive(sid), '«Stop» closed another board\'s new terminal of the same session');
 });
