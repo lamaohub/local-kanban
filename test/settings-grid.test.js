@@ -56,6 +56,7 @@ test('the section opens on its rows: no paragraph and no legend of the marks ove
     loadLaunchOptions: async () => ({}), pickedSetting: () => null, launchShown, EFFORT_LABELS, EFFORTS, effortOf,
     getSetting: () => undefined, setSetting: () => {}, repaintUsage: () => {}, renderLimits: () => {}, loadClaude: async () => {},
     automations: () => ({ on: false, rules: [] }), applyAutomations: () => {},
+    EDITORS: { vscode: 'VS Code' }, repaintProjectLinks: () => {}, renderProfiles: () => {},
   };
   vm.runInNewContext(`${line('const CC_MARK = ')}${take('async function renderClaudeSection(')}\nthis.run = renderClaudeSection;`, page);
   await page.run(body);

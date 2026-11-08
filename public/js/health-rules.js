@@ -136,3 +136,18 @@ export function walkBarHTML(label, done, total, kind = '') {
     + `<div class="hl-walk-h muted"><span>${label}</span><span class="hl-walk-n">${n}</span></div>`
     + `<div class="hl-walk-track"><span class="hl-walk-fill" style="width:${walkPct(d, t)}%"></span></div></div>`;
 }
+
+export const SLOW_ANSWER_SHOWN_MS = 1000;
+export function loadWords(v, { tr, fmtNum }) {
+  if (!v) return null;
+  const sec = (ms) => `${fmtNum(ms / 1000, 1)} ${tr('s')}`;
+  const msw = (ms) => `${fmtNum(ms, 0)} ${tr('ms')}`;
+  if (!v.last?.loop) return { slow: false, text: tr('The board measures its own speed — the first figures in a minute.'), routes: '' };
+  let text = tr('The board kept its work waiting up to {ms} in the last minute').replace('{ms}', msw(v.last.loop.p95));
+  if (v.worst?.loop && v.minutes > 1) text += `; ${tr('the worst minute of the hour — {ms}').replace('{ms}', msw(v.worst.loop.p95))}`;
+  text += '.';
+  if (v.slow) text += ` ${tr('That is slow — the error log has a record of it.')}`;
+  const slowest = (v.slowest || []).filter((r) => r.max >= SLOW_ANSWER_SHOWN_MS);
+  const routes = slowest.length ? `${tr('Slowest answers this hour:')} ${slowest.map((r) => `${r.route} ${sec(r.max)}`).join(', ')}` : '';
+  return { slow: Boolean(v.slow), text, routes };
+}

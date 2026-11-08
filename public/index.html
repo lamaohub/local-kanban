@@ -90,6 +90,9 @@
       <div class="drawer-head-actions">
         <button id="d-launch" class="btn-icon hidden"></button>
         <button id="d-session" class="btn-icon hidden"></button>
+        <a id="d-editor" class="btn-icon hidden"></a>
+        <a id="d-preview" class="btn-icon hidden" target="_blank" rel="noopener noreferrer"></a>
+        <a id="d-point" class="btn-icon hidden" href="#"></a>
         <button id="d-return-icon" class="btn-icon hidden" title="Return to work">↩</button>
         <button id="drawer-menu" class="btn-icon hidden" title="Card actions">⋯</button>
         <button id="drawer-close" class="btn-icon" title="Close">✕</button>
@@ -116,7 +119,10 @@
         <div id="d-links" class="links-row hidden"></div>
         <input type="file" id="d-file" class="hidden" accept="image/png,image/jpeg,image/webp,image/gif" multiple>
         <button id="d-attach" type="button" class="link-chip link-add attach-chip form-attach"></button>
+        <div id="d-profile" class="kbsel d-profile hidden" data-value=""></div>
       </div>
+      <div id="d-branch" class="branch-row hidden"></div>
+      <div id="d-pick" class="d-pick hidden"></div>
 
       <textarea id="d-title" class="d-title" rows="1" placeholder="Task title"></textarea>
       <div id="d-desc-conflict" class="desc-conflict hidden" role="status"></div>
@@ -152,6 +158,7 @@
       </div>
 
       <div id="work-block" class="work hidden"><div id="work"></div></div>
+      <div id="changes-block" class="changes hidden"><div id="changes"></div></div>
 
       <div id="term-block" class="term hidden">
         <div class="term-head"><span id="term-state" class="term-state"></span><button id="term-resume" type="button" class="btn-primary term-resume hidden"></button><button id="term-stop" type="button" class="btn-ghost term-stop"></button></div>

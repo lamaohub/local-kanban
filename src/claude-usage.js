@@ -1,5 +1,7 @@
 
 import { readdir, readFile, stat } from 'node:fs/promises';
+import { thirdPartySession } from './profiles.js';
+export const THIRD_PARTY = '(another provider)';
 import { basename, dirname, join } from 'node:path';
 import { db, logError } from './db.js';
 import { bus } from './bus.js';
@@ -331,7 +333,9 @@ async function countPass(sid) {
         ON CONFLICT (task_id, session_id, day, model, fast) DO UPDATE SET answers = answers + excluded.answers,
           partial = partial + excluded.partial, input = input + excluded.input, output = output + excluded.output,
           cache_read = cache_read + excluded.cache_read, cache_5m = cache_5m + excluded.cache_5m, cache_1h = cache_1h + excluded.cache_1h`);
-      for (const r of rows.values()) up.run(r.task, sid, r.day, r.model, r.fast, r.answers, r.partial, r.input, r.output, r.cache_read, r.cache_5m, r.cache_1h);
+      // Anthropic's prices: the model is kept with a mark no price matches (counted, shown, not priced)
+      const tp = thirdPartySession(sid);
+      for (const r of rows.values()) up.run(r.task, sid, r.day, tp ? `${r.model} ${THIRD_PARTY}` : r.model, r.fast, r.answers, r.partial, r.input, r.output, r.cache_read, r.cache_5m, r.cache_1h);
       db.prepare(`INSERT INTO claude_usage_reads (session_id, transcript, state, last, updated_at) VALUES (?, ?, ?, ?, datetime('now'))
         ON CONFLICT (session_id) DO UPDATE SET transcript = excluded.transcript, state = excluded.state, last = excluded.last, updated_at = excluded.updated_at`)
         .run(sid, transcript, JSON.stringify(s), JSON.stringify(last));

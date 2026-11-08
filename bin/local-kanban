@@ -10,7 +10,7 @@
 //  - nothing happens quietly: every step prints what it wrote and where.
 import { createInterface } from 'node:readline/promises';
 import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, writeFileSync, mkdirSync, symlinkSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, writeFileSync, mkdirSync, symlinkSync } from 'node:fs';
 import { join, dirname, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { bin } from '../src/bin-path.js'; // a program by its full path, as the board starts them
@@ -77,6 +77,10 @@ const usage = () => say(`
                           limits from the status line and answering Claude from the card. Shows
                           the change to settings.json in the Claude folder and asks before
                           writing it.
+  local-kanban import <export.zip> [--port <N>] [--dry-run]
+                          moving from vibe-kanban: put the archive of its «Export data» on the
+                          running board — projects, tasks, parents as links, pictures. An issue
+                          brought over once is skipped the next time. --dry-run only counts.
   local-kanban help       this help
 
   The Claude folder is $KB_CLAUDE_DIR when set, else $CLAUDE_CONFIG_DIR, else ~/.claude.
@@ -234,6 +238,29 @@ if (cmd === 'skills') {
     process.exit(1);
   }
   say(`\n  The skills in ${dir} now match this version of the package; other files in them are left as they were.`);
+  process.exit(0);
+}
+
+if (cmd === 'import') {
+  // the running board does the work (POST /api/import/vibe-kanban): it owns the base and the attachments folder
+  const file = argv[1] && !argv[1].startsWith('-') ? argv[1] : '';
+  if (!file) { say('\n  local-kanban import <export.zip> — the archive vibe-kanban\'s «Export data» gave you'); process.exit(2); }
+  let body;
+  try { body = readFileSync(file); } catch (e) { say(`\n  cannot read ${file}: ${e.code || e.message}`); process.exit(2); }
+  // a --port named here wins over KB_URL: inside a Claude session of a board KB_URL points at that board
+  const url = (flag('port') ? `http://127.0.0.1:${flag('port')}` : (process.env.KB_URL || 'http://127.0.0.1:3100')).replace(/\/+$/, '');
+  const dry = argv.includes('--dry-run');
+  let res;
+  try {
+    res = await fetch(`${url}/api/import/vibe-kanban${dry ? '?dry=1' : ''}`, { method: 'POST', headers: { 'Content-Type': 'application/zip' }, body });
+  } catch { say(`\n  The board at ${url} does not answer — start it (local-kanban start) or name its --port.`); process.exit(1); }
+  let r = {};
+  try { r = await res.json(); } catch { /* said below */ }
+  if (!res.ok) { say(`\n  The board refused the archive: ${r.error || `HTTP ${res.status}`}`); process.exit(res.status >= 500 ? 1 : 2); }
+  say(`\n  ${dry ? 'Would bring over' : 'Brought over'} ${r.created} task(s)${r.skipped ? `, ${r.skipped} already here skipped` : ''}, ${r.links} parent link(s), ${r.pictures} picture(s).`);
+  for (const p of r.projects || []) say(`  ${p.created ? (dry ? '+ would create' : '+ created') : '· into'} project «${p.name}» (${p.slug})`);
+  if (r.not_pictures) say(`  ${r.not_pictures} file(s) are not pictures — named under the task's description instead.`);
+  if (r.unknown_status?.length) say(`  Statuses the board does not know went to Backlog: ${r.unknown_status.join(', ')}.`);
   process.exit(0);
 }
 

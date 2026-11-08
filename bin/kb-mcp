@@ -1,0 +1,220 @@
+#!/usr/bin/env node
+// kb-mcp — the board as an MCP server (Model Context Protocol, stdio) for Claude Desktop, Cursor and other clients.
+// Claude Code drives the board with `kb` (cheaper, its exit codes are a contract); this is the same HTTP API for the
+// clients that speak MCP. A thin layer: every tool is one or two requests to the board at KB_URL (127.0.0.1:3100 by
+// default) — the board keeps every rule (statuses, labels, who holds a task), the server only names its refusal.
+// Config of a client:  { "mcpServers": { "kanban": { "command": "kb-mcp" } } }   (KB_URL in "env" for another port)
+// The protocol: JSON-RPC 2.0, one message per line on stdin and stdout; stdout carries nothing else, notes go to stderr.
+
+const BASE = (process.env.KB_URL || 'http://127.0.0.1:3100').replace(/\/+$/, '');
+const VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
+const PRIORITY = { none: 0, low: 1, med: 2, medium: 2, high: 3 };
+const PRI_NAME = ['none', 'low', 'med', 'high'];
+const KEY_RE = /^[A-Za-z0-9]{1,10}-\d+$/;
+const SEG_RE = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$/;
+
+class ToolError extends Error {}
+
+async function board(method, path, body) {
+  let res;
+  try {
+    res = await fetch(BASE + path, {
+      method,
+      headers: body ? { 'Content-Type': 'application/json' } : {},
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    throw new ToolError(`the board at ${BASE} does not answer — start it (local-kanban start) or set KB_URL`);
+  }
+  let data = null;
+  try { data = await res.json(); } catch { /* an empty or non-JSON answer — said below when it matters */ }
+  if (!res.ok) throw new ToolError(`the board refused (${res.status}): ${data?.error || res.statusText}`);
+  return data;
+}
+const key = (k) => {
+  if (typeof k !== 'string' || !KEY_RE.test(k)) throw new ToolError('key: a task key like ABC-12');
+  return k.toUpperCase();
+};
+const seg = (s, what) => {
+  if (typeof s !== 'string' || !SEG_RE.test(s)) throw new ToolError(`${what}: a project slug or prefix`);
+  return encodeURIComponent(s);
+};
+const line = (t) => `${t.key} [${t.status}]${t.priority ? ` ${PRI_NAME[t.priority]}` : ''}${t.blocked ? ' blocked' : ''} ${t.title || '(no title)'}`
+  + `${t.labels?.length ? ` {${t.labels.join(', ')}}` : ''}`;
+
+const TOOLS = [
+  {
+    name: 'list_projects',
+    description: 'The projects of the board: slug, task key prefix, name, folder, and how many tasks stand in each column.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    run: async () => {
+      const ps = await board('GET', '/api/projects');
+      return ps.filter((p) => !p.archived).map((p) => `${p.slug} (${p.prefix}) — ${p.name}${p.path ? ` · ${p.path}` : ''}`
+        + ` · backlog ${p.c_backlog || 0}, to do ${p.c_todo || 0}, in work ${(p.c_prep || 0) + (p.c_doing || 0) + (p.c_deploy || 0)}, review ${p.c_review || 0}`).join('\n') || 'no projects';
+    },
+  },
+  {
+    name: 'list_tasks',
+    description: 'The tasks of a project, one line each: key, status, priority, title. Without include_closed, backlog, done and cancelled are left out.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project: { type: 'string', description: 'project slug or key prefix' },
+        status: { type: 'string', enum: ['backlog', 'todo', 'prep', 'doing', 'ready', 'deploy', 'review', 'done', 'cancelled'] },
+        include_closed: { type: 'boolean', description: 'also backlog, done and cancelled' },
+        query: { type: 'string', description: 'only tasks whose title, description, key or labels hold these words' },
+      },
+      required: ['project'],
+      additionalProperties: false,
+    },
+    run: async (a) => {
+      const q = new URLSearchParams({ project: decodeURIComponent(seg(a.project, 'project')) });
+      if (a.status) q.set('status', a.status);
+      if (a.include_closed) q.set('all', '1');
+      if (a.query) { q.set('q', String(a.query)); q.set('all', '1'); q.set('limit', '100'); }
+      const list = await board('GET', `/api/tasks?${q}`);
+      return list.map(line).join('\n') || 'no tasks';
+    },
+  },
+  {
+    name: 'get_task',
+    description: 'A task in full: status, priority, labels, description, checklist, links and the last comments.',
+    inputSchema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'], additionalProperties: false },
+    run: async (a) => {
+      const t = await board('GET', `/api/tasks/${key(a.key)}`);
+      const comments = await board('GET', `/api/tasks/${key(a.key)}/comments`).catch(() => []);
+      const out = [line(t), `project: ${t.project}`];
+      if (t.gh_issue_url) out.push(`issue: ${t.gh_issue_url}`);
+      if (t.description) out.push('', t.description);
+      if (t.checklist?.length) out.push('', ...t.checklist.map((c, i) => `${i + 1}. [${c.done ? 'x' : ' '}] ${c.text}`));
+      if (t.links?.length) out.push('', ...t.links.map((l) => `${l.rel === 'parent' ? '↑ parent' : l.rel === 'child' ? '↓ subtask' : '↔ related'} ${l.key} [${l.status}] ${l.title}`));
+      if (comments.length) out.push('', ...comments.slice(-10).map((c) => `[${c.created_at}] ${c.author || ''}: ${c.body || (c.image_path ? '(a picture)' : '')}`));
+      return out.join('\n');
+    },
+  },
+  {
+    name: 'create_task',
+    description: 'A new task in Backlog (or To do). Answers its key.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project: { type: 'string', description: 'project slug or key prefix' },
+        title: { type: 'string' },
+        description: { type: 'string', description: 'Markdown; «- [ ] item» lines are the brief Claude follows' },
+        priority: { type: 'string', enum: ['none', 'low', 'med', 'high'] },
+        status: { type: 'string', enum: ['backlog', 'todo'] },
+      },
+      required: ['project', 'title'],
+      additionalProperties: false,
+    },
+    run: async (a) => {
+      const t = await board('POST', '/api/tasks', {
+        project: decodeURIComponent(seg(a.project, 'project')), title: String(a.title), description: String(a.description || ''),
+        priority: PRIORITY[a.priority || 'none'] ?? 0, status: a.status || 'backlog',
+      });
+      return `${t.key} created in ${t.status}`;
+    },
+  },
+  {
+    name: 'update_task',
+    description: 'Change a task: title, description, status, priority, labels (from the board\'s palette). Done and cancelled are the person\'s word — accept or cancel on the board.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        key: { type: 'string' },
+        title: { type: 'string' },
+        description: { type: 'string' },
+        status: { type: 'string', enum: ['backlog', 'todo', 'prep', 'doing', 'ready', 'deploy', 'review'] },
+        priority: { type: 'string', enum: ['none', 'low', 'med', 'high'] },
+        labels_add: { type: 'array', items: { type: 'string' } },
+        labels_remove: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['key'],
+      additionalProperties: false,
+    },
+    run: async (a) => {
+      const body = {};
+      for (const f of ['title', 'description', 'status', 'labels_add', 'labels_remove']) if (a[f] !== undefined) body[f] = a[f];
+      if (a.priority !== undefined) body.priority = PRIORITY[a.priority] ?? 0;
+      if (['done', 'cancelled'].includes(body.status)) throw new ToolError('done and cancelled are the person\'s word — accept or cancel the task on the board');
+      if (!Object.keys(body).length) throw new ToolError('nothing to change');
+      const t = await board('PATCH', `/api/tasks/${key(a.key)}`, body);
+      return `${line({ ...t, labels: typeof t.labels === 'string' ? JSON.parse(t.labels) : t.labels })}${t.warning?.text ? `\nwarning: ${t.warning.text}` : ''}`;
+    },
+  },
+  {
+    name: 'add_comment',
+    description: 'A comment on a task — what was done, a question, a decision.',
+    inputSchema: { type: 'object', properties: { key: { type: 'string' }, body: { type: 'string' } }, required: ['key', 'body'], additionalProperties: false },
+    run: async (a) => {
+      if (!String(a.body || '').trim()) throw new ToolError('body: the words of the comment');
+      await board('POST', `/api/tasks/${key(a.key)}/comments`, { body: String(a.body) });
+      return `${key(a.key)}: comment added`;
+    },
+  },
+  {
+    name: 'start_task',
+    description: 'Start Claude Code on a task inside the board (a terminal of the board in its project\'s folder, the kanban skill). The task goes to Preparation; its card shows the terminal.',
+    inputSchema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'], additionalProperties: false },
+    run: async (a) => {
+      const t = await board('GET', `/api/tasks/${key(a.key)}`);
+      const r = await board('POST', '/api/launch', { mode: 'board', project: t.project, keys: [t.key], text: `Run the kanban skill\nDo the task ${t.key}` });
+      return `${t.key}: Claude started inside the board${r.session ? ` (session ${r.session})` : ''}${r.dry ? ' — a dry run, nothing started' : ''}`;
+    },
+  },
+];
+
+const send = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
+const reply = (id, result) => send({ jsonrpc: '2.0', id, result });
+const fail = (id, code, message) => send({ jsonrpc: '2.0', id, error: { code, message } });
+
+async function handle(msg) {
+  if (!msg || msg.jsonrpc !== '2.0' || typeof msg.method !== 'string') {
+    if (msg && msg.id !== undefined && msg.id !== null) fail(msg.id, -32600, 'not a JSON-RPC 2.0 request');
+    return;
+  }
+  const { id, method, params } = msg;
+  const notification = id === undefined || id === null;
+  if (notification) return; // notifications/initialized, notifications/cancelled — nothing to answer
+  if (method === 'initialize') {
+    const asked = params?.protocolVersion;
+    reply(id, {
+      protocolVersion: VERSIONS.includes(asked) ? asked : VERSIONS[0],
+      capabilities: { tools: { listChanged: false } },
+      serverInfo: { name: 'local-kanban', version: '1' },
+      instructions: 'The board of tasks of local-kanban. Tasks are addressed by key (ABC-12). Done and cancelled are the person\'s word.',
+    });
+  } else if (method === 'ping') reply(id, {});
+  else if (method === 'tools/list') reply(id, { tools: TOOLS.map(({ run, ...t }) => t) });
+  else if (method === 'tools/call') {
+    const tool = TOOLS.find((t) => t.name === params?.name);
+    if (!tool) { fail(id, -32602, `unknown tool: ${params?.name}`); return; }
+    try {
+      const text = await tool.run(params.arguments || {});
+      reply(id, { content: [{ type: 'text', text }] });
+    } catch (e) {
+      if (!(e instanceof ToolError)) process.stderr.write(`kb-mcp: ${e.stack || e}\n`);
+      reply(id, { content: [{ type: 'text', text: e instanceof ToolError ? e.message : `kb-mcp broke: ${e.message}` }], isError: true });
+    }
+  } else fail(id, -32601, `method not found: ${method}`);
+}
+
+let buf = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  buf += chunk;
+  let at;
+  while ((at = buf.indexOf('\n')) >= 0) {
+    const raw = buf.slice(0, at).trim();
+    buf = buf.slice(at + 1);
+    if (!raw) continue;
+    let msg;
+    try { msg = JSON.parse(raw); } catch { send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } }); continue; }
+    const p = handle(msg).catch((e) => process.stderr.write(`kb-mcp: ${e.stack || e}\n`));
+    pending.add(p);
+    p.finally(() => pending.delete(p));
+  }
+});
+// the client closed its end: answer what is still in flight, then go
+const pending = new Set();
+process.stdin.on('end', () => { Promise.allSettled([...pending]).then(() => process.exit(0)); });

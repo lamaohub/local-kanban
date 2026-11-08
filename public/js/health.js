@@ -1,5 +1,5 @@
 
-import { $, HEALTH, LANG, api, esc, ic, state, tr } from './core.js';
+import { $, HEALTH, LANG, api, esc, fmtNum, ic, state, tr } from './core.js';
 import { liveBadge } from './board.js';
 import { keepFocus } from './now.js';
 import { plural } from './settings.js';
@@ -7,7 +7,7 @@ import { selectProject, styledAlert, styledConfirm } from './sidebar.js';
 import { refusalLine } from './unsaved.js';
 import { openDrawer } from './drawer.js';
 import { STATUS_LABELS, launchInClaude, taskPromptText } from './sse.js';
-import { fileState, fixStage, fixable, healthCounts, healthGroups, startTotal, walkBarHTML } from './health-rules.js';
+import { fileState, fixStage, fixable, healthCounts, healthGroups, loadWords, startTotal, walkBarHTML } from './health-rules.js';
 import { renderStands, stopStands } from './health-stands.js';
 import { localStore } from './store.js';
 
@@ -15,10 +15,32 @@ const TAB_KEY = 'kb.ui.healthTab';
 const TABS = ['files', 'stands'];
 let tab = 'files';
 try { const v = localStore.getItem(TAB_KEY); if (TABS.includes(v)) tab = v; } catch { /* private mode: the first one */ }
+let load = null;
+let loadAsked = null;
+function loadLoad() {
+  loadAsked ||= api('GET', '/api/health/load', undefined, { quiet: true }).then((v) => {
+    const was = JSON.stringify(loadWords(load, { tr, fmtNum }));
+    load = v;
+    if (JSON.stringify(loadWords(load, { tr, fmtNum })) !== was) placeLoadLine();
+  }, () => { /* the last figures stay */ }).finally(() => { loadAsked = null; });
+}
+function placeLoadLine() {
+  if (state.slug !== HEALTH) return;
+  const box = $('health');
+  const html = loadHTML();
+  const line = box?.querySelector('.hl-load');
+  if (line) { if (html) line.outerHTML = html; else line.remove(); return; }
+  if (html) box?.querySelector('.hl-tabs')?.insertAdjacentHTML('afterend', html);
+}
+function loadHTML() {
+  const w = loadWords(load, { tr, fmtNum });
+  if (!w) return '';
+  return `<div class="hl-load${w.slow ? ' hl-load-slow' : ''}">${esc(w.text)}${w.routes ? `<div class="hl-load-routes muted">${esc(w.routes)}</div>` : ''}</div>`;
+}
 function tabsHTML() {
   const b = (v, label, title) => `<button type="button" class="dr-btn${tab === v ? ' active' : ''}" data-hl-tab="${v}" role="tab" aria-selected="${tab === v}" title="${esc(tr(title))}">${esc(tr(label))}</button>`;
   return `<div class="now-bar hl-tabs"><div class="dash-range" role="tablist">${b('files', 'Instructions', 'How large the CLAUDE.md of each project is')}`
-    + `${b('stands', 'Stands', 'The git worktrees left behind by tasks, and their branches')}</div></div>`;
+    + `${b('stands', 'Stands', 'The git worktrees left behind by tasks, and their branches')}</div></div>${loadHTML()}`;
 }
 // one listener on the section for the switch: both sections draw it anew on every paint
 let tabsWired = false;
@@ -228,6 +250,7 @@ async function loadFixes() {
 }
 export async function renderHealth({ force = false } = {}) {
   wireTabs();
+  loadLoad();
   if (tab === 'stands') return renderStands(tabsHTML());
   if (last && !force && Date.now() - last.at < FRESH_MS) {
     await loadFixes();

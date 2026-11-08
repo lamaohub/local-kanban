@@ -38,6 +38,7 @@ before(async () => {
   ghState.available = false; ghState.lastCheck = Date.now() + 1e9;
   sessions = await import('../src/claude-sessions.js');
   tasks = await import('../src/routes/tasks.js');
+  (await import('../src/phantom.js')).setLookShare(0);
   live = await import('../src/claude-live.js');
   now = await import('../src/claude-now.js');
   feed = await import('../src/work-feed.js');

@@ -8,6 +8,29 @@ version it goes out as and opens an empty one again. Released sections are histo
 
 ## [Unreleased]
 
+## [2.0.0-beta.13]
+
+### Added
+
+- «Point for Claude»: a bookmark you press on your app's page highlights the element under the pointer; a click brings it to the task's card — its selector, components and source file (React, Vue, Svelte in development), text and HTML — and «Send to Claude» gives it to the task's Claude with your words. Nothing is added to the app's code, and nothing is sent until you press the button.
+- Several attempts at one task (a project with its own copies): «One more attempt» on the card makes another copy on its own branch and starts another Claude there, on the profile you pick, beside the first; see «Changes» of each and «Take this one» — the branch, the pull request and «Changes» of the card follow the chosen one.
+- Launch profiles (Settings → Claude Code): a model, how hard Claude thinks and environment variables (another provider through ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN) — a project starts its tasks with its own, a task may pick another; ▶ inside the board, the Terminal and «Continue» take it. The values of the variables stay on the computer: Claude gets them in a settings file, never on a command line, and no page sees them; usage on another provider is counted without Anthropic's prices.
+- «Changes» in a card: what was changed for the task, line by line — its commits (of its branch, or found by its key and issue) and what is not committed yet; click a line to leave a remark, and the remarks go to the task's Claude in one message.
+- A task with its own copy shows its branch on the card: how far it is ahead of main, a pull request (open one from the card: the branch is pushed and `gh pr create` gets the card's title and description; then its state), and a conflict with main — its files and «Let Claude resolve it», which gives the words to the task's Claude.
+- Each task in its own copy of the repository, by a switch of the project: ▶ makes `.claude/worktrees/<KEY>` on the branch `claude/<KEY>` (or takes it again), brings the files outside git you list (`copy .env`, `link node_modules`) and starts Claude there; «Continue» goes on in the same copy, `kb show` names it, `kb info` says how it ships; Health → Stands removes the old ones.
+- An MCP server for Claude Desktop, Cursor and other clients: `kb-mcp` (stdio) lists projects and tasks, reads, creates and changes tasks, comments and starts Claude inside the board on a task — the same rules as the board; done and cancelled stay the person's word.
+- «@» in a task's description puts in a template — «bug» (steps, expected, got), «criteria» (a checklist Claude takes as the brief), «question», or your own (Settings → General → Templates of a description); in the chat of a task «@» offers the templates and the files of the project, and a file goes in as `@path` the way Claude Code reads it.
+- Moving from vibe-kanban: `local-kanban import <export.zip>` or Settings → Backups → «Bring it over» puts the archive of its «Export data» on the board — projects, issues, parents as subtask links, pictures; statuses map to the board's columns (with a note where they moved), and an issue brought over once is skipped the next time.
+- A card opens its project's folder in your code editor (VS Code, Cursor, Windsurf or Zed — Settings → Claude Code → Code editor) and opens the project's running service (its «domain» field) in a new tab — two buttons in the card's header.
+- Health shows how fast the board itself is: how long it kept its work waiting in the last minute and in the worst minute of the hour, and the answers slower than a second. A minute past the limits (the event loop waiting over 300 ms, or an answer slower than 2 s) goes to Settings → Errors with the slowest routes, at most once in ten minutes.
+
+### Fixed
+
+- The board no longer bogs down with many sessions and thousands of tasks: a session's moves are read through an index (they were read by going over the whole journal, for every session every few seconds), «Claude now» and «Claude done» look up only the tasks they can show, the registry of Claude Code sessions is parsed again only when a file of it changed, looks at one terminal from several columns and tabs share one call to tmux, and the list of all tasks is kept ready (and compressed) until a task changes. On a copy of a board with 6 000 tasks: «Claude now» 42 → 12 ms of work a call, the badges of the cards 30 → 9 ms, the list of all tasks 132 → 10 ms.
+- «New task» asks for the 15 tasks it shows instead of every task of the board.
+- On a phone, the chat of a column in «Claude now → Terminals» no longer scrolls sideways: the folded line of a run («Ran 25 commands, read 3 files … +62 −0 ✗ 2») kept its words whole and pushed its figures past the chat.
+- On a loaded computer, words sent from the chat are no longer reported as «not sent» while Claude Code is still drawing them: the board waits for them longer the busier the machine is (up to four times as long).
+
 ## [2.0.0-beta.12]
 
 ### Added

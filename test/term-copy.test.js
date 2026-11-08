@@ -313,7 +313,9 @@ test('a short screen tells no narrower width: lines Claude ended stay apart', ()
 // longer than that (the usual case), and rows tmux wrapped copy broken again; the short screens of the tests did not see it.
 test('the screen and its joined copy are captured from the same depth of history', () => {
   const src = readFileSync(new URL('../src/phantom.js', import.meta.url), 'utf8');
-  const view = src.slice(src.indexOf('export async function phantomView'), src.indexOf('if (r.err) return null;', src.indexOf('export async function phantomView')));
+  const at = src.indexOf('async function readView');
+  assert.ok(at > 0, 'the capture of a look is not where the test reads it');
+  const view = src.slice(at, src.indexOf('if (r.err) return', at));
   const depths = [...view.matchAll(/\['capture-pane', '-p', (?:'-J', )?'-S', ([^,]+),/g)].map((m) => m[1]);
   assert.equal(depths.length, 2, 'phantomView no longer captures the screen and its joined copy');
   assert.equal(depths[0], depths[1], 'the joined copy is captured from another depth than the screen');

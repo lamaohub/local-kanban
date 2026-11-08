@@ -21,6 +21,10 @@ CREATE TABLE IF NOT EXISTS projects (
   archived           INTEGER NOT NULL DEFAULT 0,
   created_at         TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at         TEXT NOT NULL DEFAULT (datetime('now')),
+  worktrees          INTEGER NOT NULL DEFAULT 0,
+  worktree_files     TEXT,
+  worktree_setup     TEXT,
+  profile_id         INTEGER,
   ready_gate         INTEGER
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_prefix ON projects(prefix);
@@ -79,6 +83,7 @@ CREATE TABLE IF NOT EXISTS task_events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_task ON task_events(task_id);
 CREATE INDEX IF NOT EXISTS idx_events_created ON task_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_events_session ON task_events(session_id, id);
 CREATE TABLE IF NOT EXISTS task_links (
   task_id        INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   linked_task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -126,6 +131,56 @@ CREATE TABLE IF NOT EXISTS typed_backs (
   truncated  INTEGER NOT NULL DEFAULT 0,
   print      TEXT,
   printed    INTEGER NOT NULL DEFAULT 0
+);
+-- kb show names. Local-only; goes with the task.
+CREATE TABLE IF NOT EXISTS task_worktrees (
+  task_id     INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+  path        TEXT NOT NULL,
+  branch      TEXT NOT NULL,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS task_prs (
+  task_id     INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+  url         TEXT NOT NULL,
+  number      INTEGER,
+  state       TEXT NOT NULL DEFAULT 'OPEN',
+  checked_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- launch profile; «Take this one» makes its copy the task's (task_worktrees). Attempt 1 is the task's first copy.
+CREATE TABLE IF NOT EXISTS task_attempts (
+  task_id     INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  n           INTEGER NOT NULL,
+  path        TEXT NOT NULL,
+  branch      TEXT NOT NULL,
+  profile_id  INTEGER,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (task_id, n)
+);
+-- the values never go to a page or a command line (src/profiles.js). A task may have its own; a session remembers its own.
+CREATE TABLE IF NOT EXISTS launch_profiles (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  name        TEXT NOT NULL,
+  model       TEXT NOT NULL DEFAULT '',
+  effort      TEXT NOT NULL DEFAULT '',
+  env         TEXT NOT NULL DEFAULT '{}',
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS task_profiles (
+  task_id     INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+  profile_id  INTEGER NOT NULL REFERENCES launch_profiles(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS session_profiles (
+  session_id  TEXT PRIMARY KEY,
+  profile_id  INTEGER,
+  third_party INTEGER NOT NULL DEFAULT 0
+);
+-- import of the same archive skips what is already here. Local-only; goes with the task.
+CREATE TABLE IF NOT EXISTS imported_tasks (
+  source   TEXT NOT NULL,
+  ext_id   TEXT NOT NULL,
+  task_id  INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  PRIMARY KEY (source, ext_id)
 );
 CREATE TABLE IF NOT EXISTS task_moves (
   project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

@@ -36,6 +36,7 @@ function form({ labels = [], status = 'todo' } = {}) {
     $: (id) => { if (!els[id]) els[id] = fakeEl(); return els[id]; },
     state: { drawerKey: null, drawerProject: 'vv', slug: 'vv' },
     setTimeout: () => 0,
+    paintProjectLinks() {},
     api: async (method, path, body) => {
       assert.equal(`${method} ${path}`, 'POST /api/tasks');
       if (answer.wait) await answer.wait;
@@ -51,7 +52,7 @@ function form({ labels = [], status = 'todo' } = {}) {
     formStatus: status,
     buildStatusSelect: (value, isNew, allowDirect) => { calls.statusSelect.push({ value, isNew, allowDirect }); },
     renderDrawerLinks: (links) => { calls.links.push(links); },
-    renderIssueRow: (t) => { calls.issue.push(t.key); },
+    renderIssueRow: (t) => { calls.issue.push(t.key); }, renderBranchRow: () => {},
     renderTimeline: (t) => { calls.timeline.push(t.key); },
   };
   vm.runInNewContext([

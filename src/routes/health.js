@@ -4,6 +4,7 @@ import { scalarQuery } from '../query-params.js';
 import { cleanupTasks, knownStand, standDiff, standsView } from '../stands.js';
 import { healthView } from '../health.js';
 import { healthFixTask, openFixes } from '../auto-health.js';
+import { slowWatch } from '../slow-watch.js';
 
 let flight = null; // a second request while the folders are walked waits for the same walk
 let step = { done: 0, total: 0 };
@@ -16,6 +17,7 @@ export default async function healthRoutes(app) {
     }
     return flight;
   });
+  app.get('/api/health/load', () => slowWatch.view());
   app.get('/api/health/progress', () => ({ running: Boolean(flight), done: step.done, total: step.total }));
   app.get('/api/health/stands', (req, reply) => {
     const q = scalarQuery(req.query, ['refresh']);

@@ -213,7 +213,7 @@ async function renderChaosRecent(force = false) {
   clearTimeout(ncLater); ncLater = null;
   ncListAt = Date.now();
   let tasks = [];
-  try { tasks = await api('GET', '/api/tasks?all=1'); } catch { box.innerHTML = '<div class="muted">—</div>'; return; }
+  try { tasks = await api('GET', `/api/tasks?all=1&newest=${RECENT_N}`); } catch { box.innerHTML = '<div class="muted">—</div>'; return; }
   const rows = [...tasks].sort((a, b) => b.id - a.id).slice(0, RECENT_N);
   const projName = (slug) => state.projects.find((p) => p.slug === slug)?.name || slug;
   box.innerHTML = rows.length

@@ -37,6 +37,7 @@ before(async () => {
   chmodSync(join(bin, 'tmux'), 0o755);
   process.env.PATH = `${bin}:${process.env.PATH}`;
   phantom = await import('../src/phantom.js');
+  phantom.setLookShare(0);
   live = await import('../src/claude-live.js');
   sessions = await import('../src/claude-sessions.js');
 });

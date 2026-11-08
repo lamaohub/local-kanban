@@ -23,15 +23,15 @@ export function taskPercent(t) {
 // Every task in work, plus the tasks its run has handed in or still holds in To do. A run is the latest
 // session of a task (the same pick as the card's badge: the freshest `last_seen`, then the session id).
 const ROWS = `
-  WITH latest AS (
-    SELECT task_id, session_id, first_seen FROM (
-      SELECT task_id, session_id, first_seen,
-        ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY last_seen DESC, session_id) AS rn
-      FROM task_sessions) WHERE rn = 1
-  ), held AS (
-    SELECT DISTINCT l.session_id FROM latest l
-    JOIN tasks t ON t.id = l.task_id JOIN projects p ON p.id = t.project_id AND p.archived = 0
+  WITH held AS (
+    SELECT DISTINCT (SELECT s.session_id FROM task_sessions s WHERE s.task_id = t.id ORDER BY s.last_seen DESC, s.session_id LIMIT 1) AS session_id
+    FROM tasks t JOIN projects p ON p.id = t.project_id AND p.archived = 0
     WHERE t.status IN ('prep','doing','deploy') AND ${noclaudeFilter('t.')}
+  ), sess AS (
+    SELECT session_id FROM held WHERE session_id IS NOT NULL UNION SELECT value FROM json_each(?)
+  ), cand AS (
+    SELECT id FROM tasks WHERE status IN ('prep','doing','deploy')
+    UNION SELECT task_id FROM task_sessions WHERE session_id IN (SELECT session_id FROM sess)
   )
   SELECT t.id, (p.prefix || '-' || t.task_no) AS key, p.slug AS project, p.name AS project_name,
     t.title, substr(COALESCE(t.description, ''), 1, 180) AS preview, t.status, t.blocked, t.updated_at,
@@ -40,11 +40,11 @@ const ROWS = `
     CASE WHEN ${noclaudeFilter('t.')} THEN l.first_seen END AS first_seen,
     (SELECT COUNT(*) FROM task_checklist c WHERE c.task_id = t.id) AS checklist_n,
     (SELECT COUNT(*) FROM task_checklist c WHERE c.task_id = t.id AND c.done = 1) AS checked_n
-  FROM tasks t JOIN projects p ON p.id = t.project_id AND p.archived = 0
-  LEFT JOIN latest l ON l.task_id = t.id
+  FROM cand CROSS JOIN tasks t ON t.id = cand.id JOIN projects p ON p.id = t.project_id AND p.archived = 0
+  LEFT JOIN task_sessions l ON l.rowid = (SELECT s.rowid FROM task_sessions s WHERE s.task_id = t.id ORDER BY s.last_seen DESC, s.session_id LIMIT 1)
   WHERE t.status IN ('prep','doing','deploy')
      OR (t.status IN ('todo','ready','review','done') AND ${noclaudeFilter('t.')}
-       AND (l.session_id IN (SELECT session_id FROM held) OR l.session_id IN (SELECT value FROM json_each(?))))
+       AND l.session_id IN (SELECT session_id FROM sess))
   ORDER BY t.id`;
 
 const taskShape = (r, focus) => ({
@@ -73,11 +73,10 @@ function runShape({ session, claude, since, focus, rows, stale }) {
 
 // sessions that are the latest of a task in Review, or of one in To do whose last move they made; the same `latest` as ROWS
 const WAITS_ON_PERSON = `
-  SELECT DISTINCT l.session_id FROM (
-    SELECT task_id, session_id, ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY last_seen DESC, session_id) AS rn
-    FROM task_sessions) l
+  SELECT DISTINCT l.session_id FROM task_sessions l
   JOIN tasks t ON t.id = l.task_id JOIN projects p ON p.id = t.project_id AND p.archived = 0
-  WHERE l.rn = 1 AND ${noclaudeFilter('t.')} AND l.session_id IN (SELECT value FROM json_each(?))
+  WHERE l.session_id IN (SELECT value FROM json_each(?)) AND ${noclaudeFilter('t.')}
+    AND l.session_id = (SELECT x.session_id FROM task_sessions x WHERE x.task_id = l.task_id ORDER BY x.last_seen DESC, x.session_id LIMIT 1)
     AND (t.status IN ('ready', 'review') OR (t.status = 'todo'
       AND (SELECT e.session_id FROM task_events e WHERE e.task_id = t.id ORDER BY e.id DESC LIMIT 1) = l.session_id))`;
 /** The board's sessions that are "now" with none of their tasks in work: Map sid → 'busy' | 'background' (at work) |
@@ -157,49 +156,53 @@ export async function nowRuns(isAlive, paneOf = undefined, ownWork = waitsOwnWor
 export const DONE_DAYS = 7;   // how far back the section looks
 export const DONE_RUNS = 30;  // and how many runs it shows at most
 const LOOSE_GAP_MS = 3600000; // hand-ins without a session further apart than this are separate runs
-// a task's last move into Review and into Done
-const HAND_INS = `
-  ev AS (
-    SELECT task_id, MAX(CASE WHEN status = 'review' THEN created_at END) AS review_at,
-      MAX(CASE WHEN status = 'done' THEN created_at END) AS done_at
-    FROM task_events WHERE status IN ('review','done') GROUP BY task_id
-  )`;
 // A session is busy while it holds a task in work on a live board — the same `held` as nowRuns; a manual task in
 const DONE_ROWS = `
-  WITH latest AS (
-    SELECT task_id, session_id, first_seen FROM (
-      SELECT task_id, session_id, first_seen,
-        ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY last_seen DESC, session_id) AS rn
-      FROM task_sessions) WHERE rn = 1
-  ), busy AS (
-    SELECT DISTINCT l.session_id FROM latest l JOIN tasks t ON t.id = l.task_id
-    JOIN projects p ON p.id = t.project_id AND p.archived = 0
+  WITH busy AS (
+    SELECT DISTINCT (SELECT s.session_id FROM task_sessions s WHERE s.task_id = t.id ORDER BY s.last_seen DESC, s.session_id LIMIT 1) AS session_id
+    FROM tasks t JOIN projects p ON p.id = t.project_id AND p.archived = 0
     WHERE t.status IN ('prep','doing','deploy') AND ${noclaudeFilter('t.')}
-  ), ${HAND_INS}
-  SELECT t.id, (p.prefix || '-' || t.task_no) AS key, p.slug AS project, p.name AS project_name,
-    t.title, substr(COALESCE(t.description, ''), 1, 180) AS preview, t.status, t.updated_at,
-    l.session_id, l.first_seen, COALESCE(ev.review_at, ev.done_at, t.updated_at) AS handed_at, ev.done_at
-  FROM tasks t JOIN projects p ON p.id = t.project_id AND p.archived = 0
-  JOIN latest l ON l.task_id = t.id
-  LEFT JOIN ev ON ev.task_id = t.id
-  WHERE t.status IN ('review','done') AND ${noclaudeFilter('t.')}
-    AND l.session_id NOT IN (SELECT session_id FROM busy)
-    AND l.session_id NOT IN (SELECT value FROM json_each(?))
-    AND l.session_id IN (SELECT l2.session_id FROM latest l2 JOIN ev e2 ON e2.task_id = l2.task_id
-      WHERE COALESCE(e2.review_at, e2.done_at) >= ?)
-  ORDER BY t.id`;
+  ), recent AS (
+    SELECT DISTINCT task_id FROM task_events WHERE created_at >= @since AND status IN ('review','done')
+  ), handed AS (
+    SELECT DISTINCT (SELECT s.session_id FROM task_sessions s WHERE s.task_id = r.task_id ORDER BY s.last_seen DESC, s.session_id LIMIT 1) AS session_id
+    FROM recent r
+    WHERE COALESCE((SELECT MAX(x.created_at) FROM task_events x WHERE x.task_id = r.task_id AND x.status = 'review'),
+                   (SELECT MAX(x.created_at) FROM task_events x WHERE x.task_id = r.task_id AND x.status = 'done')) >= @since
+  ), rows AS (
+    SELECT t.id, (p.prefix || '-' || t.task_no) AS key, p.slug AS project, p.name AS project_name,
+      t.title, substr(COALESCE(t.description, ''), 1, 180) AS preview, t.status, t.updated_at,
+      l.session_id, l.first_seen,
+      (SELECT MAX(x.created_at) FROM task_events x WHERE x.task_id = t.id AND x.status = 'review') AS review_at,
+      (SELECT MAX(x.created_at) FROM task_events x WHERE x.task_id = t.id AND x.status = 'done') AS done_at
+    FROM handed h CROSS JOIN task_sessions l ON l.session_id = h.session_id
+    JOIN tasks t ON t.id = l.task_id JOIN projects p ON p.id = t.project_id AND p.archived = 0
+    WHERE h.session_id IS NOT NULL
+      AND l.session_id = (SELECT s.session_id FROM task_sessions s WHERE s.task_id = t.id ORDER BY s.last_seen DESC, s.session_id LIMIT 1)
+      AND t.status IN ('review','done') AND ${noclaudeFilter('t.')}
+      AND l.session_id NOT IN (SELECT session_id FROM busy WHERE session_id IS NOT NULL)
+      AND l.session_id NOT IN (SELECT value FROM json_each(@active))
+  )
+  SELECT id, key, project, project_name, title, preview, status, updated_at, session_id, first_seen,
+    COALESCE(review_at, done_at, updated_at) AS handed_at, done_at
+  FROM rows ORDER BY id`;
 // hand-ins of tasks no session is tied to, within the window
 const LOOSE_ROWS = `
-  WITH ${HAND_INS}
-  SELECT t.id, (p.prefix || '-' || t.task_no) AS key, p.slug AS project, p.name AS project_name,
-    t.title, substr(COALESCE(t.description, ''), 1, 180) AS preview, t.status, t.updated_at,
-    COALESCE(ev.review_at, ev.done_at) AS handed_at, ev.done_at
-  FROM tasks t JOIN projects p ON p.id = t.project_id AND p.archived = 0
-  JOIN ev ON ev.task_id = t.id
-  WHERE t.status IN ('review','done') AND ${noclaudeFilter('t.')}
-    AND NOT EXISTS (SELECT 1 FROM task_sessions s WHERE s.task_id = t.id)
-    AND COALESCE(ev.review_at, ev.done_at) >= ?
-  ORDER BY p.slug, handed_at, t.id`;
+  WITH recent AS (
+    SELECT DISTINCT task_id FROM task_events WHERE created_at >= @since AND status IN ('review','done')
+  ), rows AS (
+    SELECT t.id, (p.prefix || '-' || t.task_no) AS key, p.slug AS project, p.name AS project_name,
+      t.title, substr(COALESCE(t.description, ''), 1, 180) AS preview, t.status, t.updated_at,
+      (SELECT MAX(x.created_at) FROM task_events x WHERE x.task_id = t.id AND x.status = 'review') AS review_at,
+      (SELECT MAX(x.created_at) FROM task_events x WHERE x.task_id = t.id AND x.status = 'done') AS done_at
+    FROM recent r CROSS JOIN tasks t ON t.id = r.task_id JOIN projects p ON p.id = t.project_id AND p.archived = 0
+    WHERE t.status IN ('review','done') AND ${noclaudeFilter('t.')}
+      AND NOT EXISTS (SELECT 1 FROM task_sessions s WHERE s.task_id = t.id)
+  )
+  SELECT id, key, project, project_name, title, preview, status, updated_at,
+    COALESCE(review_at, done_at) AS handed_at, done_at
+  FROM rows WHERE COALESCE(review_at, done_at) >= @since
+  ORDER BY project, handed_at, id`;
 const utcMs = (s) => Date.parse(`${String(s).replace(' ', 'T')}Z`);
 
 /** What Claude has finished lately: `{runs}`, the most recently finished first. A run is `{session, started_at,
@@ -209,13 +212,13 @@ const utcMs = (s) => Date.parse(`${String(s).replace(' ', 'T')}Z`);
 export function doneRuns({ days = DONE_DAYS, limit = DONE_RUNS, active = [] } = {}) {
   const since = new Date(Date.now() - days * 86400000).toISOString().slice(0, 19).replace('T', ' ');
   const bySession = new Map();
-  for (const r of db.prepare(DONE_ROWS).all(JSON.stringify([...active]), since)) {
+  for (const r of db.prepare(DONE_ROWS).all({ active: JSON.stringify([...active]), since })) {
     if (!bySession.has(r.session_id)) bySession.set(r.session_id, []);
     bySession.get(r.session_id).push(r);
   }
   // without a session: one project's hand-ins in a row, no more than an hour apart
   const loose = [];
-  for (const r of db.prepare(LOOSE_ROWS).all(since)) {
+  for (const r of db.prepare(LOOSE_ROWS).all({ since })) {
     const run = loose.at(-1);
     if (run && run[0].project === r.project && utcMs(r.handed_at) - utcMs(run.at(-1).handed_at) <= LOOSE_GAP_MS) run.push(r);
     else loose.push([r]);

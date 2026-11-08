@@ -191,6 +191,8 @@ function printMoves(t) {
 function printIssue(t) {
   if (t.gh_issue_number) console.log(`issue: #${t.gh_issue_number}${t.gh_issue_url ? ' ' + t.gh_issue_url : ''}`);
   else if (t.gh_issue_url) console.log(`issue: ${t.gh_issue_url}`);
+  if (t.worktree) console.log(`worktree: ${t.worktree.path} (branch ${t.worktree.branch}) — work and commit there, not in the main checkout`);
+  if (t.pr) console.log(`pr: ${t.pr.url} (${String(t.pr.state || '').toLowerCase()})`);
 }
 
 // sees cards in the column, and a bare "empty" made Claude report that there was nothing there.
@@ -705,6 +707,10 @@ const commands = {
     // CLAUDE.md", "deployed by skill X", DNS facts) — info printed everything but it
     if (p.description) out.push(`description: ${p.description}`);
     if (p.ship_gate) out.push('ships on the word: after the commit kb mv <key> ready and wait; deploy only once the person says so');
+    if (p.worktrees) {
+      out.push('worktrees: each task works in its own copy <top of the repo>/.claude/worktrees/<KEY> on the branch claude/<KEY> (▶ makes it; kb show <key> names it) — work and commit there, never in the main checkout; ship from the copy the way the project ships (its deploy skill, the word if it waits for one)');
+      if (p.worktree_setup) out.push(`worktree setup: run in a fresh copy before work — ${p.worktree_setup}`);
+    }
     // page; without this line Claude went looking by itself and sometimes missed. A missing
     // CLAUDE.md is said out loud — it is a signal (the task starts without architecture notes).
     if (p.path) {

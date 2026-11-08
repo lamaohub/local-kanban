@@ -73,6 +73,7 @@ test('Settings → Claude Code has the switches above Starting tasks, each showi
     repaintWorkTabs: () => {}, repaintColumnViews: () => {},
     loadClaude: async () => { seen.claude++; },
     automations: () => ({ on: false, rules: [] }), applyAutomations: () => {},
+    EDITORS: { vscode: 'VS Code' }, repaintProjectLinks: () => {}, renderProfiles: () => {},
   };
   vm.runInNewContext(`${line('settings', 'const CC_MARK = ')}${take('settings', 'async function renderClaudeSection(')}\nthis.run = renderClaudeSection;`, box);
   await box.run(body);

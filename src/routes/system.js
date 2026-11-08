@@ -23,6 +23,9 @@ import { isManual } from '../task-shape.js';
 import { packagedSkillNames, packagedSkillState, refreshPackagedSkill } from '../skills.js';
 import { isGuest } from '../share.js';
 import { bin } from '../bin-path.js';
+import { taskFolder, worktreeOf } from '../worktrees.js';
+import { markSessionProfile, profileById, profileFor, settingsFile } from '../profiles.js';
+import { attemptOf } from '../attempts.js';
 
 export const ONBOARDING_VERSION = 5;
 
@@ -522,6 +525,7 @@ export default async function systemRoutes(app) {
     if (p && tasks.some((t) => t.project_id !== p.id)) return { code: 400, error: 'keys: tasks of this project only' };
     return manualRefusal(tasks) || checkRefusal(tasks) || { tasks };
   };
+  const taskCopy = (p, tasks) => taskFolder(p, tasks, { dry: launchDryRun() });
   app.post('/api/launch', async (req, reply) => {
     const b = req.body || {};
     if (b.mode === 'board') return launchBoard(b, reply);
@@ -547,16 +551,32 @@ export default async function systemRoutes(app) {
     // new work in a terminal goes under a session id the board picks, as inside the board; the app names its own
     const session = b.mode === 'terminal' && b.text !== undefined ? randomUUID() : null;
     let spec;
-    try { spec = launchSpec({ mode: b.mode, text: b.text, folder, resume: b.resume, host: b.host, session, url: `http://127.0.0.1:${PORT}`, effort: b.effort, bin: claudeWord() }); } catch (e) {
+    const profile = b.mode === 'terminal' && p ? profileFor(picked.tasks, p) : null;
+    let prof = {};
+    try { prof = profile ? { settings: settingsFile(profile, PORT), model: profile.model || null, effort: profile.effort || b.effort } : {}; } catch (e) {
+      logError('server', 'launch', `the settings of the launch profile were not written: ${e.message}`);
+      return reply.code(500).send({ error: 'the settings of the launch profile could not be written' });
+    }
+    try { spec = launchSpec({ mode: b.mode, text: b.text, folder, resume: b.resume, host: b.host, session, url: `http://127.0.0.1:${PORT}`, effort: b.effort, bin: claudeWord(), ...prof }); } catch (e) {
       return reply.code(e.statusCode || 500).send({ error: e.message });
     }
     const named = session ? { session } : {};
-    if (launchDryRun()) return { ok: true, dry: true, folder, ...named, ...spec };
+    if (launchDryRun() && !(p && p.worktrees)) return { ok: true, dry: true, folder, ...named, ...spec };
     const keys = picked.tasks.map((t) => t.key);
     const busy = keys.filter((k) => launching.has(k));
     if (busy.length) return reply.code(409).send({ error: `Claude is being started on ${busy.join(', ')}`, reason: 'starting' });
     keys.forEach((k) => launching.add(k));
     try {
+      // two `worktree add`), after the refusals; a session going on runs where it ran (only a copy it is tied to, never a new one)
+      if (p && picked.tasks.length && p.worktrees) {
+        const copy = b.resume ? { path: picked.tasks.map((t) => worktreeOf(t.id)?.path).find(Boolean) || p.path } : await taskCopy(p, picked.tasks);
+        if (copy.error) return reply.code(409).send({ error: copy.error, reason: copy.reason });
+        if (copy.path !== folder) {
+          folder = copy.path;
+          spec = launchSpec({ mode: b.mode, text: b.text, folder, resume: b.resume, host: b.host, session, url: `http://127.0.0.1:${PORT}`, effort: b.effort, bin: claudeWord(), ...prof });
+        }
+      }
+      if (launchDryRun()) return { ok: true, dry: true, folder, ...named, ...spec };
       const res = await runLaunch(spec);
       if (res.err) {
         logError('server', 'launch', `launch via ${b.mode} failed: ${res.err.message}`, res.text);
@@ -564,6 +584,7 @@ export default async function systemRoutes(app) {
       }
       // the tasks it moves become the started Claude's (commitPatch ties its session to them); of the rest, only the
       // ones no live Claude holds (tieUnheld) — the second Claude is told the others are taken
+      markSessionProfile(session, profile);
       const prep = b.mode === 'desktop' ? [] : moveLaunched(picked.tasks, session, b.mode);
       if (session) await tieUnheld(picked.tasks, session, prep);
       if (prep.length) liveTick(); // their cards say "starting" now, not at the next look in up to 3 s
@@ -590,10 +611,14 @@ export default async function systemRoutes(app) {
     if (!launchDryRun() && !phantomAvailable()) {
       return reply.code(409).send({ error: 'tmux or claude is not installed here — pick another way to start Claude in Settings', fallback: true, reason: tmuxBin() ? 'no-claude' : 'no-tmux' });
     }
+    const attempt = b.attempt === undefined ? null : ((tasks.length === 1 && Number.isInteger(b.attempt) && attemptOf(tasks[0], b.attempt)) || false);
+    if (attempt === false) return reply.code(404).send({ error: 'attempt: an attempt of the one task of the start', reason: 'no-attempt' });
     const keys = tasks.map((t) => t.key);
-    const busy = keys.filter((k) => launching.has(k));
+    // an attempt locks itself, not the task's keys: the task's own start may be going on beside it
+    const locks = attempt ? [`${keys[0]}#a${attempt.n}`] : keys;
+    const busy = locks.filter((k) => launching.has(k));
     if (busy.length) return reply.code(409).send({ error: `Claude of the board is starting on ${busy.join(', ')}`, running: busy });
-    keys.forEach((k) => launching.add(k));
+    locks.forEach((k) => launching.add(k));
     try {
       const running = [];
       let foreign = null;
@@ -606,6 +631,7 @@ export default async function systemRoutes(app) {
           await phantomStop(term.session);
           term = await taskTerminal(t.id);
         }
+        if (attempt) continue;
         if (term?.unknown) { unsure.push(t.key); broken ||= Boolean(term.broken); } else if (term && !term.dead) {
           running.push(t.key);
           if (term.other && !term.other.silent) foreign ||= term.other;
@@ -620,8 +646,16 @@ export default async function systemRoutes(app) {
       if (b.resume !== undefined) return await resumeBoard(b, p, tasks, reply);
       const sid = randomUUID();
       const name = keys.length > 1 ? `${keys[0]} +${keys.length - 1}` : (keys[0] || p.slug);
+      const copy = attempt ? { path: attempt.path, branch: attempt.branch } : await taskCopy(p, tasks);
+      if (copy.error) return reply.code(409).send({ error: copy.error, reason: copy.reason, keys });
+      const folder = copy.path;
       // was the person's word for exactly those
-      const spec = phantomSpec({ sid, name, text: b.text, folder: p.path, permission: b.permission, port: PORT, allow: doneRules(tasks), effort: b.effort });
+      const profile = (attempt?.profile_id && profileById(attempt.profile_id)) || profileFor(tasks, p);
+      let spec;
+      try { spec = phantomSpec({ sid, name, text: b.text, folder, permission: b.permission, port: PORT, allow: doneRules(tasks), effort: b.effort, profile }); } catch (e) {
+        logError('server', 'launch', `the settings of the launch profile were not written: ${e.message}`);
+        return reply.code(500).send({ error: 'the settings of the launch profile could not be written' });
+      }
       const bytes = tmuxCommandBytes(spec.args);
       if (bytes > TMUX_COMMAND_MAX) {
         return reply.code(400).send({
@@ -629,8 +663,8 @@ export default async function systemRoutes(app) {
           fallback: true, reason: 'too-long',
         });
       }
-      const trusted = folderTrusted(p.path);
-      if (launchDryRun()) return { ok: true, dry: true, session: sid, folder: p.path, trusted, keys, ...spec };
+      const trusted = folderTrusted(folder);
+      if (launchDryRun()) return { ok: true, dry: true, session: sid, folder, trusted, keys, ...(copy.branch ? { branch: copy.branch } : {}), ...spec };
       const res = await runPhantom(spec);
       if (res.err) {
         const broken = startRefusal(res.text);
@@ -639,13 +673,19 @@ export default async function systemRoutes(app) {
         return reply.code(500).send({ error: failureReason(res.text, res.err.message) });
       }
       markBoardSession(sid);
+      markSessionProfile(sid, profile);
       if (b.noTasks === ADOPT_TOKEN) markTaskless(sid);
+      if (attempt) {
+        tieLaunched(tasks[0].id, sid);
+        liveTick();
+        return { ok: true, session: sid, folder, trusted, keys, prep: [], attempt: attempt.n, branch: attempt.branch };
+      }
       const prep = moveLaunched(tasks, sid, 'board');
       await tieUnheld(tasks, sid, prep); // and the card of each task finds the terminal at once
       if (prep.length) liveTick();
-      return { ok: true, session: sid, folder: p.path, trusted, keys, prep };
+      return { ok: true, session: sid, folder, trusted, keys, prep, ...(copy.branch ? { branch: copy.branch } : {}) };
     } finally {
-      keys.forEach((k) => launching.delete(k));
+      locks.forEach((k) => launching.delete(k));
     }
   }
 
@@ -675,9 +715,15 @@ export default async function systemRoutes(app) {
     const other = pane ? await otherBoard(sid, pane.pid) : null;
     if (other) return reply.code(409).send({ ...otherBoardRefusal(other), keys });
     const name = keys.length > 1 ? `${keys[0]} +${keys.length - 1}` : keys[0];
-    const spec = phantomSpec({ sid, name, folder: p.path, permission: b.permission, port: PORT, allow: doneRules(tasks), effort: b.effort, resume: true });
-    const trusted = folderTrusted(p.path);
-    if (launchDryRun()) return { ok: true, dry: true, session: sid, folder: p.path, trusted, keys, resumed: true, ...spec };
+    const folder = tasks.map((t) => worktreeOf(t.id)?.path).find(Boolean) || p.path;
+    const profile = profileById(db.prepare('SELECT profile_id FROM session_profiles WHERE session_id = ?').get(sid)?.profile_id) || profileFor(tasks, p);
+    let spec;
+    try { spec = phantomSpec({ sid, name, folder, permission: b.permission, port: PORT, allow: doneRules(tasks), effort: b.effort, resume: true, profile }); } catch (e) {
+      logError('server', 'launch', `the settings of the launch profile were not written: ${e.message}`);
+      return reply.code(500).send({ error: 'the settings of the launch profile could not be written' });
+    }
+    const trusted = folderTrusted(folder);
+    if (launchDryRun()) return { ok: true, dry: true, session: sid, folder, trusted, keys, resumed: true, ...spec };
     if (pane) await phantomStop(sid); // a session left behind fails the start below with its own words
     const res = await runPhantom(spec);
     if (res.err) {
@@ -690,7 +736,7 @@ export default async function systemRoutes(app) {
     markResumed(sid); // «starting» on its cards until Claude Code puts it into its registry
     liveTick();
     emit('session.chat', { session: sid });
-    return { ok: true, session: sid, folder: p.path, trusted, keys, prep: [], resumed: true };
+    return { ok: true, session: sid, folder, trusted, keys, prep: [], resumed: true };
   }
 
   app.get('/api/lang', () => ({ lang: uiLang(), source: langOverride() ? 'env' : 'kv' }));

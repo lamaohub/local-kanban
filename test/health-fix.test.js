@@ -352,7 +352,7 @@ async function healthPage({ tr = (s) => s } = {}) {
     $: (id) => { assert.equal(id, 'health'); return box; }, HEALTH: 'health', LANG: 'en', api, state, tr, ic: () => '',
     esc: (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;'),
     liveBadge: (t) => (state.live[t.id] ? `<span class="card-live">${state.live[t.id].claude}</span>` : ''),
-    keepFocus: (_el, fn) => fn(), plural: (n, a, b) => (n === 1 ? a : b),
+    keepFocus: (_el, fn) => fn(), plural: (n, a, b) => (n === 1 ? a : b), fmtNum: (n, d = 1) => Number(n).toFixed(d),
     selectProject: () => {}, styledAlert: (s) => { throw new Error(`alert: ${s}`); }, styledConfirm: async () => false,
     refusalLine: (s) => s, openDrawer: (key) => opened.push(key),
     STATUS_LABELS: { backlog: 'Backlog', todo: 'To do', prep: 'Prep', doing: 'Doing', review: 'Review' },

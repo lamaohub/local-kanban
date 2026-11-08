@@ -69,6 +69,7 @@ process.stdout.on('resize', () => log({ resized: process.stdout.columns }));
   const { ghState } = await import('../src/sync/worker.js');
   ghState.available = false; ghState.lastCheck = Date.now() + 1e9;
   phantom = await import('../src/phantom.js');
+  phantom.setLookShare(0);
   // the stand-in's start looks at the terminal (launchOn → alive): a look would keep every terminal from resting — the
   phantom.setLookHold(0);
   const add = db.prepare('INSERT INTO projects (slug, prefix, name, next_task_no, path) VALUES (?,?,?,?,?)');

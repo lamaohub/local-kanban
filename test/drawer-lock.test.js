@@ -53,7 +53,7 @@ function card() {
     REL_MARK: {}, REL_TITLE: {},
     // what the open-card sync needs around it
     api: async () => { throw new Error('no server in this test'); },
-    styledAlert: () => {}, closeDrawer: () => {}, renderIssueRow: () => {}, renderLaunchButtons: () => {},
+    styledAlert: () => {}, closeDrawer: () => {}, renderIssueRow: () => {}, renderBranchRow: () => {}, renderLaunchButtons: () => {},
     selVal: (id) => selects[id],
     buildStatusSelect: (v) => { selects['d-status'] = v; },
     taskIsNoclaude: (t) => (t.labels || []).includes('noclaude'),

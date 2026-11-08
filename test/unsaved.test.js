@@ -213,16 +213,21 @@ test('the project page and the skill editor see a change typed into them, and on
 
   assert.equal(box.out.project(), false, 'no project page is open');
   box.psSnap = { name: 'Board', description: 'desc', category: 'Other', pinned: 1, deploy_skill: null, pm2_services: null,
-    path: '/work/board', server: null, server_path: null, domain: null, ready_gate: null };
+    path: '/work/board', server: null, server_path: null, domain: null, ready_gate: null, worktrees: 0, worktree_files: null, worktree_setup: null, profile_id: null };
   Object.assign(els, {
     projset: el(), 'ps-name': el({ value: 'Board' }), 'ps-desc': el({ value: 'desc' }), 'ps-category': el({ dataset: { value: 'Other' } }),
     'ps-category-new': el(), 'ps-pinned': el({ checked: true }), 'ps-skill': el({ dataset: { value: '' } }), 'ps-ready': el({ dataset: { value: 'board' } }), 'ps-pm2': el(),
     'ps-path': el({ value: '/work/board' }), 'ps-server': el(), 'ps-spath': el(), 'ps-domain': el(),
+    'ps-wt': el({ checked: false }), 'ps-wt-files': el(), 'ps-wt-setup': el(),
+    'ps-profile': el({ dataset: { value: '' } }),
   });
   assert.equal(box.out.project(), false, 'a project page filled from the project and not touched counts as unsaved');
   els['ps-ready'].dataset.value = 'on';
   assert.equal(box.out.project(), true, 'CK-894: the word of a project on shipping counts as saved');
   els['ps-ready'].dataset.value = 'board';
+  els['ps-wt'].checked = true;
+  assert.equal(box.out.project(), true, 'CK-993: the switch of copies counts as saved');
+  els['ps-wt'].checked = false;
   els['ps-name'].value = 'Board renamed';
   assert.equal(box.out.project(), true, 'a renamed project counts as saved: a new board version would reload the tab over it');
   els.projset.classList.contains = (c) => c === 'hidden';

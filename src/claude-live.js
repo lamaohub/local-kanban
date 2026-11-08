@@ -1,13 +1,13 @@
 
 import { execFile } from 'node:child_process';
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { db } from './db.js';
 import { emit } from './bus.js';
 import { claudeDir } from './config.js';
 import { SESSION_ID_RE, WAIT_MAX_H, freshLaunchSessions, isBoardSession, sessionTranscript, waitingLaunches } from './claude-sessions.js';
 import { sessionEvents, sessionWindows } from './work-feed.js';
-import { boardLook, endedBySignal, phantomPane } from './phantom.js';
+import { boardLook, endedBySignal, lookShared, phantomPane, tmuxGeneration } from './phantom.js';
 import { taskOfSession } from './claude-asks.js';
 import { waitsOwnWork } from './own-wait.js';
 import { syncClocks } from './work-clock.js';
@@ -54,27 +54,42 @@ async function sameProcesses(entries, startsOf) {
   for (const e of entries) if (startSeen.get(key(e))?.same === false) e.alive = false; // nothing from ps: kill stays the word
 }
 
+const parsedFiles = new Map(); // file name → {stamp, entry: [sid, fields without alive] | null}
+
+async function registryFile(dir, name) {
+  const path = join(dir, name);
+  let st;
+  try { st = await stat(path, { bigint: true }); } catch { parsedFiles.delete(name); return null; }
+  const stamp = `${st.mtimeNs} ${st.size} ${st.ino}`;
+  const seen = parsedFiles.get(name);
+  if (seen && seen.stamp === stamp) return seen.entry;
+  let d;
+  try { d = JSON.parse(await readFile(path, 'utf8')); } catch { parsedFiles.delete(name); return null; } // half-written or foreign: read again next time
+  const sid = typeof d?.sessionId === 'string' ? d.sessionId.toLowerCase() : '';
+  const entry = SESSION_ID_RE.test(sid) ? [sid, {
+    status: typeof d.status === 'string' ? d.status : '',
+    pid: d.pid,
+    since: Number(d.statusUpdatedAt || d.updatedAt) || null,
+    cwd: typeof d.cwd === 'string' ? d.cwd : null,
+    procStart: typeof d.procStart === 'string' ? d.procStart : null,
+  }] : null;
+  parsedFiles.set(name, { stamp, entry });
+  return entry;
+}
+
 /** Session id → {status, pid, alive, since} from Claude Code's registry of live sessions. */
 export async function readRegistry(isAlive = alive, startsOf = processStarts) {
   const dir = join(claudeDir(), 'sessions');
   const out = new Map();
   let names = [];
-  try { names = await readdir(dir); } catch { return out; }
+  try { names = await readdir(dir); } catch { parsedFiles.clear(); return out; }
+  const json = new Set(names.filter((n) => n.endsWith('.json')));
+  for (const n of parsedFiles.keys()) if (!json.has(n)) parsedFiles.delete(n);
   const read = [];
-  for (const n of names) {
-    if (!n.endsWith('.json')) continue;
-    let d;
-    try { d = JSON.parse(await readFile(join(dir, n), 'utf8')); } catch { continue; } // half-written or foreign
-    const sid = typeof d?.sessionId === 'string' ? d.sessionId.toLowerCase() : '';
-    if (!SESSION_ID_RE.test(sid)) continue;
-    read.push([sid, {
-      status: typeof d.status === 'string' ? d.status : '',
-      pid: d.pid,
-      alive: isAlive(d.pid),
-      since: Number(d.statusUpdatedAt || d.updatedAt) || null,
-      cwd: typeof d.cwd === 'string' ? d.cwd : null,
-      procStart: typeof d.procStart === 'string' ? d.procStart : null,
-    }]);
+  for (const entry of await Promise.all([...json].map((n) => registryFile(dir, n)))) {
+    if (!entry) continue;
+    const [sid, fields] = entry;
+    read.push([sid, { ...fields, alive: isAlive(fields.pid) }]);
   }
   const check = read.map(([, e]) => e).filter((e) => e.alive && e.procStart);
   if (check.length) await sameProcesses(check, startsOf);
@@ -130,6 +145,24 @@ export async function boardPaneGone(sid, paneOf = phantomPane) {
     conversation kept (`lost`); null — not the board's, alive, tmux did not answer, or nothing to go on from. */
 export async function boardPaneEnded(sid, paneOf = phantomPane, transcriptOf = sessionTranscript) {
   if (!isBoardSession(sid)) return null;
+  // every liveTick and nowRuns asked tmux again about every ended run. ENDED_KEEP_MS bounds what the board does not see
+  // (another board on the socket, a kill-server by hand)
+  const own = paneOf === phantomPane && transcriptOf === sessionTranscript && lookShared();
+  const kept = own ? endedSeen.get(sid) : undefined;
+  if (kept && kept.gen === tmuxGeneration() && Date.now() - kept.at < ENDED_KEEP_MS) return { ...kept.ended };
+  const gen = tmuxGeneration(); // before the look: a start during it makes the answer stale, not the new truth
+  const ended = await paneEnded(sid, paneOf, transcriptOf);
+  if (own) {
+    const now = Date.now();
+    for (const [k, v] of endedSeen) if (now - v.at >= ENDED_KEEP_MS) endedSeen.delete(k);
+    if (ended) endedSeen.set(sid, { ended, gen, at: now });
+    else endedSeen.delete(sid);
+  }
+  return ended;
+}
+const ENDED_KEEP_MS = 60_000;
+const endedSeen = new Map(); // session → {ended, gen, at}
+async function paneEnded(sid, paneOf, transcriptOf) {
   const st = await paneOf(sid);
   if (!st) return (await transcriptOf(sid)) ? { exit: null, interrupted: true, lost: true } : null;
   return st.dead ? { exit: st.exit ?? null, interrupted: endedBySignal(st) } : null;

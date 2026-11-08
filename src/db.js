@@ -92,6 +92,18 @@ const MIGRATIONS = [
     } finally { db.pragma('foreign_keys = ON'); }
   } },
   { v: 15, name: 'comment-keys-deleted', up: () => {} },
+  // git the copy gets (copy/link lines), the command that prepares it
+  { v: 16, name: 'project-worktrees', up: () => {
+    const cols = db.prepare('PRAGMA table_info(projects)').all().map((c) => c.name);
+    if (!cols.length) return; // a fresh install: schema.sql makes the table with them
+    if (!cols.includes('worktrees')) db.exec('ALTER TABLE projects ADD COLUMN worktrees INTEGER NOT NULL DEFAULT 0');
+    if (!cols.includes('worktree_files')) db.exec('ALTER TABLE projects ADD COLUMN worktree_files TEXT');
+    if (!cols.includes('worktree_setup')) db.exec('ALTER TABLE projects ADD COLUMN worktree_setup TEXT');
+  } },
+  { v: 17, name: 'project-profile', up: () => {
+    const cols = db.prepare('PRAGMA table_info(projects)').all().map((c) => c.name);
+    if (cols.length && !cols.includes('profile_id')) db.exec('ALTER TABLE projects ADD COLUMN profile_id INTEGER');
+  } },
 ];
 export const SCHEMA_VERSION = MIGRATIONS.at(-1).v;
 

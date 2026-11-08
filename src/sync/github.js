@@ -9,6 +9,13 @@ const GH_CANDIDATES = [
 ];
 const GH_FOUND = GH_CANDIDATES.find((p) => existsSync(p)) || null;
 const ghBin = () => ghBinEnv() || GH_FOUND || bin('gh');
+export function ghAt(cwd, args, { timeout = 60000 } = {}) {
+  return new Promise((done) => {
+    execFile(ghBin(), args, { cwd, timeout, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, GH_PROMPT_DISABLED: '1' } }, (err, out, errOut) => done({
+      err, code: err ? (typeof err.code === 'number' ? err.code : -1) : 0, out: String(out || '').trim(), text: `${errOut || out || ''}`.trim(),
+    }));
+  });
+}
 
 const PERMANENT = [
   /validation failed/i,

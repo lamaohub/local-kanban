@@ -141,6 +141,20 @@ export function sessionWindows(events) {
 }
 
 export function sessionEvents(sid) {
+  const stamp = dbStamp();
+  if (stamp !== eventsStamp) { eventsMemo.clear(); eventsStamp = stamp; }
+  let rows = eventsMemo.get(sid);
+  if (!rows) { rows = Object.freeze(readSessionEvents(sid)); eventsMemo.set(sid, rows); }
+  return rows;
+}
+const eventsMemo = new Map(); // session → its moves, as of eventsStamp
+let eventsStamp = null;
+let stampStmts = null; // prepared once: this runs for every session on every tick
+function dbStamp() {
+  stampStmts ||= [db.prepare('SELECT total_changes() AS n').pluck(), db.prepare('PRAGMA data_version').pluck()];
+  return `${stampStmts[0].get()} ${stampStmts[1].get()}`;
+}
+function readSessionEvents(sid) {
   const own = db.prepare(`SELECT e.task_id, e.status, e.created_at, l.event_id IS NOT NULL AS launch FROM task_events e
     LEFT JOIN task_launches l ON l.event_id = e.id WHERE e.session_id = ? ORDER BY e.id`).all(sid);
   // a session whose kb sends no id still has no moves of its own, and borrows its unsigned ones as before

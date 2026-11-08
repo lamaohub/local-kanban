@@ -12,6 +12,12 @@ export function selfOrigins(port) {
   return out;
 }
 
+export function pageVisit(req) {
+  const h = req.headers;
+  return (req.method === 'GET' || req.method === 'HEAD') && h['sec-fetch-mode'] === 'navigate' && h['sec-fetch-dest'] === 'document'
+    && String(req.url || '').split('?')[0] === '/';
+}
+
 export function makeOriginGuard(port) {
   const hosts = selfHosts(port);
   const origins = selfOrigins(port);
@@ -24,7 +30,7 @@ export function makeOriginGuard(port) {
       return reply.code(403).send({ error: 'cross-origin request rejected' });
     }
     const site = req.headers['sec-fetch-site'];
-    if (site && site !== 'same-origin' && site !== 'none') {
+    if (site && site !== 'same-origin' && site !== 'none' && !pageVisit(req)) {
       return reply.code(403).send({ error: 'cross-site request rejected' });
     }
     done();

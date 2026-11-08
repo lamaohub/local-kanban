@@ -23,6 +23,8 @@ export function pickEncoding(accept) {
   return null;
 }
 
+export const compressBody = (body, enc) => (enc === 'br' ? brotli(body, BR) : gzip(body, GZIP));
+
 /** The Fastify `onSend` hook that compresses the answer. */
 export async function compressAnswer(req, reply, payload) {
   if (payload == null || req.method === 'HEAD') return payload;

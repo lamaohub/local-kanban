@@ -3,7 +3,10 @@ import { WORKING, buildSelect, drawLinks } from './board.js';
 import { syncGlyphs } from './glyphs.js';
 import { flowNote } from './ready-rules.js';
 import { $, ALL, statusesFor, HEALTH, LANG, api, apiBlob, esc, fmtNum, ic, seg, smoothReload, state, tr } from './core.js';
-import { applyKeepDrawer, repaintWorkTabs } from './drawer.js';
+import { applyKeepDrawer, repaintProjectLinks, repaintWorkTabs } from './drawer.js';
+import { EDITORS } from './editor-rules.js';
+import { forgetTemplates, templateList } from './at-picker.js';
+import { renderProfiles } from './profiles.js';
 import { checkVersion, hasUnsavedInput, pendingReload } from './init.js';
 import { confirmDiscard, loadProjects, popLayer, pushLayer, renderSidebar, selectProject, setupPromptBlockHTML, styledAlert, styledConfirm, styledPrompt, wireSetupPrompt } from './sidebar.js';
 import { SHORT_MONTHS, SOUND_LIB, STATUS_LABELS, audioCtx, lastMissedAt, lastSseAt, loadLaunchOptions, missedSounds, pageLoadedAt, playNamedSound, refresh, relTime, repaintUsage, titleOr, updateSoundBadge } from './sse.js';
@@ -96,7 +99,7 @@ function wireCallSettings(body) {
   }).catch(() => { if ($('voice-state')) $('voice-state').textContent = tr('the board did not say whether the neural voice is there'); });
 }
 
-const SETTINGS_DEFAULTS = { sound: true, soundReview: 'ding', soundDone: 'click', startScreen: 'dashboard', dashRange: 'week', theme: 'light', keepDrawer: false, notifyReview: false, compactCards: false, linkLines: true, keymap: {}, launch: 'board', glyphs: true, permission: 'auto', effort: '', effortCheck: '', showUsage: true, showLimits: true, chatView: 'terminal', showHealth: false, voiceCall: false, callVoice: 'xenia' };
+const SETTINGS_DEFAULTS = { sound: true, soundReview: 'ding', soundDone: 'click', startScreen: 'dashboard', dashRange: 'week', theme: 'light', keepDrawer: false, notifyReview: false, compactCards: false, linkLines: true, keymap: {}, launch: 'board', glyphs: true, permission: 'auto', effort: '', effortCheck: '', showUsage: true, showLimits: true, chatView: 'terminal', editor: 'vscode', showHealth: false, voiceCall: false, callVoice: 'xenia' };
 export function getSetting(k) {
   const v = localStore.getItem('kb.set.' + k);
   const d = Object.hasOwn(PHONE_DEFAULTS, k) && onPhone() ? PHONE_DEFAULTS[k] : SETTINGS_DEFAULTS[k];
@@ -106,6 +109,62 @@ export function getSetting(k) {
   // a keymap that was a string broke ⌘F and the Hotkeys section, whose «Reset» would have mended it
   if (d !== undefined && (got === null || typeof got !== typeof d || Array.isArray(got) !== Array.isArray(d))) return d;
   return got;
+}
+async function renderTemplates(box) {
+  const list = await templateList();
+  if (!box.isConnected) return; // the window was closed meanwhile
+  const row = (t) => `<div class="tpl-row"><input class="tpl-name" maxlength="40" value="${esc(t.name)}" placeholder="${esc(tr('name'))}" aria-label="${esc(tr('name'))}">`
+    + `<button type="button" class="btn-icon tpl-del" title="${esc(tr('Remove'))}">✕</button>`
+    + `<textarea class="tpl-text" rows="3" placeholder="${esc(tr('the text that goes in'))}">${esc(t.text)}</textarea></div>`;
+  box.innerHTML = `<div class="tpl-hint muted">${esc(tr('type @ and the name in a description or in the chat — the text goes in where the cursor is'))}</div>`
+    + `<div class="tpl-list">${list.map(row).join('')}</div>`
+    + `<div class="tpl-btns"><button type="button" class="btn-ghost" id="tpl-add">${tr('Add a template')}</button>`
+    + `<button type="button" class="btn-ghost" id="tpl-reset">${tr("Back to the board's")}</button>`
+    + `<button type="button" class="btn-ghost" id="tpl-save">${tr('Save')}</button><span class="tpl-said muted" id="tpl-said" role="status"></span></div>`;
+  const listEl = box.querySelector('.tpl-list');
+  const said = (s) => { const el = box.querySelector('#tpl-said'); if (el) el.textContent = s; };
+  listEl.onclick = (e) => { if (e.target.closest('.tpl-del')) e.target.closest('.tpl-row').remove(); };
+  box.querySelector('#tpl-add').onclick = () => { listEl.insertAdjacentHTML('beforeend', row({ name: '', text: '' })); listEl.lastElementChild.querySelector('.tpl-name').focus(); };
+  const put = async (templates) => {
+    try {
+      await api('PUT', '/api/templates', { templates }, { quiet: true });
+      forgetTemplates();
+      if (box.isConnected) { if (templates === null) await renderTemplates(box); said(tr('Saved ✓')); }
+    } catch (err) { said(refusalLine(tr('Not saved'), err, tr)); }
+  };
+  box.querySelector('#tpl-save').onclick = () => put([...listEl.querySelectorAll('.tpl-row')]
+    .map((r) => ({ name: r.querySelector('.tpl-name').value.trim().replace(/^@/, ''), text: r.querySelector('.tpl-text').value }))
+    .filter((t) => t.name || t.text.trim()));
+  box.querySelector('#tpl-reset').onclick = () => put(null);
+}
+function wireVibeImport() {
+  const say = (html) => { const box = $('imp-say'); if (box) { box.innerHTML = html; box.classList.remove('hidden'); } };
+  const send = (file, dry) => apiBlob(`/api/import/vibe-kanban${dry ? '?dry=1' : ''}`, new Blob([file], { type: 'application/zip' }), { quiet: true });
+  $('imp-up').onclick = () => $('imp-file').click();
+  $('imp-file').onchange = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    const up = $('imp-up');
+    up.disabled = true;
+    try {
+      const plan = await send(file, true);
+      if (!$('imp-up')) return; // the window was closed meanwhile
+      if (!plan.created) { say(`<div class="bkr-head">${esc(tr('Nothing new in this archive — everything in it is on the board already.'))}</div>`); return; }
+      const fresh = plan.projects.filter((p) => p.created).map((p) => p.name);
+      const ok = await styledConfirm(`${tr('Tasks to bring over')}: ${plan.created}${plan.skipped ? ` · ${tr('already here')}: ${plan.skipped}` : ''}`
+        + (fresh.length ? `\n${tr('New projects')}: ${fresh.join(', ')}` : '')
+        + (plan.unknown_status.length ? `\n${tr('Statuses the board does not know go to Backlog')}: ${plan.unknown_status.join(', ')}` : ''),
+      { okLabel: tr('Bring it over') });
+      if (!ok || !$('imp-up')) return;
+      const r = await send(file, false);
+      say(`<div class="bkr-head">${esc(tr('Brought over'))}: ${r.created} · ${esc(tr('links'))}: ${r.links} · ${esc(tr('pictures'))}: ${r.pictures}</div>`
+        + (r.not_pictures ? `<div class="bkr-sub muted">${esc(tr('Files that are not pictures are named under the task descriptions.'))}</div>` : ''));
+      refresh();
+    } catch (err) {
+      say(`<div class="bkr-head bkr-bad">${ic('warn', 13)} ${tr('Did not work out')}</div><div class="bkr-sub muted">${esc(err.body?.reason === 'not-vibe' ? tr('This is not the archive vibe-kanban\'s «Export data» gives, or it is damaged.') : tr(refusalText(err).reason))}</div>`);
+    } finally { if ($('imp-up')) $('imp-up').disabled = false; }
+  };
 }
 export function setClaudeView(v) {
   setSetting('chatView', v === 'chat' ? 'chat' : 'terminal');
@@ -360,7 +419,9 @@ async function renderSection(sec) {
       + `<label class="set-row"><span class="set-lab">${tr('Task sidebar always open')}<small>${tr('keep the right panel visible even with no task selected')}</small></span><input type="checkbox" class="set-toggle" data-set="keepDrawer"></label>`
       + `<div class="set-row"><span class="set-lab">${tr('Start screen')}<small>${tr('what to open on launch')}</small></span><div class="kbsel set-sel" id="sel-startScreen"></div></div>`
       + `<div class="set-row"><span class="set-lab">${tr('Default dashboard range')}</span><div class="kbsel set-sel" id="sel-dashRange"></div></div>`
-      + `<div class="set-row"><span class="set-lab">${tr('Sound diagnostics')}<small id="snd-diag">…</small></span></div>`;
+      + `<div class="set-row"><span class="set-lab">${tr('Sound diagnostics')}<small id="snd-diag">…</small></span></div>`
+      + `<div class="sk-group-h">${tr('Templates of a description')}</div><div id="tpl-box" class="tpl-box"></div>`;
+    renderTemplates($('tpl-box'));
     const fmtT = (d) => d ? d.toLocaleTimeString(LANG === 'en' ? 'en-GB' : 'ru-RU', { hour: '2-digit', minute: '2-digit' }) : '—';
     const renderSndDiag = () => {
       const el = document.getElementById('snd-diag');
@@ -639,7 +700,11 @@ async function renderSection(sec) {
       + `<input type="file" id="bk-file" accept=".db,application/octet-stream" class="hidden">`
       + `<div id="bk-restore" class="bk-restore hidden"></div>`
       + `<div id="bk-list" class="bk-list">…</div>`
-      + '<div id="bk-more"></div>';
+      + '<div id="bk-more"></div>'
+      + `<div class="sk-group-h">${tr('Moving from vibe-kanban?')}</div>`
+      + `<div class="set-row"><span class="set-lab">${tr('The archive of its «Export data»')}<small>${tr('projects, tasks, parents as links and pictures come over; what came over once is skipped the next time')}</small></span>`
+      + `<button class="btn-ghost" id="imp-up">${tr('Bring it over')}</button></div>`
+      + `<input type="file" id="imp-file" accept=".zip,application/zip" class="hidden"><div id="imp-say" class="bk-restore hidden"></div>`;
     const load = async () => {
       let info;
       try { info = await api('GET', '/api/backups'); } catch { info = null; }
@@ -689,6 +754,7 @@ async function renderSection(sec) {
     api('GET', '/api/backups/restore', null, { quiet: true }).then((r) => { if (r && r.port) renderRunning(r); }).catch(() => {});
 
     $('bk-up').onclick = () => $('bk-file').click();
+    wireVibeImport();
     $('bk-file').onchange = async (e) => {
       const file = e.target.files && e.target.files[0];
       e.target.value = '';
@@ -935,14 +1001,17 @@ async function renderClaudeSection(body) {
     + `<label class="set-row"><span class="set-lab">${tr('Claude limits')}<small>${tr('the 5-hour and weekly limits of the subscription, at the bottom of the sidebar')}</small></span><input type="checkbox" class="set-toggle" data-set="showLimits"></label>`
     // of Claude now → Terminals is its chat or its terminal; a Claude the board did not start is always a chat
     + `<div class="set-row"><span class="set-lab">${tr('Show Claude as')}<small>${tr('in a card and in Claude now → Terminals; a Claude started outside the board is always a chat')}</small></span><div class="kbsel set-sel" id="sel-chatView"></div></div>`
+    + `<div class="set-row"><span class="set-lab">${tr('Code editor')}<small>${tr('the button in a card opens the folder of the task there')}</small></span><div class="kbsel set-sel" id="sel-editor"></div></div>`
     + `<div class="sk-group-h">${tr('Starting tasks')}</div>`
     + `<div class="set-row"><span class="set-lab">${tr('How ▶ starts Claude')}<small>${tr('what ▶ on To do and on a card does')}</small></span><div class="kbsel set-sel" id="sel-launch"></div></div>`
     + `<div class="set-row"><span class="set-lab">${tr('Claude inside the board may')}<small>${tr('what it does without asking you')}</small></span><div class="kbsel set-sel" id="sel-permission"></div></div>`
     + `<div class="set-row"><span class="set-lab">${tr('How hard Claude thinks')}<small>${tr('inside the board and in Terminal; the Claude app keeps its own')}</small></span><div class="kbsel set-sel" id="sel-effort"></div></div>`
     + `<div class="set-row"><span class="set-lab">${tr('How hard Claude thinks on a check')}<small>${tr('a check of the tasks in Review (Claude review)')}</small></span><div class="kbsel set-sel" id="sel-effort-check"></div></div>`
+    + `<div class="sk-group-h">${tr('Launch profiles')}</div><div id="pf-box" class="pf-box"></div>`
     + `<div class="sk-group-h">${tr('Automations')}</div>`
     + `<label class="set-row"><span class="set-lab">${tr('Turn on automations')}<small>${tr('a section in the sidebar: a check of Review starts by itself once Claude has finished the work of a project')}</small></span><input type="checkbox" class="set-toggle" id="set-automations"></label>`
     + '<div id="cc-list" class="cc-list">…</div>';
+  renderProfiles($('pf-box'));
   const avail = await loadLaunchOptions();
   if (!$('sel-launch')) return; // the window was closed meanwhile
   buildSelect($('sel-launch'), { value: launchShown(pickedSetting('launch'), avail), options: [{ value: 'auto', label: tr('Automatically') }, { value: 'board', label: tr('Inside the board — at once, no windows') }, { value: 'desktop', label: tr('In the Claude app') }, { value: 'terminal', label: tr('In Terminal') }, { value: 'copy', label: tr('Only copy the prompt') }], onChange: (v) => setSetting('launch', v) });
@@ -958,6 +1027,8 @@ async function renderClaudeSection(body) {
   limitsBox.onchange = (e) => { setSetting('showLimits', e.target.checked); renderLimits(); };
   // applies at once: the open card and the columns follow the choice
   buildSelect($('sel-chatView'), { value: getSetting('chatView') === 'chat' ? 'chat' : 'terminal', options: [{ value: 'chat', label: tr('A chat') }, { value: 'terminal', label: tr('A terminal') }], onChange: (v) => setClaudeView(v) });
+  buildSelect($('sel-editor'), { value: getSetting('editor'), options: [...Object.entries(EDITORS).map(([value, label]) => ({ value, label })), { value: '', label: tr('None — no button') }],
+    onChange: (v) => { setSetting('editor', v); repaintProjectLinks(); } });
   const autoBox = $('set-automations');
   autoBox.checked = automations().on;
   autoBox.onchange = async (e) => {

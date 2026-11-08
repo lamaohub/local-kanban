@@ -1,6 +1,6 @@
 {
   "name": "local-kanban",
-  "version": "2.0.0-beta.12",
+  "version": "2.0.0-beta.13",
   "license": "MIT",
   "author": "Dannylamao",
   "repository": {
@@ -16,7 +16,8 @@
   "packageManager": "npm@10.0.0",
   "bin": {
     "kb": "bin/kb",
-    "local-kanban": "bin/local-kanban"
+    "local-kanban": "bin/local-kanban",
+    "kb-mcp": "bin/kb-mcp"
   },
   "description": "A local kanban board for working in tandem with Claude Code: the kb CLI plus a web board, with an optional GitHub mirror (issues + Projects v2)",
   "scripts": {

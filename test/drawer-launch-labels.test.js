@@ -55,6 +55,7 @@ function card({ status = 'todo', labels = [] } = {}) {
     DrawerSync: { cardLocked: (st, ls) => ['prep', 'doing', 'deploy'].includes(st) && !ls.includes('noclaude') },
     selVal: (id) => ({ 'd-status': status, 'd-priority': '0' })[id],
     pullExternal, descFollows() {},
+    paintProjectLinks() {},
   };
   vm.runInNewContext([
     `var drawerLabels = ${JSON.stringify(labels)}; var drawerLocked = false; var drawerStatus = ${JSON.stringify(status)};`,

@@ -16,6 +16,10 @@ import { termSuggestion, withPath } from './term-input-rules.js';
 import { otherBoardLine, termControls } from './term-owner-rules.js';
 import { holdUntil, reprinted } from './term-reprint.js';
 import { localStore } from './store.js';
+import { EDITORS, editorLink, previewUrl } from './editor-rules.js';
+import { renderChanges } from './changes.js';
+import { buildProfileSelect, profiles } from './profiles.js';
+import { paintPick } from './pick.js';
 
 /* ── Drawer ── */
 let drawerLabels = [];
@@ -180,6 +184,98 @@ export function renderIssueRow(t) {
   let html = `<a class="issue-link" href="${esc(t.gh_issue_url)}" target="_blank" rel="noopener noreferrer">issue #${esc(t.gh_issue_number)} ↗</a>`;
   if (t.commit_url) html += `<a class="issue-link commit-link" href="${esc(t.commit_url)}" target="_blank" rel="noopener noreferrer" title="${tr('the fix commit')}">commit ↗</a>`;
   row.innerHTML = html;
+}
+
+async function renderAttempts(box, t, note) {
+  const key = t.key;
+  let list = [];
+  try { list = (await api('GET', `/api/tasks/${seg(key)}/attempts`, undefined, { quiet: true })).attempts || []; } catch { list = []; }
+  if (state.drawerKey !== key || !box.isConnected) return;
+  const rows = list.length > 1 ? list.map((a) => `<div class="attempt-row${a.chosen ? ' chosen' : ''}"><span class="attempt-n">${esc(tr('Attempt {n}').replace('{n}', a.n))}</span>`
+    + `<span class="muted">${esc([a.profile, a.ahead === null ? '' : tr('ahead: {n}').replace('{n}', a.ahead)].filter(Boolean).join(' · '))}</span>`
+    + `<button type="button" class="link-chip" data-diff="${a.n}">${esc(tr('Changes'))}</button>`
+    + (a.chosen ? `<span class="attempt-chosen">${esc(tr('the task\'s'))}</span>` : `<button type="button" class="link-chip link-add" data-take="${a.n}">${esc(tr('Take this one'))}</button>`) + '</div>').join('') : '';
+  box.innerHTML = rows + `<div class="attempt-new"><button type="button" class="link-chip link-add" id="d-attempt-new">${esc(tr('One more attempt'))}</button><div class="kbsel d-attempt-profile" id="d-attempt-profile" data-value=""></div></div>`;
+  buildProfileSelect(box.querySelector('#d-attempt-profile'), null, tr('Profile of the project'), (v) => { box.querySelector('#d-attempt-profile').dataset.value = v ?? ''; });
+  box.querySelectorAll('[data-diff]').forEach((b) => { b.onclick = () => { changesAttempt = Number(b.dataset.diff); saveTab('changes'); showWorkTab('changes'); }; });
+  box.querySelectorAll('[data-take]').forEach((b) => {
+    b.onclick = async () => {
+      try { await api('POST', `/api/tasks/${seg(key)}/attempts/${seg(b.dataset.take)}/take`, {}, { quiet: true }); } catch (e) { note(refusalLine(tr('Not taken'), e, tr)); return; }
+      const full = await api('GET', `/api/tasks/${seg(key)}`, undefined, { quiet: true }).catch(() => null);
+      if (full && state.drawerKey === key) { drawerTask.worktree = full.worktree; renderBranchRow(full); paintProjectLinks(full.project, full.worktree?.path); }
+    };
+  });
+  const start = box.querySelector('#d-attempt-new');
+  start.onclick = async () => {
+    start.disabled = true;
+    const pv = box.querySelector('#d-attempt-profile').dataset.value;
+    try {
+      const a = await api('POST', `/api/tasks/${seg(key)}/attempts`, { profile: pv ? Number(pv) : null }, { quiet: true });
+      const text = [tr('Run the kanban skill'), tr('Attempt {n} at the task {key}: another Claude does the same task beside you, in a copy of its own. Do not move the task and do not hand it in — work in this folder (the branch {branch}), commit there, then leave a note: kb note {key} "Attempt {n}: what you did and how it differs".')
+        .replaceAll('{n}', a.n).replaceAll('{key}', key).replaceAll('{branch}', a.branch)].join('\n');
+      await api('POST', '/api/launch', { mode: 'board', project: t.project, keys: [key], attempt: a.n, text, permission: getSetting('permission') }, { quiet: true });
+      note(tr('Attempt {n} started — its terminal is in Claude now.').replace('{n}', a.n));
+      if (state.drawerKey === key) renderBranchRow(t);
+    } catch (e) { note(refusalLine(tr('No attempt'), e, tr)); start.disabled = false; }
+  };
+}
+
+async function renderTaskProfile(t) {
+  const host = $('d-profile');
+  const key = t.key;
+  const list = await profiles();
+  if (state.drawerKey !== key) return;
+  host.classList.toggle('hidden', !list.length);
+  if (!list.length) return;
+  buildProfileSelect(host, t.profile ?? null, tr('Profile of the project'), async (v) => {
+    try { await api('PUT', `/api/tasks/${seg(key)}/profile`, { profile: v }, { quiet: true }); } catch (e) { sayRefused(e, key); }
+  });
+}
+
+let branchAsk = 0;
+export async function renderBranchRow(t) {
+  const row = $('d-branch');
+  if (!t?.worktree) { row.classList.add('hidden'); row.innerHTML = ''; return; }
+  const key = t.key;
+  const my = ++branchAsk;
+  let b;
+  try { b = await api('GET', `/api/tasks/${seg(key)}/branch`, undefined, { quiet: true }); } catch { b = null; }
+  if (my !== branchAsk || state.drawerKey !== key) return; // another card meanwhile
+  if (!b?.branch) { row.classList.add('hidden'); row.innerHTML = ''; return; }
+  const ahead = b.ahead === null ? '' : b.ahead ? ` · ${tr('ahead of {base}: {n}').replace('{base}', b.base).replace('{n}', b.ahead)}` : ` · ${tr('nothing new against {base}').replace('{base}', b.base)}`;
+  const prState = { OPEN: 'open', MERGED: 'merged', CLOSED: 'closed' }[b.pr?.state] || 'open';
+  const pr = b.pr ? `<a class="issue-link" href="${esc(b.pr.url)}" target="_blank" rel="noopener noreferrer">PR${b.pr.number ? ` #${esc(b.pr.number)}` : ''} · ${esc(tr(prState))} ↗</a>`
+    : b.ahead ? `<button type="button" class="link-chip link-add" id="d-pr-open">${esc(tr('Open a pull request'))}</button>` : '';
+  const files = b.conflict?.files || [];
+  const conflict = files.length ? `<div class="branch-conflict">${ic('warn', 13)}<span>${esc(tr('Conflicts with {base}').replace('{base}', b.base))}: ${esc(files.slice(0, 6).join(', '))}${files.length > 6 ? ` +${files.length - 6}` : ''}</span>`
+    + `<button type="button" class="link-chip link-add" id="d-conflict-fix">${esc(tr('Let Claude resolve it'))}</button></div>` : '';
+  row.innerHTML = `<div class="branch-line">${ic('branch', 13)}<span class="branch-name" title="${esc(b.path)}">${esc(b.branch)}</span><span class="muted">${esc(ahead)}</span>${pr}</div>${conflict}<div class="attempts" id="d-attempts"></div><div class="branch-note muted" role="status"></div>`;
+  row.classList.remove('hidden');
+  const note = (s) => { const el = row.querySelector('.branch-note'); if (el) el.textContent = s; };
+  renderAttempts(row.querySelector('#d-attempts'), t, note);
+  const open = row.querySelector('#d-pr-open');
+  if (open) open.onclick = async () => {
+    open.disabled = true;
+    note(tr('Pushing the branch and opening the request…'));
+    try { await api('POST', `/api/tasks/${seg(key)}/pr`, {}, { quiet: true }); if (state.drawerKey === key) renderBranchRow(t); } catch (e) { note(refusalLine(tr('No pull request'), e, tr)); open.disabled = false; }
+  };
+  const fix = row.querySelector('#d-conflict-fix');
+  if (fix) fix.onclick = async () => {
+    fix.disabled = true;
+    const text = tr('The branch {branch} of {key} conflicts with {base} in: {files}. Merge {base} into the branch, resolve every conflict keeping what both sides meant, run the tests, commit, and tell me what you chose in each file.')
+      .replaceAll('{branch}', b.branch).replaceAll('{key}', key).replaceAll('{base}', b.base).replace('{files}', files.join(', '));
+    const how = await wordsToClaude(t, text, fix);
+    note(how === 'chat' ? tr('Sent to Claude of the task.') : tr('Claude is started with these words.'));
+  };
+}
+
+/** Words for the task's Claude: its own Claude of the board gets them in its chat (queued while it works); none — a start
+    of its own with these words. 'chat' or 'launch'. */
+export async function wordsToClaude(t, text, btn) {
+  try { await api('POST', `/api/tasks/${seg(t.key)}/chat`, { text }, { quiet: true }); return 'chat'; } catch {
+    launchInClaude({ text, project: t.project, keys: [t.key], btn });
+    return 'launch';
+  }
 }
 
 async function deleteLink(otherId) {
@@ -387,7 +483,7 @@ export function sayRefused(e, key) {
 
 let drawerTask = null;
 function renderLaunchButtons(t) {
-  if (t.sessions) drawerTask = { key: t.key, project: t.project, sessions: t.sessions };
+  if (t.sessions) drawerTask = { key: t.key, project: t.project, sessions: t.sessions, worktree: t.worktree || null };
   else if (drawerTask?.key !== t.key) drawerTask = { key: t.key, project: t.project, sessions: [] };
   drawerTask.status = t.status;
   drawerTask.labels = t.labels || [];
@@ -395,8 +491,24 @@ function renderLaunchButtons(t) {
   const startable = ['backlog', 'todo'].includes(t.status) && !drawerTask.labels.includes('noclaude') && !running;
   $('d-launch').classList.toggle('hidden', !startable);
   $('d-session').classList.toggle('hidden', !drawerTask.sessions.length);
+  paintProjectLinks(t.project, drawerTask.worktree?.path);
   if (termKey === t.key) hintCardTerm();
 }
+export function paintProjectLinks(slug, copy = null) {
+  const p = state.projects.find((x) => x.slug === slug);
+  const editor = getSetting('editor');
+  const where = p && editorLink(editor, copy || p.path);
+  const ed = $('d-editor');
+  ed.classList.toggle('hidden', !where);
+  if (where) { ed.href = where; ed.title = tr('Open the folder in {editor}').replace('{editor}', EDITORS[editor]); }
+  else ed.removeAttribute('href');
+  const url = p && previewUrl(p.domain);
+  const pv = $('d-preview');
+  pv.classList.toggle('hidden', !url);
+  if (url) { pv.href = url; pv.title = `${tr('Open what came out')}: ${url}`; } else pv.removeAttribute('href');
+}
+/** The open card's buttons again — the editor picked in Settings changed. */
+export function repaintProjectLinks() { if (drawerTask) paintProjectLinks(drawerTask.project, drawerTask.worktree?.path); }
 function launchFollowsLabels() {
   if (drawerTask && drawerTask.key === state.drawerKey) renderLaunchButtons({ ...drawerTask, labels: drawerLabels });
 }
@@ -415,7 +527,7 @@ const TAB_KEY = 'kb.ui.drawerTab';
 let workKey = null;       // the task whose chat is on screen
 let cardChat = null;      // the chat mounted into #work (chat.js), made on the first use
 
-const savedTab = () => { try { const v = localStore.getItem(TAB_KEY); return v === 'work' || v === 'chat' ? 'chat' : v === 'terminal' ? v : 'comments'; } catch { return 'comments'; } };
+const savedTab = () => { try { const v = localStore.getItem(TAB_KEY); return v === 'work' || v === 'chat' ? 'chat' : v === 'terminal' || v === 'changes' ? v : 'comments'; } catch { return 'comments'; } };
 const saveTab = (tab) => { try { localStore.setItem(TAB_KEY, tab); } catch {  } };
 
 function showWorkTab(tab) {
@@ -428,6 +540,8 @@ function showWorkTab(tab) {
   $('work-block').classList.toggle('hidden', cur !== 'chat');
   cardChat?.show(cur === 'chat');
   $('term-block').classList.toggle('hidden', cur !== 'terminal');
+  $('changes-block').classList.toggle('hidden', cur !== 'changes');
+  if (cur === 'changes' && tabsTask) renderChanges($('changes'), tabsTask.key, tabsTask.project, changesAttempt);
   if (cur === 'terminal') startTermPoll(); else stopTermPoll();
 }
 
@@ -442,6 +556,7 @@ export function hideWorkTabs() {
   $('d-tabs').classList.add('hidden');
   $('work-block').classList.add('hidden');
   $('term-block').classList.add('hidden');
+  $('changes-block').classList.add('hidden');
 }
 
 export const claudeView = () => (getSetting('chatView') === 'chat' ? 'chat' : 'terminal');
@@ -449,12 +564,14 @@ let chatTab = false; // the open card has the Chat tab
 let tabsTask = null; // {key, sessions, status, terminal} the tabs were drawn for — to draw them again on the switch
 let tabsFor = null;
 let cardTab = 'comments'; // the tab on screen
+let changesAttempt = null;
 function renderWorkTabs(t) {
   const term = t.terminal || null;
   const asTerm = Boolean(term) && claudeView() === 'terminal';
   chatTab = !asTerm && ((t.sessions || []).length > 0 || Boolean(term));
-  tabsTask = { key: t.key, sessions: t.sessions, status: t.status, terminal: term };
-  if (!asTerm && !chatTab) { hideWorkTabs(); $('comments-block').classList.remove('hidden'); return; }
+  const changesTab = (t.sessions || []).length > 0 || Boolean(term) || Boolean(t.worktree);
+  tabsTask = { key: t.key, project: t.project, sessions: t.sessions, status: t.status, terminal: term, worktree: t.worktree };
+  if (!asTerm && !chatTab && !changesTab) { hideWorkTabs(); $('comments-block').classList.remove('hidden'); return; }
   if (termKey !== t.key) { termScreen = null; termFollow = true; }
   workKey = t.key;
   termKey = term ? t.key : null;
@@ -464,8 +581,9 @@ function renderWorkTabs(t) {
     + `<button type="button" class="dr-btn" data-tab="comments" role="tab"><span class="d-tab-l">${tr('Comments')}</span></button>`
     + (chatTab ? `<button type="button" class="dr-btn" data-tab="chat" role="tab"><span class="d-tab-l">${tr('Chat')}</span>${live}</button>` : '')
     + (asTerm ? `<button type="button" class="dr-btn" data-tab="terminal" role="tab"><span class="d-tab-l">${tr('Terminal')}</span>${live}</button>` : '')
+    + (changesTab ? `<button type="button" class="dr-btn" data-tab="changes" role="tab"><span class="d-tab-l">${tr('Changes')}</span></button>` : '')
     + '</div>';
-  $('d-tabs').querySelectorAll('.dr-btn').forEach((b) => { b.onclick = () => { saveTab(b.dataset.tab); showWorkTab(b.dataset.tab); }; });
+  $('d-tabs').querySelectorAll('.dr-btn').forEach((b) => { b.onclick = () => { changesAttempt = null; saveTab(b.dataset.tab); showWorkTab(b.dataset.tab); }; });
   $('d-tabs').classList.remove('hidden');
   const claude = asTerm ? 'terminal' : 'chat';
   const opening = tabsFor !== t.key;
@@ -1528,6 +1646,9 @@ export function openDrawer(key, { quiet = false } = {}) {
     renderDrawerLabels();
     renderDrawerLinks(t.links);
     renderIssueRow(t);
+    renderBranchRow(t);
+    renderTaskProfile(t);
+    paintPick(t);
     $('d-return').classList.toggle('hidden', t.status !== 'review');
     $('d-accept-btn').classList.toggle('hidden', t.status !== 'review');
     $('d-return-icon').classList.toggle('hidden', !['review', 'done'].includes(t.status));
@@ -1607,6 +1728,9 @@ export function openDrawerNew(status = 'backlog') {
   drawerTask = null;
   $('d-launch').classList.add('hidden');
   $('d-session').classList.add('hidden');
+  $('d-editor').classList.add('hidden');
+  $('d-preview').classList.add('hidden');
+  paintPick(null);
   $('drawer').classList.remove('hidden');
   holdBack();
   applyCommentDraft(null);
@@ -2436,7 +2560,7 @@ export async function syncOpenDrawerStatus({ moved = false } = {}) {
   if (t.key && t.key !== key) { await followMovedTask(key, t.key); return; }
   followTimeline(key, t, moved);
   drawerPinned = t.pinned ? 1 : 0;
-  if ('description' in t) renderIssueRow(t);
+  if ('description' in t) { renderIssueRow(t); renderBranchRow(t); }
   await refreshDrawerFields(t);
   if (drawerSnapshot && selVal('d-status') === t.status) drawerSnapshot.status = t.status;
   if (!DrawerSync.shouldSyncDrawerStatus(drawerStatus, selVal('d-status'), t.status)) return;

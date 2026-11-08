@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { availableParallelism, loadavg } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { claudeCli, claudeRunnable, EFFORT_VAR, effortProblem, keysProblem, onPath } from './launch.js';
 import { SESSION_ID_RE } from './claude-sessions.js';
@@ -13,6 +14,7 @@ import { waitsOwnWork } from './own-wait.js';
 import { clearKeys, inField, promptBox, tallBox, undim } from './prompt-box.js';
 import { HOOK_TIMEOUT_S, hookCommand, isOurs } from './claude-hooks.js';
 import { boardKb, readSettings } from './claude-settings.js';
+import { settingsFile } from './profiles.js';
 
 /** Permission modes the board offers for a background start; never one that skips the checks. */
 export const PERMISSION_MODES = ['auto', 'acceptEdits', 'manual', 'plan'];
@@ -64,7 +66,42 @@ export const KB_BIN_DIR = fileURLToPath(new URL('../bin', import.meta.url));
 export const boardPath = (path = cleanEnv().PATH) => (path ? `${KB_BIN_DIR}:${path}` : KB_BIN_DIR);
 const launchEnv = () => { const env = cleanEnv(); return { ...env, PATH: boardPath(env.PATH) }; };
 
+const TMUX_READS = new Set(['list-panes', 'capture-pane', 'display-message', 'show-environment', 'list-sessions', 'has-session', 'show-options']);
+let SHARE_MS = 400;
+/** Tests of one look after another (a fake tmux that answers differently each time) look anew every time: 0 — no
+    sharing, and no remembered end of a terminal either (boardPaneEnded in claude-live.js). */
+export const setLookShare = (ms) => { SHARE_MS = ms; shared.clear(); };
+export const lookShared = () => SHARE_MS > 0;
+const shared = new Map(); // `${kind} ${sid} ${lines}` → {at, pending, p}
+let tmuxGen = 0;
+/** Moves on every call to tmux that may change a terminal: an answer remembered under an older one is stale. */
+export const tmuxGeneration = () => tmuxGen;
+function noteTmuxCall(args) {
+  if (args[0] !== '-L') return;
+  let head = true;
+  for (const a of args.slice(2)) {
+    if (head && !TMUX_READS.has(a)) { tmuxGen++; shared.clear(); return; }
+    head = a === ';';
+  }
+}
+function sharedLook(key, read) {
+  if (!SHARE_MS) return read();
+  const now = Date.now();
+  for (const [k, e] of shared) if (!e.pending && now - e.at >= SHARE_MS) shared.delete(k);
+  let e = shared.get(key);
+  if (!e) {
+    e = { at: now, pending: true, p: null };
+    const entry = e;
+    entry.p = read().then((v) => { entry.pending = false; entry.at = Date.now(); return v; },
+      (err) => { if (shared.get(key) === entry) shared.delete(key); throw err; });
+    shared.set(key, entry);
+  }
+  // each caller its own object: one that sets a field (the route sets `cols`) must not set it for the others
+  return e.p.then((v) => (v && typeof v === 'object' ? { ...v } : v));
+}
+
 function run(cmd, args, cwd, timeout = 8000, env = cleanEnv(), input = undefined) {
+  noteTmuxCall(args); // every run here with `-L` is tmux
   return new Promise((resolve) => {
     if (!cmd) { resolve({ err: new Error('tmux is not installed'), out: '', text: '' }); return; }
     const child = execFile(cmd, args, { cwd, env, timeout, maxBuffer: 4 * 1024 * 1024 },
@@ -104,12 +141,18 @@ export function boardProblem({ keys, permission, resume, host, effort, text }) {
 
 export const NO_SUGGESTIONS = 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false';
 export const NO_ALT_SCREEN = 'CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1';
-export function askHook(port, read = readSettings, write = writeAskHook) {
+/** The settings of the board's hook of questions, or null when the person's settings.json has it already. */
+export function askHookSettings(port, read = readSettings) {
   let list;
   try { list = read().settings?.hooks?.PermissionRequest; } catch { list = undefined; }
-  if (Array.isArray(list) && list.some((g) => Array.isArray(g?.hooks) && g.hooks.some((h) => isOurs(h?.command, 'hook')))) return [];
+  if (Array.isArray(list) && list.some((g) => Array.isArray(g?.hooks) && g.hooks.some((h) => isOurs(h?.command, 'hook')))) return null;
   const hook = { type: 'command', command: hookCommand(boardKb(`http://127.0.0.1:${port}`)), timeout: HOOK_TIMEOUT_S };
-  const text = JSON.stringify({ hooks: { PermissionRequest: [{ matcher: 'AskUserQuestion', hooks: [hook] }] } });
+  return { hooks: { PermissionRequest: [{ matcher: 'AskUserQuestion', hooks: [hook] }] } };
+}
+export function askHook(port, read = readSettings, write = writeAskHook) {
+  const settings = askHookSettings(port, read);
+  if (!settings) return [];
+  const text = JSON.stringify(settings);
   let path = null;
   try { path = write(port, text); } catch (e) { logError('server', 'phantom', `the hook of questions went as text: ${e.message}`); }
   return ['--settings', path || text];
@@ -128,8 +171,12 @@ export function writeAskHook(port, text) {
 }
 
 export const SERVER_START = [['start-server'], ['set-option', '-s', 'exit-empty', 'off']];
-export function phantomSpec({ sid, name, text, folder, permission = 'auto', port, allow = [], effort, read, resume = false }) {
-  const level = effort ? ['-e', `${EFFORT_VAR}=${effort}`] : [];
+export function phantomSpec({ sid, name, text, folder, permission = 'auto', port, allow = [], effort, read, resume = false, profile = null }) {
+  // of questions with it — as one settings file of the board (never on the command line: secrets)
+  const lvl = profile?.effort || effort;
+  const level = lvl ? ['-e', `${EFFORT_VAR}=${lvl}`] : [];
+  const settings = profile ? ['--settings', settingsFile(profile, port, askHookSettings(port, read) || {})] : askHook(port, read);
+  const model = profile?.model ? ['--model', profile.model] : [];
   return {
     cmd: tmuxBin(),
     cwd: folder,
@@ -140,7 +187,7 @@ export function phantomSpec({ sid, name, text, folder, permission = 'auto', port
       // terminal; it lives on while any of its sessions does, remain-on-exit) passed it to every Claude ▶ started after
       ...NOT_FOR_BOARD.map((k) => ['set-environment', '-g', '-u', k]),
       ['new-session', '-d', '-s', sessionName(sid), '-x', String(COLS), '-y', String(ROWS), '-e', `KB_URL=http://127.0.0.1:${port}`, '-e', `LANG=${cleanEnv().LANG}`, '-e', NO_SUGGESTIONS, '-e', NO_ALT_SCREEN, ...level,
-        '--', claudeCli(), ...askHook(port, read), '--allowedTools', ...BOARD_ALLOWED, ...allow, '--permission-mode', permission, '--name', name, ...(resume ? ['--resume', sid] : ['--session-id', sid, text])],
+        '--', claudeCli(), ...settings, ...model, '--allowedTools', ...BOARD_ALLOWED, ...allow, '--permission-mode', permission, '--name', name, ...(resume ? ['--resume', sid] : ['--session-id', sid, text])],
     ]),
   };
 }
@@ -208,8 +255,11 @@ export async function phantomState(sid) {
 const NO_PANE = /can't find (session|window|pane)|no current target|no server running|error connecting to|tmux is not installed/i;
 /** phantomState for the question "is the board's terminal of this session gone": null only on tmux's own word that
     there is no such session (or no tmux server at all); a tmux that did not answer gives `{dead: false, unknown: true}`. */
-export async function phantomPane(sid) {
-  if (!SESSION_ID_RE.test(sid)) return null;
+export function phantomPane(sid) {
+  if (!SESSION_ID_RE.test(sid)) return Promise.resolve(null);
+  return sharedLook(`pane ${sid}`, () => readPane(sid));
+}
+async function readPane(sid) {
   const r = await tmux(['list-panes', '-t', pane(sid), '-F', STATE_FORMAT]);
   if (r.err) return NO_PANE.test(`${r.text} ${r.err.message}`) || SERVER_GONE.test(r.text) ? null : unknownPane(`${r.text} ${r.err.message}`);
   return nudgeLostExit(sid, paneState(r.out), () => readState(sid));
@@ -261,8 +311,11 @@ export function wrapsIn(screen, joined) {
   return wraps;
 }
 
-export async function phantomView(sid, lines = SCREEN_LINES) {
-  if (!SESSION_ID_RE.test(sid)) return null;
+export function phantomView(sid, lines = SCREEN_LINES) {
+  if (!SESSION_ID_RE.test(sid)) return Promise.resolve(null);
+  return sharedLook(`view ${sid} ${lines}`, () => readView(sid, lines));
+}
+async function readView(sid, lines) {
   const cut = `kb-cut-${randomUUID()}`;
   const mark = ['display-message', '-p', '-t', pane(sid), cut];
   const r = await tmux(['list-panes', '-t', pane(sid), '-F', STATE_FORMAT], mark,
@@ -309,8 +362,16 @@ export async function phantomSend(sid, { text, key, paste = false, images = [] }
 export const DELIVER_WAIT_MS = 3000;
 const LOOK_EVERY_MS = 150;
 let deliverWait = DELIVER_WAIT_MS;
-/** Tests: how long the board waits for the field. */
-export function setDeliverWait(ms) { deliverWait = ms; }
+let waitFixed = false;
+/** Tests: how long the board waits for the field — exactly that long, however loaded the machine is. */
+export function setDeliverWait(ms) { deliverWait = ms; waitFixed = true; }
+export const DELIVER_STRETCH_MAX = 4;
+/** How long to wait for the field at load `load` (the 1-minute load average) on `cores` cores. */
+export function deliverWaitFor(base, load, cores) {
+  const busy = cores > 0 && Number.isFinite(load) ? load / cores : 1;
+  return Math.round(base * Math.min(DELIVER_STRETCH_MAX, Math.max(1, busy)));
+}
+const fieldWait = () => (waitFixed ? deliverWait : deliverWaitFor(deliverWait, loadavg()[0], availableParallelism()));
 const FIELD_HISTORY = 200;
 const rowsOf = (out) => out.replace(/\n$/, '').split('\n').map(undim);
 async function fieldNow(sid) {
@@ -327,7 +388,7 @@ export async function fieldEmpty(sid) {
   return Boolean(f.box) && !f.box.text;
 }
 async function fieldUntil(sid, ok) {
-  const end = Date.now() + deliverWait;
+  const end = Date.now() + fieldWait();
   for (;;) {
     const f = await fieldNow(sid);
     if (f.err || ok(f.box)) return f;

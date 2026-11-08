@@ -41,7 +41,7 @@ These are deliberate and predate most of the features. Changes that break them n
 | `src/config.js` | the only place environment variables are read |
 | `src/db.js` | opens the DB, runs migrations, exposes `db` and small kv/queue helpers |
 | `src/schema.sql` | DDL for a fresh install, replayed on every start (`CREATE TABLE IF NOT EXISTS`) |
-| `src/origin-guard.js` | rejects cross-origin and unexpected `Host` requests |
+| `src/origin-guard.js` | rejects cross-origin and unexpected `Host` requests; a tab may still open the board's page `/` from another site (a link, the «Point for Claude» bookmark) — nothing else |
 | `src/share.js` + `src/qr.js` | Settings → Wi-Fi: an opt-in door that admits the private network by a key (in the QR link or typed by hand on the door's page, so a browser that lost its pass is asked, not locked out; the browser keeps an HMAC of the key; plain HTTP: it keeps people out, it does not encrypt the traffic; another site may only open the board as a page) and passes requests on to the loopback board; what stays the owner's (the computer's settings, windows on its screen, backups, which hold the key and are not even read) is refused to a guest twice — at the door by the decoded path and on the board by the route its router matched (`guestGuard`); the link's QR code |
 | `src/bus.js` | in-process event bus + SSE connection ceiling |
 | `src/routes/tasks.js` | tasks, comments, checklists, attachments, links |
@@ -68,19 +68,27 @@ These are deliberate and predate most of the features. Changes that break them n
 | `src/claude-settings.js` | Claude Code's settings.json read, and written with the board's entries — one careful write for `local-kanban hooks` and Settings → Claude Code |
 | `src/claude-setup.js` | Settings → Claude Code: what the board needs of Claude Code on this machine, found or not, and connecting it from the page |
 | `src/launch.js` | starting Claude from the board: the app link, the terminal command, their quoting |
+| `src/profiles.js`, `src/routes/profiles.js` | launch profiles — a model, an effort and an environment a start of Claude gets: a project's by default, a task's own; the values of the environment go to Claude in a settings file of 0600 and never to a page or a command line |
+| `src/attempts.js` | several attempts at one task: each a copy of the repository of its own (`<KEY>-a<n>`) with its own Claude, maybe on another launch profile; «Take this one» makes the chosen copy the task's |
+| `src/task-changes.js` | «Changes» of a card: the commits of the task (its branch, or found by its key and issue) and what is not committed, read into files and numbered lines |
+| `src/task-branch.js`, `src/routes/branch.js` | the branch of a task's copy on its card: ahead of main, a conflict with it (`git merge-tree`, nothing written), a pull request (`git push` + `gh pr create`) and its state |
+| `src/worktrees.js` | a project's switch gives each task its own git worktree (`.claude/worktrees/<KEY>`, branch `claude/<KEY>`): made or taken again on ▶, the files outside git it names copied or linked, «Continue» in the same copy |
 | `src/phantom.js` | Claude inside the board: a background tmux session per launch, its screen, typing into it |
 | `src/routes/terminal.js` | the card's Terminal tab: the screen, answers and keys, stopping |
 | `src/term-screens.js` | the screens answered lately and what a look gets: same, what changed, or the whole screen |
 | `src/routes/horizons.js` | time-horizon goals |
 | `src/health.js`, `src/routes/health.js` | "Health": how big the instructions Claude Code reads in each project are (CLAUDE.md up the folders, imports, rules, auto memory) against the norms of its docs and its own warnings; what loads only on demand — the CLAUDE.md of subfolders and the rules with `paths:` — apart |
 | `src/stands.js` | "Health → Stands": the git worktrees left behind by tasks — free to remove, with work not in main, or busy — and the task that removes the free ones (the board itself removes nothing) |
+| `src/import-vibe.js`, `src/routes/import.js` | the export archive of vibe-kanban put on the board: the zip read by its central directory, its CSV, statuses and priorities mapped, parents as links, pictures as attachments; an issue imported once is skipped the next time (`imported_tasks`) |
+| `src/slow-watch.js` | the board notices when it is slow: the delay of its event loop and the time of its answers by route, a minute at a time — the error log on a slow minute, a line in Health |
 | `src/sync/github.js` | every `gh` invocation, the label palette, Projects v2 plumbing |
 | `src/sync/worker.js` | drains the sync queue in the background |
 | `src/backup.js`, `src/restore.js` | scheduled snapshots; opening a backup as a second board |
 | `src/task-shape.js` | one canonical shape for a task event, shared by routes and worker |
 | `public/app.js`, `public/js/*.js` | frontend entry point plus the modules of `public/js/`, split by feature; `order.js`, `live-rules.js`, `review-rules.js`, `limits-rules.js`, `ask-rules.js` and `claude-setup-rules.js` are pure rules with no DOM, run by the tests in node |
-| `bin/local-kanban` | install wizard, `start`, `skills` and `hooks install/uninstall` subcommands |
+| `bin/local-kanban` | install wizard, `start`, `skills`, `hooks install/uninstall` and `import` subcommands |
 | `bin/kb` | the CLI; speaks HTTP to the board, no shared code with the server |
+| `bin/kb-mcp` | the board as an MCP server over stdio for Claude Desktop, Cursor and other clients: the same HTTP API, one tool per action; the board keeps every rule |
 | `test/` | `node --test`, no test framework |
 
 ## Data

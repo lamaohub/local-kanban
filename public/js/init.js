@@ -1,5 +1,6 @@
 
 import { commentToken } from './unsaved.js';
+import { attachAtPicker, templateItems } from './at-picker.js';
 import { clearSelection, closeOpenSelect, initMarquee, multiAction, renderBoard, scheduleDrawLinks, selectedIds } from './board.js';
 import { chaosPending } from './chaos.js';
 import { $, ALL, AUTO, HEALTH, CALENDAR, CHAOS, DASH, DONE, HORIZON, NOW, REVIEW, SETTINGS, api, hasUnsaved, ic, liftCurtain, loadLabelPalette, seg, setDoorClosed, state, tr } from './core.js';
@@ -20,6 +21,7 @@ import { openSearch } from './search.js';
 import { columnsDirty } from './now-terms.js';
 import { chatDirty } from './chat.js';
 import { localStore, sessionStore } from './store.js';
+import { takePick } from './pick.js';
 
 /* ── init ── */
 $('new-task').onclick = () => openDrawerNew('backlog');
@@ -32,6 +34,9 @@ $('d-launch').onclick = launchOpenTask;
 $('d-session').innerHTML = ic('open', 14);
 $('d-session').title = tr('Open its Claude session');
 $('d-session').onclick = openOpenTaskSession;
+$('d-editor').innerHTML = ic('code', 14);
+$('d-preview').innerHTML = ic('globe', 14);
+$('d-point').innerHTML = ic('point', 14);
 initTerminal();
 wireCardBack();
 $('attn').onclick = openAttentionList;
@@ -56,6 +61,7 @@ $('d-title').addEventListener('keydown', (e) => {
 });
 $('d-title').addEventListener('blur', pullDrawerFresh);
 $('d-desc').addEventListener('blur', pullDrawerFresh);
+attachAtPicker($('d-desc'), templateItems);
 $('project-menu').onclick = () => openProjectSettings();
 // same comment again — the field is emptied only by the answer. One send per task at a time; the rest are ignored,
 // but not for longer than COMMENT_HOLD_MS — a request that never answers must not lock the field of the task for good
@@ -271,6 +277,7 @@ Promise.all([loadLabelPalette().catch(() => {}), streamOrLate]).then(() => loadU
   bootDone();
   refreshSync(); applyKeepDrawer();
   if (launchAction === 'new') openDrawerNew('backlog');
+  takePick();
   maybeOnboarding();
 });
 syncLangToServer();

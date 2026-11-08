@@ -77,6 +77,24 @@ test('following a bookmark (Sec-Fetch-Site: none) passes', async () => {
   assert.equal(r.statusCode, 200);
 });
 
+test('CK-1001: a tab opening the board\'s page from another site passes — the page only, as a document of a tab', async () => {
+  const { makeOriginGuard } = await import('../src/origin-guard.js');
+  const guard = makeOriginGuard(PORT);
+  const tryIt = (method, url, more) => {
+    let passed = false, code = null;
+    const reply = { code(c) { code = c; return this; }, send() { return this; } };
+    guard({ method, url, headers: { ...SELF, 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document', ...more } }, reply, () => { passed = true; });
+    return passed ? 200 : code;
+  };
+  assert.equal(tryIt('GET', '/'), 200);
+  assert.equal(tryIt('GET', '/?view=dash'), 200);
+  assert.equal(tryIt('GET', '/api/tasks?all=1'), 403, 'the API read from another site');
+  assert.equal(tryIt('POST', '/'), 403, 'a form sent from another site');
+  assert.equal(tryIt('GET', '/', { 'sec-fetch-dest': 'iframe' }), 403, 'the board in a frame of another site');
+  assert.equal(tryIt('GET', '/', { 'sec-fetch-mode': 'no-cors' }), 403);
+  assert.equal(tryIt('GET', '/', { host: 'kanban.evil.example' }), 421, 'DNS rebinding stays closed');
+});
+
 test('a host listed in KB_ALLOWED_HOSTS is accepted', async () => {
   process.env.KB_ALLOWED_HOSTS = 'kanban.local:8080';
   const { makeOriginGuard } = await import('../src/origin-guard.js');

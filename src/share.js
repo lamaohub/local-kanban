@@ -46,10 +46,13 @@ function knownHosts(port) {
    GitHub mirror, the door itself. Reading them is fine; changing — 403 to a guest. Backups are not read either
    (`OWNER_READ`): one is the whole database, `share.key` included, and the key is the door's secret. The board itself
    (tasks, the chat and terminals of Claude, answers to its questions) is shared, as the owner asked. */
-const OWNER_READ = [/^\/api\/backups(\/|$)/, /^\/api\/health\/stands(\/|$)/];
+const OWNER_READ = [/^\/api\/backups(\/|$)/, /^\/api\/health\/stands(\/|$)/, /^\/api\/health\/load$/, /^\/api\/projects\/[^/]+\/files$/,
+  /^\/api\/tasks\/[^/]+\/(branch|pr|changes|attempts)(\/|$)/];
 const OWNER_ONLY = [/^\/api\/claude\/hooks/, /^\/api\/update/, /^\/api\/fs\/pick/, /^\/api\/skills/,
   /^\/api\/projects\/(clone|server-git|ssh-check)/, /^\/api\/projects\/[^/]+\/docs/, /^\/api\/sync\/config/, /^\/api\/share/, /^\/api\/flow/,
-  /^\/api\/tasks\/[^/]+\/chat\/run/]; // the chat's command opens a Terminal window on the owner's screen
+  /^\/api\/tasks\/[^/]+\/chat\/run/, // the chat's command opens a Terminal window on the owner's screen
+  /^\/api\/import\//,
+  /^\/api\/profiles/, /^\/api\/tasks\/[^/]+\/profile$/];
 export const ownerOnly = (method, path) => OWNER_READ.some((r) => r.test(path))
   || (method !== 'GET' && method !== 'HEAD' && OWNER_ONLY.some((r) => r.test(path)));
 const NOT_A_GUEST = 'this stays with the owner of the board';

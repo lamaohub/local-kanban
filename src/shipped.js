@@ -36,6 +36,7 @@ export function ownKeys(subject, known = null) {
 /** Commits of a `git log` with FORMAT: [{hash, tip, subject, words}]. `tip` — the ref it was reached by (`--source`), `words` —
     the keys its subject claims and the numbers of its message, in capitals. Pure. */
 const FORMAT = `%H%n%S%n%s%n%B${SEP}`;
+export const LOG_FORMAT = FORMAT;
 export function parseLog(out, known = null) {
   return String(out || '').split(SEP).map((c) => c.replace(/^\n/, '')).filter(Boolean).map((c) => {
     const [hash, tip = '', subject = ''] = c.split('\n', 3);

@@ -88,21 +88,22 @@ export const EFFORT_VAR = 'CLAUDE_CODE_EFFORT_LEVEL';
 /** Check an effort level of a start; the error text for a 400, or null. */
 export const effortProblem = (effort) => (effort !== undefined && !EFFORT_LEVELS.includes(effort) ? `effort: one of ${EFFORT_LEVELS.join(', ')}` : null);
 
-export function terminalCommand({ text, resume, folder, session, url, effort, bin = 'claude' }) {
+export function terminalCommand({ text, resume, folder, session, url, effort, bin = 'claude', settings = null, model = null }) {
   const cd = folder ? `cd ${shellQuote(folder)} && ` : '';
   const level = EFFORT_LEVELS.includes(effort) ? `${EFFORT_VAR}=${effort} ` : '';
   const env = `${url ? `KB_URL=${shellQuote(url)} ` : ''}env -u CLAUDE_CODE_SIMPLE ${level}`;
-  if (resume) return `${cd}${env}${bin} --resume ${shellQuote(resume)}`;
-  return `${cd}${env}${bin} ${session ? `--session-id ${shellQuote(session)} ` : ''}${shellQuote(text)}`;
+  const prof = `${settings ? `--settings ${shellQuote(settings)} ` : ''}${model ? `--model ${shellQuote(model)} ` : ''}`;
+  if (resume) return `${cd}${env}${bin} ${prof}--resume ${shellQuote(resume)}`;
+  return `${cd}${env}${bin} ${prof}${session ? `--session-id ${shellQuote(session)} ` : ''}${shellQuote(text)}`;
 }
 
 /** What to run for a launch: `{cmd, args}` — never a shell line put together from the request. */
-export function launchSpec({ mode, text, folder, resume, host, session, url, effort, bin }, platform = process.platform) {
+export function launchSpec({ mode, text, folder, resume, host, session, url, effort, bin, settings = null, model = null }, platform = process.platform) {
   if (mode === 'desktop') {
     if (platform !== 'darwin') throw Object.assign(new Error('the Claude app is opened this way only on macOS'), { statusCode: 501 });
     return { cmd: fullPath('open'), args: [host ? continueUrl(host) : desktopUrl(text, folder)] };
   }
-  return windowSpec(terminalCommand({ text, resume, folder, session, url, effort, bin }), platform, 'the prompt');
+  return windowSpec(terminalCommand({ text, resume, folder, session, url, effort, bin, settings, model }), platform, 'the prompt');
 }
 
 /** A new terminal window running the shell `line`: `{cmd, args}`. `then` — what goes between the line and the shell the

@@ -22,6 +22,10 @@ import shareRoutes from './routes/share.js';
 import automationRoutes from './routes/automations.js';
 import healthRoutes from './routes/health.js';
 import voiceRoutes from './routes/voice.js';
+import importRoutes from './routes/import.js';
+import mentionRoutes from './routes/mention.js';
+import branchRoutes from './routes/branch.js';
+import profileRoutes from './routes/profiles.js';
 import { startAutomations } from './automations.js';
 import { guestGuard, restoreShare } from './share.js';
 import { startWorker } from './sync/worker.js';
@@ -31,6 +35,7 @@ import { startWorkWatch } from './work-feed.js';
 import { startLiveWatch } from './claude-live.js';
 import { startUsageWatch } from './claude-usage.js';
 import { startTerminalSweep } from './phantom.js';
+import { slowWatch, startSlowWatch } from './slow-watch.js';
 
 const ATTACH_DIR = join(DATA_DIR, 'attachments');
 mkdirSync(ATTACH_DIR, { recursive: true });
@@ -42,6 +47,7 @@ app.addHook('onRequest', guestGuard);
 // root instance, before the plugins, or it would not cover the static files and their routes
 app.addHook('onSend', typedBackHeader);
 app.addHook('onSend', compressAnswer);
+app.addHook('onResponse', slowWatch.onResponse);
 
 const CSP = [
   "default-src 'self'",
@@ -83,6 +89,10 @@ app.register(shareRoutes);
 app.register(automationRoutes);
 app.register(healthRoutes);
 app.register(voiceRoutes);
+app.register(importRoutes);
+app.register(mentionRoutes);
+app.register(branchRoutes);
+app.register(profileRoutes);
 
 for (const ev of ['unhandledRejection', 'uncaughtException']) {
   process.on(ev, (err) => {
@@ -104,6 +114,7 @@ if (process.env.KB_PREVIEW_TTL_MS) {
 app.listen({ port: PORT, host: '127.0.0.1' }).then(() => {
   console.log(`kanban: http://127.0.0.1:${PORT}`);
   console.log(`kanban: data ${DATA_DIR} · project folders ${localRoot()}`);
+  startSlowWatch();
   if (!process.env.KB_PREVIEW_TTL_MS) {
     startWorker();
     startBackups();

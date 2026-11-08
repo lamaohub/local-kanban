@@ -175,6 +175,8 @@ To get the `kb` command globally: `npm link` (or `npm install -g .`).
 
 First launch shows an empty dashboard with an optional **demo project** — one click creates it, one click removes it.
 
+**Moving from vibe-kanban?** Its «Export data» gives a zip; `local-kanban import vibe-kanban-export-<date>.zip` (or Settings → Backups → «Bring it over») puts its projects, issues, parent issues (as subtask links) and pictures on the board. Statuses map to the board's columns — «In progress» goes to To do, a status of your own to Backlog, each with a note in the description; an issue brought over once is skipped the next time. `--dry-run` only counts.
+
 ### Let Claude finish the setup
 
 The last step of the first-run wizard shows a ready-made prompt (in the board's language). Paste it
@@ -194,6 +196,14 @@ Install by symlink or copy:
 ```bash
 ln -s "$(pwd)/skills/kanban" ~/.claude/skills/kanban
 ln -s "$(pwd)/skills/deploy" ~/.claude/skills/deploy
+```
+
+### Other AI clients over MCP (optional)
+
+Claude Code drives the board with `kb`. For Claude Desktop, Cursor and other MCP clients the package has `kb-mcp`, an MCP server over stdio — a thin layer over the same API, on `127.0.0.1` only. Its tools: `list_projects`, `list_tasks`, `get_task`, `create_task`, `update_task` (done and cancelled stay your word on the board), `add_comment`, `start_task` (Claude Code inside the board on that task). In the client's config:
+
+```json
+{ "mcpServers": { "kanban": { "command": "kb-mcp", "env": { "KB_URL": "http://127.0.0.1:3100" } } } }
 ```
 
 ### Connect the board to Claude Code (optional)

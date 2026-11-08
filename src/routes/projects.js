@@ -17,6 +17,7 @@ import { closeFinishedTerminals } from '../phantom.js';
 import { snapshot } from '../task-shape.js';
 import { kick } from '../sync/worker.js';
 import { bin } from '../bin-path.js';
+import { filesProblem } from '../worktrees.js';
 
 const DEFAULT_CATEGORY = 'Other';
 const LOCKED_CATEGORIES = new Set([DEFAULT_CATEGORY, 'Local']);
@@ -67,15 +68,28 @@ function syncCategoryToPanel(project) {
   } catch {  }
 }
 
-const PATCHABLE = ['name', 'prefix', 'path', 'server_path', 'deploy_skill', 'server', 'pm2_services', 'domain', 'category', 'description', 'pinned', 'archived', 'ready_gate'];
+const PATCHABLE = ['name', 'prefix', 'path', 'server_path', 'deploy_skill', 'server', 'pm2_services', 'domain', 'category', 'description', 'pinned', 'archived', 'ready_gate',
+  'worktrees', 'worktree_files', 'worktree_setup', 'profile_id'];
 
 const GUEST_GATE = { error: 'only the owner of the board says whether a project waits for the word', reason: 'guest' };
-const FIELD_KIND = { pinned: 'flag', archived: 'flag', pm2_services: 'any', name: 'required', ready_gate: 'choice' };
+const GUEST_COPIES = { error: 'only the owner of the board says whether tasks get copies of the repository', reason: 'guest' };
+const COPY_FIELDS = ['worktrees', 'worktree_files', 'worktree_setup', 'profile_id'];
+/** What a request asks of the copies of tasks that it may not: a guest changing them, or lines that are not copy/link. */
+function copiesRefusal(req, p) {
+  const b = req.body || {};
+  // the settings of a project send every field: only a change of these is refused
+  const same = (k) => (k === 'worktrees' ? normField(k, b[k]) === (p?.worktrees || 0) : String(b[k] ?? '') === String(p?.[k] ?? ''));
+  if (isGuest(req) && COPY_FIELDS.some((k) => b[k] !== undefined && !(p && same(k)))) return { code: 403, body: GUEST_COPIES };
+  if (typeof b.worktree_files === 'string') { const e = filesProblem(b.worktree_files); if (e) return { code: 400, body: { error: e, field: 'worktree_files' } }; }
+  return null;
+}
+const FIELD_KIND = { pinned: 'flag', archived: 'flag', pm2_services: 'any', name: 'required', ready_gate: 'choice', worktrees: 'flag', profile_id: 'id' };
 function badField(k, v) {
   const kind = FIELD_KIND[k] || 'text';
   if (kind === 'any') return null;
   if (kind === 'required') return (typeof v === 'string' || typeof v === 'number') && String(v).trim() ? null : `${k}: required, a non-empty string`;
   if (kind === 'choice') return v === null || v === 0 || v === 1 ? null : `${k}: expected null, 0 or 1`;
+  if (kind === 'id') return v === null || (Number.isInteger(v) && db.prepare('SELECT 1 FROM launch_profiles WHERE id = ?').get(v)) ? null : `${k}: the id of a launch profile, or null`;
   if (kind === 'flag') {
     if (v === null || v === undefined) return `${k}: expected 0 or 1`;
     if (typeof v === 'boolean' || v === 0 || v === 1 || v === '0' || v === '1') return null;
@@ -87,7 +101,7 @@ function badField(k, v) {
 }
 const normField = (k, v) => {
   if (FIELD_KIND[k] === 'flag') return (v === true || v === 1 || v === '1') ? 1 : 0;
-  if (FIELD_KIND[k] === 'any' || FIELD_KIND[k] === 'choice') return v;
+  if (FIELD_KIND[k] === 'any' || FIELD_KIND[k] === 'choice' || FIELD_KIND[k] === 'id') return v;
   return v === null ? null : String(v);
 };
 
@@ -618,6 +632,8 @@ export default async function projectRoutes(app) {
     }
     if (projectBySlug(slug)) return reply.code(409).send({ error: 'slug exists' });
     if (req.body.ready_gate !== undefined && isGuest(req)) return reply.code(403).send(GUEST_GATE);
+    const copies = copiesRefusal(req, null);
+    if (copies) return reply.code(copies.code).send(copies.body);
     const dsErr = badDeploySkill(req.body);
     if (dsErr) return reply.code(400).send({ error: dsErr });
     const fields = { slug, name, prefix: makePrefix(slug) };
@@ -645,6 +661,8 @@ export default async function projectRoutes(app) {
     const p = resolveProject(req.params.slug);
     if (!p) return reply.code(404).send({ error: 'project not found' });
     if (req.body?.ready_gate !== undefined && req.body.ready_gate !== p.ready_gate && isGuest(req)) return reply.code(403).send(GUEST_GATE);
+    const copies = copiesRefusal(req, p);
+    if (copies) return reply.code(copies.code).send(copies.body);
     const dsErr = badDeploySkill(req.body);
     if (dsErr) return reply.code(400).send({ error: dsErr });
     if (req.body?.prefix !== undefined) {

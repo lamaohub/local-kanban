@@ -1,5 +1,6 @@
 
 import { realpath, stat } from 'node:fs/promises';
+import { worktreeOf } from './worktrees.js';
 import { db, kvGet, kvSet, logError, uiLang } from './db.js';
 import { PORT } from './config.js';
 import { emit } from './bus.js';
@@ -210,7 +211,8 @@ export async function tickResume(app, now, { waiting = new Set(), limited = fals
     const project = db.prepare('SELECT slug, path FROM projects WHERE id = ?').get(tasks[0].project_id);
     if (!r.board) {
       const folder = await deps.folder(r.session);
-      if (!folder || !project?.path || !(await sameFolder(folder, project.path))) continue;
+      const copy = tasks.map((t) => worktreeOf(t.id)?.path).find(Boolean);
+      if (!folder || !project?.path || !((await sameFolder(folder, project.path)) || (copy && (await sameFolder(folder, copy))))) continue;
     }
     noted(map, r.session, now); // a start refused counts as a try: it must not be asked for every minute for good
     // `claude --resume` stands at its prompt with the conversation back: only words set it to work, and only then has the

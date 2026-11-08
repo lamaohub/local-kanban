@@ -131,3 +131,12 @@ test('no field on the screen — nothing is typed', { skip }, async () => {
   const f = await field({}, ['sleep', '30']);
   assert.deepEqual(await phantom.deliverChat(f.sid, { text: 'to nobody' }), { refused: 'no-box' });
 });
+
+// over words on their way. The wait grows with the load per core, up to DELIVER_STRETCH_MAX times.
+test('the wait for the words in the field grows with the load of the machine', async () => {
+  const { deliverWaitFor, DELIVER_STRETCH_MAX, DELIVER_WAIT_MS } = await import('../src/phantom.js');
+  assert.equal(deliverWaitFor(DELIVER_WAIT_MS, 0.5, 8), DELIVER_WAIT_MS, 'an idle machine waits as before');
+  assert.equal(deliverWaitFor(DELIVER_WAIT_MS, 16, 8), 2 * DELIVER_WAIT_MS, 'twice over its cores — twice as long');
+  assert.equal(deliverWaitFor(DELIVER_WAIT_MS, 400, 8), DELIVER_STRETCH_MAX * DELIVER_WAIT_MS, 'never past the cap');
+  assert.equal(deliverWaitFor(DELIVER_WAIT_MS, NaN, 0), DELIVER_WAIT_MS, 'no figures — the base wait');
+});

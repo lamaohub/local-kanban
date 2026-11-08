@@ -1,5 +1,6 @@
 
 import { buildSelect, selVal } from './board.js';
+import { buildProfileSelect } from './profiles.js';
 import { $, DASH, api, esc, ic, seg, state, tr } from './core.js';
 import { confirmDiscard, currentProject, overlayLayer, popLayer, pushLayer, renderSidebar, renderTopbar, selectProject, styledAlert, styledConfirm } from './sidebar.js';
 import { copyText, refresh } from './sse.js';
@@ -26,7 +27,7 @@ export function closeProjectSettings() {
   selectProject(state.projSettings);
 }
 
-const FIELDS = { path: 'ps-path', server: 'ps-server', server_path: 'ps-spath', domain: 'ps-domain' };
+const FIELDS = { path: 'ps-path', server: 'ps-server', server_path: 'ps-spath', domain: 'ps-domain', worktree_files: 'ps-wt-files', worktree_setup: 'ps-wt-setup' };
 
 let psSnap = null;
 function projectValues(p) {
@@ -34,7 +35,8 @@ function projectValues(p) {
   const values = {
     name: (p.name || '').trim(), description: (p.description || '').trim(), category: p.category || 'Other',
     pinned: p.pinned ? 1 : 0, deploy_skill: (p.deploy_skill || '').trim() || null,
-    pm2_services: pm2.length ? JSON.stringify(pm2) : null, ready_gate: p.ready_gate ?? null,
+    pm2_services: pm2.length ? JSON.stringify(pm2) : null, ready_gate: p.ready_gate ?? null, worktrees: p.worktrees ? 1 : 0,
+    profile_id: p.profile_id ?? null,
   };
   for (const field of Object.keys(FIELDS)) values[field] = (p[field] || '').trim() || null;
   return values;
@@ -46,7 +48,8 @@ function readProjectForm() {
   const values = {
     name: $('ps-name').value.trim(), description: $('ps-desc').value.trim(), category,
     pinned: $('ps-pinned').checked ? 1 : 0, deploy_skill: (selVal($('ps-skill')) || '').trim() || null,
-    pm2_services: pm2.length ? JSON.stringify(pm2) : null, ready_gate: READY_VALUE[selVal($('ps-ready'))] ?? null,
+    pm2_services: pm2.length ? JSON.stringify(pm2) : null, ready_gate: READY_VALUE[selVal($('ps-ready'))] ?? null, worktrees: $('ps-wt').checked ? 1 : 0,
+    profile_id: $('ps-profile').dataset.value ? Number($('ps-profile').dataset.value) : null,
   };
   for (const [field, id] of Object.entries(FIELDS)) values[field] = $(id).value.trim() || null;
   return values;
@@ -122,11 +125,25 @@ export async function renderProjectSettings(force) {
           <div class="kbsel" id="ps-skill"></div>
           <small class="ps-hint" id="ps-skill-hint">${tr('the skill Claude follows to ship this project; “deploy” is the shared one. A new one is created in Settings → Skills.')}</small>
         </div>
+        <div class="pp-field">${tr('Launch profile')}
+          <div class="kbsel" id="ps-profile" data-value=""></div>
+          <small class="ps-hint">${tr('the model, the effort and the environment its tasks start with — Settings → Claude Code → Launch profiles')}</small>
+        </div>
         <div class="pp-field">${tr('Before shipping')}
           <div class="kbsel" id="ps-ready"></div>
           <small class="ps-hint">${tr('whether a finished task waits in Ready to ship for your word')}</small>
         </div>
       </div>
+    </div>
+
+    <div class="panel ps-block">
+      <div class="panel-h">${tr('Copies of the repository')}</div>
+      <div class="kbh-note muted">${esc(tr('Parallel sessions of one repository get in each other\'s way in one checkout. With this on, ▶ gives each task its own copy — .claude/worktrees/<KEY> on the branch claude/<KEY> — and starts Claude there. Old copies are removed in Health → Stands.'))}</div>
+      <label class="pp-field pp-toggle"><input id="ps-wt" type="checkbox"><span>${tr('Each task in its own copy of the repository')}</span></label>
+      <label class="pp-field">${tr('Files outside git')}<textarea id="ps-wt-files" rows="3" placeholder="copy .env&#10;link node_modules&#10;copy data/"></textarea>
+        <small class="ps-hint">${esc(tr('a line each: copy <path> — a copy, link <path> — a link to the main checkout; a copy does not get what git ignores'))}</small></label>
+      <label class="pp-field">${tr('Preparing a copy')}<input id="ps-wt-setup" type="text" placeholder="npm install">
+        <small class="ps-hint">${tr('a command Claude runs in a fresh copy before work — the board runs nothing itself')}</small></label>
     </div>
 
     <div class="panel ps-block">
@@ -151,6 +168,11 @@ export async function renderProjectSettings(force) {
   $('ps-spath').value = p.server_path || '';
   $('ps-pm2').value = parsePm2Services(p.pm2_services).join(', ');
   $('ps-domain').value = p.domain || '';
+  $('ps-wt').checked = !!p.worktrees;
+  $('ps-profile').dataset.value = p.profile_id ?? '';
+  buildProfileSelect($('ps-profile'), p.profile_id ?? null, tr('None — as the page says'), (v) => { $('ps-profile').dataset.value = v ?? ''; });
+  $('ps-wt-files').value = p.worktree_files || '';
+  $('ps-wt-setup').value = p.worktree_setup || '';
   buildSkillSelect(p, null);
   buildReadySelect(p);
   loadSkillOptions(p);

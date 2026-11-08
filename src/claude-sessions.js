@@ -120,9 +120,9 @@ export function freshTerminalSessions() {
 /** Tasks in prep whose last move there was ▶'s and that no session has taken yet: task id → hours since the start. */
 export function waitingLaunches() {
   const rows = db.prepare(`SELECT e.task_id, (julianday('now') - julianday(e.created_at)) * 24 AS age_h
-    FROM task_launches l JOIN task_events e ON e.id = l.event_id JOIN tasks t ON t.id = e.task_id
-    WHERE t.status = 'prep' AND e.session_id IS NULL
-      AND e.id = (SELECT MAX(x.id) FROM task_events x WHERE x.task_id = e.task_id AND x.status = 'prep')`).all();
+    FROM tasks t JOIN task_events e ON e.id = (SELECT MAX(x.id) FROM task_events x WHERE x.task_id = t.id AND x.status = 'prep')
+    JOIN task_launches l ON l.event_id = e.id
+    WHERE t.status = 'prep' AND e.session_id IS NULL`).all();
   return new Map(rows.map((r) => [r.task_id, r.age_h]));
 }
 

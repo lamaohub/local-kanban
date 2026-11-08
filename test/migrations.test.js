@@ -381,6 +381,48 @@ test('v15: a board of v14 gets comment_keys_deleted, tied to its task', (t) => {
   assert.equal(after.prepare('SELECT COUNT(*) AS n FROM comment_keys_deleted').get().n, 0);
 });
 
+test('v17: a board of v16 gets projects.profile_id, empty for its projects', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'kb-mig-prof-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  migrateDir(dir);
+  const db = new Database(join(dir, 'kanban.db'));
+  db.exec('ALTER TABLE projects DROP COLUMN profile_id');
+  db.prepare("INSERT INTO projects (slug, name, prefix) VALUES ('old', 'Old', 'OL')").run();
+  db.pragma('user_version = 16');
+  db.close();
+  migrateDir(dir);
+  const after = new Database(join(dir, 'kanban.db'));
+  t.after(() => after.close());
+  assert.ok(after.pragma('user_version', { simple: true }) >= 17);
+  assert.equal(after.prepare("SELECT profile_id FROM projects WHERE slug = 'old'").get().profile_id, null);
+});
+
+// task_worktrees tied to its task
+test('v16: a board of v15 gets the columns of copies — 0 for its projects — and task_worktrees', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'kb-mig-wt-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  migrateDir(dir);
+  const db = new Database(join(dir, 'kanban.db'));
+  db.exec('DROP TABLE task_worktrees');
+  db.exec('ALTER TABLE projects DROP COLUMN worktrees');
+  db.exec('ALTER TABLE projects DROP COLUMN worktree_files');
+  db.exec('ALTER TABLE projects DROP COLUMN worktree_setup');
+  db.prepare("INSERT INTO projects (slug, name, prefix) VALUES ('old', 'Old', 'OL')").run();
+  db.pragma('user_version = 15');
+  db.close();
+  migrateDir(dir);
+  const after = new Database(join(dir, 'kanban.db'));
+  t.after(() => after.close());
+  assert.ok(after.pragma('user_version', { simple: true }) >= 16);
+  assert.deepEqual(after.prepare("SELECT worktrees, worktree_files, worktree_setup FROM projects WHERE slug = 'old'").get(), { worktrees: 0, worktree_files: null, worktree_setup: null });
+  after.pragma('foreign_keys = ON');
+  const pid = after.prepare("SELECT id FROM projects WHERE slug = 'old'").get().id;
+  const task = after.prepare("INSERT INTO tasks (project_id, task_no, title) VALUES (?, 1, 'T')").run(pid).lastInsertRowid;
+  after.prepare("INSERT INTO task_worktrees (task_id, path, branch) VALUES (?, '/x', 'claude/OL-1')").run(task);
+  after.prepare('DELETE FROM tasks WHERE id = ?').run(task);
+  assert.equal(after.prepare('SELECT COUNT(*) AS n FROM task_worktrees').get().n, 0, 'the copy goes with its task');
+});
+
 test('v14: tasks take the status ready, every row and column kept, foreign keys intact', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'kb-mig-ready-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));

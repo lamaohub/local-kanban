@@ -1,5 +1,6 @@
 
 import { api, esc, ic, seg, tr } from './core.js';
+import { attachAtPicker, chatItems } from './at-picker.js';
 import { SHORT_MONTHS, copyText, resumeOnBoard, usageFmt } from './sse.js';
 import { matchKey, plural, setClaudeView } from './settings.js';
 import { refusalLine } from './unsaved.js';
@@ -1200,6 +1201,7 @@ export function mountChat(box, { key = null, session = null, scroller = null, fu
     e.stopPropagation(); // the board's keys (arrows, N, Backspace) are not for the field
   };
   input.oninput = () => { grow(); c.refused = ''; if (input.value) drafts.set(c.key, input.value); else drafts.delete(c.key); ready(); };
+  if (typeof attachAtPicker === 'function') attachAtPicker(input, (q) => chatItems(c.key, q));
   form.querySelector('.chat-send').onclick = send;
 
   const still = () => Boolean(globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
