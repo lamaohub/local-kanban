@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { wholeAnswer } from '../public/js/term-delta.js';
+import { otherBoardLine, termControls } from '../public/js/term-owner-rules.js';
 import { createScreens } from '../src/term-screens.js';
 
 const source = (file) => readFileSync(new URL(`../public/js/${file}`, import.meta.url), 'utf8');
@@ -92,7 +93,7 @@ function columnsModule({ view = 'terminal' } = {}) {
     TERM_ACTIVITY: {}, TERM_KEYS: [], cardTermSession: () => null, growTermInput: noop, openTerminalOf: noop, rolledBy: () => 0,
     sayRefused: noop, setTermHint: noop, takeTermHint: () => false, wireTermImages: noop, styledAlert: noop,
     styledConfirm: async () => true, refusalLine: () => '', refusalText: () => ({}), wireTermCopy: noop,
-    holdUntil: () => 0, reprinted: () => true, wholeAnswer,
+    holdUntil: () => 0, reprinted: () => true, wholeAnswer, otherBoardLine, termControls,
     IMAGE_ACCEPT: 'image/png',
   };
   vm.runInNewContext(`${strip('now-terms.js')}

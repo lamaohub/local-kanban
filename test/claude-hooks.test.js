@@ -395,7 +395,7 @@ test('a settings.json or a folder that cannot be written is reported, and nothin
 test('a settings.json changed while the change was on screen is left alone', { skip: process.platform !== 'darwin' && 'needs the macOS `script`', timeout: 20000 }, async () => {
   const dir = fresh(OWNER);
   const p = join(dir, 'settings.json');
-  const child = spawn('/bin/sh', ['-c', 'cat | script -q /dev/null "$@" | cat', 'sh', process.execPath, CLI, 'hooks', 'install', '--data', join(dir, 'data')], {
+  const child = spawn('/bin/sh', ['-c', '/bin/cat | /usr/bin/script -q /dev/null "$@" | /bin/cat', 'sh', process.execPath, CLI, 'hooks', 'install', '--data', join(dir, 'data')], {
     env: { ...process.env, KB_CLAUDE_DIR: dir, CLAUDE_CONFIG_DIR: dir, HOME: dir, KB_DATA_DIR: join(dir, 'data'), KB_URL: '' },
     detached: true, // its own process group: a question that never comes must not leave `cat` waiting forever
   });
@@ -439,7 +439,7 @@ test('the wizard keeps the copy of settings.json in the data folder it asked for
     [/Show the change and connect\?[^\n]*?\]: /, 'y\n'],
     [/Write these changes\?[^\n]*?\]: /, 'y\n'],
   ];
-  const child = spawn('/bin/sh', ['-c', 'cat | script -q /dev/null "$@" | cat', 'sh', process.execPath, join(pkg, 'bin', 'local-kanban')], {
+  const child = spawn('/bin/sh', ['-c', '/bin/cat | /usr/bin/script -q /dev/null "$@" | /bin/cat', 'sh', process.execPath, join(pkg, 'bin', 'local-kanban')], {
     env: { ...process.env, KB_CLAUDE_DIR: dir, CLAUDE_CONFIG_DIR: dir, HOME: dir, KB_DATA_DIR: own, KB_URL: '' },
     detached: true, // its own process group: a question that never comes must not leave `cat` waiting forever
   });

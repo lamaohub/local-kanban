@@ -1316,6 +1316,8 @@ html[data-design="v3"] .drawer.drawer-full { padding-inline: max(18px, calc((100
 .term-keys { display: flex; flex-wrap: wrap; gap: 4px; }
 .term-key { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; padding: 3px 9px; min-width: 32px; }
 .term-form { font-size: 12.5px; }
+.term-other { display: flex; align-items: center; gap: 8px; font-size: 12px; line-height: 1.4; color: var(--muted); }
+.term-other-text { flex: 1; min-width: 0; }
 .term-form .term-send { color: var(--text); background: var(--chip-bg); font-weight: 550; }
 .term-form .term-send:hover:not(:disabled) { border-color: var(--muted); background: var(--hover-strong); }
 .term-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-left: 6px; vertical-align: middle; }
@@ -1511,6 +1513,7 @@ html[data-design="v3"] .drawer.drawer-full { padding-inline: max(18px, calc((100
 .now-col-down[hidden] { display: none; }
 .now-col :disabled { opacity: .55; cursor: not-allowed; }
 .now-col-none { font-size: 12.5px; padding: 8px 2px; }
+.now-col-other { padding: 6px 2px; } /* a column of another board's terminal: its line under the screen */
 .now-col.tasks-closed .now-col-tasks .now-row:not(.now-row-cur) { display: none; }
 .now-col-more {
   display: flex; align-items: center; gap: 6px; margin: -4px 0 -2px; padding: 2px 4px; border: none; background: none;
@@ -1712,8 +1715,8 @@ html[data-design="v3"] .now-col.col-full { /* v3: .panel rounds and frames it ot
 }
 html[data-design="v3"] #work .chat-dock { bottom: -16px; margin-bottom: -16px; padding-bottom: 16px; background: var(--side); }
 .chat-form { position: relative; display: block; margin: 0; }
-.comment-form > .term-to-chat, .comment-form > .form-attach { background: none; border-color: transparent; color: var(--muted); }
-.comment-form > .term-to-chat:hover, .comment-form > .form-attach:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.comment-form > .term-to-chat, .comment-form > .form-attach, .term-other > .term-to-chat { background: none; border-color: transparent; color: var(--muted); }
+.comment-form > .term-to-chat:hover, .comment-form > .form-attach:hover:not(:disabled), .term-other > .term-to-chat:hover { background: var(--hover); color: var(--text); }
 .chat-box {
   position: relative; z-index: 1; display: flex; flex-direction: column; gap: 2px; padding: 6px 6px 6px 8px;
   border: 1px solid var(--border); border-radius: 14px; background: var(--input-bg); transition: border-color .15s ease, box-shadow .15s ease;
@@ -2787,6 +2790,12 @@ a.hl-name:hover { color: var(--accent); }
 .hl-fix-key { color: var(--text); font-variant-numeric: tabular-nums; }
 .hl-fixing .card-live { font-size: 12px; }
 .hl-tabs { margin-bottom: 2px; }
+.hl-walk { display: flex; flex-direction: column; gap: 6px; padding: 2px 2px 4px; max-width: 520px; }
+.hl-walk-h { display: flex; justify-content: space-between; gap: 12px; font-size: 12.5px; }
+.hl-walk-n { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.hl-walk-track { height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
+.hl-walk-fill { display: block; height: 100%; border-radius: 2px; background: var(--accent); transition: width .25s ease-out; }
+@media (prefers-reduced-motion: reduce) { .hl-walk-fill { transition: none; } }
 .st-row { align-items: center; }
 .st-pick { flex: none; width: 15px; height: 15px; margin: 0; accent-color: var(--accent); cursor: pointer; }
 .st-pick-gap { flex: none; width: 15px; }
@@ -2796,6 +2805,7 @@ a.hl-name:hover { color: var(--accent); }
 .st-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .st-bar .btn-ghost, .st-bar .btn-primary { font-size: 12.5px; }
 .st-repo { display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 12px; }
+.st-repo .hl-file-path { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
 .st-hint { padding: 0 2px; }
 .st-diff-btn { align-self: flex-start; font-size: 12px; padding: 3px 10px; }
 .st-diff { margin: 0; max-height: 360px; overflow: auto; font: 11.5px/1.45 ui-monospace, monospace; background: var(--input-bg); border: 1px solid var(--border-soft); border-radius: 6px; padding: 8px 10px; white-space: pre; }
@@ -2816,3 +2826,24 @@ a.hl-name:hover { color: var(--accent); }
   .hl-file { grid-template-columns: 1fr; }
   .hl-file-size { grid-column: 1; grid-row: auto; white-space: normal; }
 }
+
+.call-overlay { z-index: 60; background: rgba(0,0,0,.34); }
+.call-box { width: 380px; max-width: calc(100vw - 32px); gap: 12px; padding: 20px; }
+.call-who { display: flex; align-items: center; gap: 12px; }
+.call-ring { position: relative; flex: none; width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--accent); background: var(--accent-soft); }
+.call-overlay:not(.taken) .call-ring::after { content: ''; position: absolute; inset: 0; border-radius: 50%; border: 2px solid var(--accent); animation: call-ring 1.3s ease-out infinite; }
+@keyframes call-ring { from { transform: scale(1); opacity: .55; } to { transform: scale(1.4); opacity: 0; } }
+.call-names { display: flex; flex-direction: column; min-width: 0; }
+.call-name { font-weight: 600; font-size: 15px; }
+.call-sub { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.call-state { font-size: 12.5px; color: var(--muted); }
+.call-state.live { color: var(--accent); }
+.call-said { font-size: 14px; line-height: 1.45; color: var(--text); text-wrap: pretty; max-height: 40vh; overflow: auto; }
+.call-said:empty, .call-heard:empty { display: none; }
+.call-heard { font-size: 13px; line-height: 1.4; color: var(--muted); padding: 8px 10px; border-radius: 8px; background: var(--bg); text-align: right; }
+.call-type .call-input { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font: inherit; font-size: 13px; outline: none; background: var(--input-bg); color: var(--text); }
+.call-type .call-input:focus { border-color: var(--accent); }
+.call-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.call-actions button { display: inline-flex; align-items: center; gap: 6px; margin-left: 0; }
+.call-set-btns { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+@media (prefers-reduced-motion: reduce) { .call-overlay:not(.taken) .call-ring::after { animation: none; } }

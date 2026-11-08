@@ -100,8 +100,16 @@ async function lookOnce(now) {
       markSaid(session, now);
       return deps.say(t, session, { text: item.text, key: 'Enter', chat: true, ...(item.images.length ? { images: item.images } : {}) });
     });
-    if (r?.later) { queues.set(session, [item, ...(queues.get(session) || [])]); ring(session); continue; }
+    // tmux did not say whose the terminal is — nothing was typed, so no try is spent: the words wait at the head of
+    // the queue for the look when tmux answers (spent, three looks of a stalled tmux threw the person's words away)
+    if (r?.later || r?.refused === 'tmux-slow') { queues.set(session, [item, ...(queues.get(session) || [])]); ring(session); continue; }
     if (r?.err) logError('server', 'chat', `queued words did not reach the terminal: ${r.err.message}`, r.text);
+    // another board started this terminal meanwhile (it went on with the session): the words are never typed here
+    if (r?.refused === 'other-board') {
+      logError('server', 'chat', `queued words were not typed: another board${r.port ? ` (port ${r.port})` : ''} started this terminal`, item.text.slice(0, 200));
+      ring(session);
+      continue;
+    }
     // DELIVER_TRIES times; then the journal says so, and they are gone
     if (r?.refused) {
       item.tries = (item.tries || 0) + 1;

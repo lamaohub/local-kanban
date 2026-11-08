@@ -13,6 +13,7 @@ import { renderAsks } from './asks.js';
 import { stillOpen } from './review-rules.js';
 import { wireTermCopy } from './term-copy.js';
 import { termSuggestion, withPath } from './term-input-rules.js';
+import { otherBoardLine, termControls } from './term-owner-rules.js';
 import { holdUntil, reprinted } from './term-reprint.js';
 import { localStore } from './store.js';
 
@@ -665,18 +666,20 @@ function renderTerminal(r) {
   termInfo = gone ? null : { session: r.session, dead: r.dead, exit: r.exit };
   if (drawerTask?.key === termKey && wasRunning !== Boolean(termInfo && !termInfo.dead)) renderLaunchButtons(drawerTask);
   $('term-state').textContent = gone ? tr('Not running') : r.dead ? endedWords(r) : tr(TERM_ACTIVITY[r.activity] || 'Running');
-  $('term-resume').classList.toggle('hidden', !(r.dead && r.session));
+  const can = termControls(r);
+  $('term-resume').classList.toggle('hidden', !can.resume);
   $('term-state').title = r.dead && !gone ? endedWords(r, true) : $('term-state').textContent;
   $('term-state').classList.toggle('live', !gone && !r.dead);
   $('term-state').classList.toggle('calm', !gone && !r.dead && r.activity !== undefined && !['busy', 'background', 'own'].includes(r.activity));
-  $('term-stop').classList.toggle('hidden', gone);
+  $('term-stop').classList.toggle('hidden', !can.stop);
   $('term-stop').textContent = r.dead ? tr('Close') : tr('Stop');
   const live = !gone && !r.dead;
   markTermTab(live);
-  const bare = live && bareMode(r.screen);
-  const login = live && !bare && needsLogin(r.screen || '');
-  const offer = live && !login && getSetting('permission') === 'auto' ? autoOffer(r.screen || '') : null;
-  const trust = live && !login && !offer && termUntrusted.has(r.session);
+  const noted = live && can.notes; // a note's button types into the terminal: none over another board's
+  const bare = noted && bareMode(r.screen);
+  const login = noted && !bare && needsLogin(r.screen || '');
+  const offer = noted && !login && getSetting('permission') === 'auto' ? autoOffer(r.screen || '') : null;
+  const trust = noted && !login && !offer && termUntrusted.has(r.session);
   const noteEl = $('term-note');
   const kind = bare ? 'bare' : login ? 'login' : (offer ? `auto${offer}` : (trust ? 'trust' : ''));
   noteEl.classList.toggle('hidden', !kind);
@@ -706,7 +709,11 @@ function renderTerminal(r) {
     linksEl.innerHTML = links.map((u) => `<a class="term-link" href="${esc(u)}" target="_blank" rel="noopener noreferrer" title="${esc(u)}">${ic('open', 12)}<span>${esc(shortUrl(u))}</span></a>`).join('');
   }
   linksEl.classList.toggle('hidden', !links.length);
-  const off = gone || r.dead;
+  const off = !can.field;
+  $('term-other').classList.toggle('hidden', !can.other);
+  $('term-other-text').textContent = otherBoardLine(r, tr);
+  $('term-keys').classList.toggle('hidden', can.other);
+  $('term-form').classList.toggle('hidden', can.other);
   $('term-input').disabled = off;
   termActivity = off ? null : r.activity;
   hintCardTerm();
@@ -972,6 +979,10 @@ export function initTerminal() {
   $('term-to-chat').title = tr('Show the chat');
   $('term-to-chat').setAttribute('aria-label', tr('Show the chat'));
   $('term-to-chat').onclick = () => setClaudeView('chat');
+  $('term-other-chat').innerHTML = ic('chat', 15);
+  $('term-other-chat').title = tr('Show the chat');
+  $('term-other-chat').setAttribute('aria-label', tr('Show the chat'));
+  $('term-other-chat').onclick = () => setClaudeView('chat');
   $('term-stop').onclick = termStop;
   $('term-resume').textContent = tr('Continue');
   $('term-resume').title = tr('Start Claude again in this terminal with its conversation — it waits for your word');

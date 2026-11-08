@@ -5,8 +5,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { importsOf, ruleIsScoped, everywhere, projectHealth, healthView, NORMS } from '../src/health.js';
-import { fileState, healthGroups, healthCounts, startTotal } from '../public/js/health-rules.js';
+import { importsOf, ruleIsScoped, everywhere, projectHealth, healthView, NORMS, WALK_AT_ONCE } from '../src/health.js';
+import { fileState, healthGroups, healthCounts, startTotal, walkBarHTML, walkPct } from '../public/js/health-rules.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'kb-health-')));
 after(() => rmSync(root, { recursive: true, force: true }));
@@ -67,4 +67,41 @@ test('the answer: a project without a folder, with a missing folder, and the gro
   assert.equal(fileState({ chars: 40000, lines: 200 }, NORMS), 'ok');
   assert.deepEqual(healthCounts(g.own, NORMS), { long: 1, heavy: 0 });
   assert.deepEqual(startTotal({ chars: 100000 }, { chars: 20001 }, NORMS), { chars: 120001, over: true });
+});
+
+test('CK-984: projects are measured several at a time, the answer keeps the order of the board, every step is told', async () => {
+  const n = WALK_AT_ONCE * 2 + 1;
+  const list = Array.from({ length: n }, (_, i) => {
+    const dir = join(root, 'many', `p${i}`);
+    // the first ones are the heaviest, so they finish last when measured at once
+    put(`many/p${i}/CLAUDE.md`, 'x\n'.repeat((n - i) * 400));
+    return { slug: `p${i}`, name: `P${i}`, path: dir };
+  });
+  list.splice(3, 0, { slug: 'none', name: 'None', path: null });
+  const steps = [];
+  const v = await healthView(list, (done, total) => steps.push([done, total]));
+  assert.deepEqual(v.projects.map((p) => p.slug), list.map((p) => p.slug), 'the answer is in the order of the board');
+  assert.equal(v.projects[0].main.lines, n * 400);
+  assert.deepEqual(steps, Array.from({ length: list.length + 1 }, (_, i) => [i, list.length]), 'from 0 to all, one step per project');
+  assert.equal((await healthView([], (d, t) => steps.push(['empty', d, t]))).projects.length, 0);
+  assert.deepEqual(steps.at(-1), ['empty', 0, 0]);
+});
+
+test('CK-984: the bar of a walk — empty before the count is known, never past the end, numbers only', () => {
+  assert.equal(walkPct(0, 0), 0);
+  assert.equal(walkPct(5, 0), 0);
+  assert.equal(walkPct(1, 3), 33);
+  assert.equal(walkPct(9, 3), 100);
+  assert.equal(walkPct('x', 3), 0);
+  const empty = walkBarHTML('Measuring…', 0, 0, 'files');
+  assert.match(empty, /data-walk="files"/);
+  assert.match(empty, /class="hl-walk-n"><\/span>/, 'no «0 / 0» before the server knows the number');
+  assert.match(empty, /width:0%/);
+  const half = walkBarHTML('Measuring…', 31, 62);
+  assert.match(half, /31 \/ 62/);
+  assert.match(half, /width:50%/);
+  assert.match(half, /aria-valuenow="31"/);
+  assert.doesNotMatch(half, /data-walk/);
+  assert.match(walkBarHTML('L', 70, 62), /62 \/ 62.*width:100%/s, 'more done than all reads as all');
+  assert.doesNotMatch(walkBarHTML('L', '<b>', '<i>'), /<b>|<i>/, 'what the server sends goes in as a number');
 });

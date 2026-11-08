@@ -167,17 +167,30 @@ export async function projectHealth(dir, skip = new Set()) {
   };
 }
 
+export const WALK_AT_ONCE = 4;
+async function oneProject(p, seen) {
+  const base = { slug: p.slug, name: p.name || p.slug, category: p.category || null };
+  if (!p.path) return { ...base, folder: null };
+  let isDir = false;
+  try { isDir = (await stat(p.path)).isDirectory(); } catch { /* no folder here */ }
+  if (!isDir) return { ...base, folder: shown(p.path), missing: true };
+  return { ...base, folder: shown(p.path), ...(await projectHealth(p.path, seen)) };
+}
+
 /** The whole answer of GET /api/health: the norms, the person's files and each project that is not archived. */
-export async function healthView(projects) {
+export async function healthView(projects, onStep = () => {}) {
   const user = await everywhere();
-  const out = [];
-  for (const p of projects) {
-    const base = { slug: p.slug, name: p.name || p.slug, category: p.category || null };
-    if (!p.path) { out.push({ ...base, folder: null }); continue; }
-    let isDir = false;
-    try { isDir = (await stat(p.path)).isDirectory(); } catch { /* no folder here */ }
-    if (!isDir) { out.push({ ...base, folder: shown(p.path), missing: true }); continue; }
-    out.push({ ...base, folder: shown(p.path), ...(await projectHealth(p.path, user.seen)) });
-  }
+  const out = new Array(projects.length);
+  let next = 0;
+  let done = 0;
+  onStep(0, projects.length);
+  const worker = async () => {
+    while (next < projects.length) {
+      const i = next++;
+      out[i] = await oneProject(projects[i], user.seen);
+      onStep(++done, projects.length);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(WALK_AT_ONCE, projects.length) }, worker));
   return { norms: NORMS, everywhere: { files: user.files, chars: user.chars, lines: user.lines }, projects: out };
 }

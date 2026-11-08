@@ -119,7 +119,7 @@ test('the chat holds the parts of CK-765 together', () => {
   assert.match(chat, /if \(!c\.askFading && isSending\(c\.askId\)\) fadeAsk\(c\.askId\);/);
   assert.match(chat, /if \(c\.askId\) \{ dropAsk\(\);[^\n]*if \(c\.askFading\) return; \}/, 'the tail of the screen wipes the fading form');
   // a refusal is said for a Claude outside the board too, and ✕ on a queued model goes back to the one picked before
-  assert.match(chat, /: c\.refused \|\| ended \|\| \(!d\.send \? tr\('This Claude does not run inside the board/);
+  assert.match(chat, /: c\.refused \|\| otherBoardLine\(d, tr\) \|\| ended \|\| \(!d\.send \? tr\('This Claude does not run inside the board/);
   assert.match(chat, /c\.modelWant = c\.modelWant\.prev \|\| null;/);
   // an answer that never reached Claude takes its bubble back and says so at the field
   assert.match(chat, /onLost: \(why\) => answerLost\(a, why\)/);

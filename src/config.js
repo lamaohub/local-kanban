@@ -53,4 +53,5 @@ export const missingClaudeDirError = () => `${claudeDir()} does not exist — ch
 export const launchDryRun = () => Boolean(env('KB_LAUNCH_DRYRUN'));
 export const tmuxSocket = () => env('KB_TMUX_SOCKET') || 'local-kanban';
 export const claudeBin = () => expandPath(env('KB_CLAUDE_BIN'));
+export const voiceDir = () => expandPath(env('KB_VOICE_DIR')) || join(homedir(), '.local', 'share', 'local-kanban', 'voice');
 export const claudeConfigFile = () => (env('KB_CLAUDE_DIR', 'CLAUDE_CONFIG_DIR') ? join(claudeDir(), '.claude.json') : join(homedir(), '.claude.json'));

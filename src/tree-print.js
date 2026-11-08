@@ -41,10 +41,13 @@ export async function turnCommits(path, before, now, format) {
   const [a, restA] = cut(before);
   const [b, restB] = cut(now);
   if (!a || !b || a === b || restA !== restB) return null;
-  if (await git(path, ['merge-base', '--is-ancestor', a, b]) === null) return null; // a branch switched, a reset: cannot tell
   // a pathspec drops a commit that changes nothing (an empty one): at the root of its repository the project is all of it
   const prefix = await git(path, ['rev-parse', '--show-prefix']);
   if (prefix === null) return null;
+  if (await git(path, ['merge-base', '--is-ancestor', a, b]) === null) {
+    if (!prefix.toString('utf8').trim()) return null;
+    return await git(path, ['diff', '--quiet', a, b, ...HERE]) === null ? null : '';
+  }
   const out = await git(path, ['log', `--format=${format}`, `${a}..${b}`, ...(prefix.toString('utf8').trim() ? HERE : [])]);
   return out === null ? null : out.toString('utf8');
 }

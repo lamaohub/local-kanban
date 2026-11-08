@@ -73,6 +73,16 @@ test('waiting and idle mean the session waits for the person; an unknown status 
   assert.equal(since, 1500, 'the card cannot say for how long it has been waiting');
 });
 
+test('the time of a change of the state is statusUpdatedAt, then updatedAt — not the start, not any later write', async () => {
+  reg('101.json', { pid: 101, sessionId: S1, status: 'waiting', startedAt: 100, statusUpdatedAt: 1700, updatedAt: 9000 });
+  assert.equal((await live.readRegistry(aliveOnly(101))).get(S1).since, 1700, 'the state is dated by another field than statusUpdatedAt');
+  reg('101.json', { pid: 101, sessionId: S1, status: 'waiting', startedAt: 100, updatedAt: 1800 });
+  assert.equal((await live.readRegistry(aliveOnly(101))).get(S1).since, 1800, 'with no statusUpdatedAt the state is not dated by updatedAt');
+  reg('101.json', { pid: 101, sessionId: S1, status: 'waiting', startedAt: 100 });
+  assert.equal((await live.readRegistry(aliveOnly(101))).get(S1).since, null, 'the start of the session was taken for a change of its state');
+  reg('101.json', { pid: 101, sessionId: S1, status: 'busy', statusUpdatedAt: 1000 });
+});
+
 test('a dead process is a closed session, for every task in work that it led', async () => {
   reg('101.json', { pid: 101, sessionId: S1, status: 'busy', statusUpdatedAt: 1000 });
   assert.deepEqual(await states(aliveOnly(202)), { 'LV-1': 'gone', 'LV-2': 'gone', 'LV-3': 'busy' },

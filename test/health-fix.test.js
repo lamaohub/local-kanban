@@ -300,17 +300,22 @@ const trRu = (s) => (Object.hasOwn(RU, s) ? RU[s] : `MISSING<${s}>`);
 function fakeBox() {
   let html = '';
   let cache = new Map();
+  let box;
   const tags = () => [...html.matchAll(/<(\w+)((?:\s+[\w-]+(?:="[^"]*")?)*)\s*\/?>/g)].map((m) => {
     const attrs = Object.fromEntries([...m[2].matchAll(/([\w-]+)(?:="([^"]*)")?/g)].map((a) => [a[1], a[2] ?? '']));
     const dataset = {};
     for (const [k, v] of Object.entries(attrs)) if (k.startsWith('data-')) dataset[k.slice(5).replace(/-(\w)/g, (_, c) => c.toUpperCase())] = v;
-    return { tag: m[1], attrs, classes: (attrs.class || '').split(/\s+/).filter(Boolean), dataset, disabled: false, onclick: null };
+    return {
+      tag: m[1], attrs, classes: (attrs.class || '').split(/\s+/).filter(Boolean), dataset, disabled: false, onclick: null,
+      insertAdjacentHTML(where, more) { if (where === 'beforebegin') box.innerHTML = html.slice(0, m.index) + more + html.slice(m.index); },
+      remove() {},
+    };
   });
   const matches = (el, sel) => sel.split(/\s*,\s*/).some((one) => {
-    const [, tag, cls, attr] = one.match(/^(\w+)?(?:\.([\w-]+))?(?:\[([\w-]+)\])?$/);
-    return (!tag || el.tag === tag) && (!cls || el.classes.includes(cls)) && (!attr || attr in el.attrs);
+    const [, tag, cls, attr, value] = one.match(/^(\w+)?(?:\.([\w-]+))?(?:\[([\w-]+)(?:="([^"]*)")?\])?$/);
+    return (!tag || el.tag === tag) && (!cls || el.classes.includes(cls)) && (!attr || (attr in el.attrs && (value === undefined || el.attrs[attr] === value)));
   });
-  return {
+  box = {
     all: [],
     get innerHTML() { return html; },
     set innerHTML(v) { html = v; cache = new Map(); this.all = tags(); },
@@ -319,6 +324,7 @@ function fakeBox() {
     querySelectorAll(sel) { if (!cache.has(sel)) cache.set(sel, this.all.filter((el) => matches(el, sel))); return cache.get(sel); },
     querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
   };
+  return box;
 }
 /** Wait for what the page does after a click without awaiting it (the start, the look that follows) — at most 5 s. */
 const until = async (ok) => { for (const end = Date.now() + 5000; !ok() && Date.now() < end;) await new Promise((r) => setTimeout(r, 5)); };
@@ -441,6 +447,7 @@ test('task.live redraws the row of a fix: «Claude is not running» gives way to
     applyLive: (tasks) => { state.live = Object.fromEntries((tasks || []).map((x) => [x.id, { claude: x.claude }])); },
     applyTerminalQuestions: noop, maybeWaitingAlert: noop, maybeQuestionAlert: noop, markNowEntry: noop, peekTerminal: noop,
     loadTasks: async () => {}, DASH: 'dash', NOW: 'now', REVIEW: 'review', repaintHealth: page.repaintHealth,
+    callHears: noop,
   });
   vm.runInContext(`${sse.slice(at, sse.indexOf('\n}\n', at) + 3)}\nthis.message = streamMessage;`, ctx);
   const live = (tasks) => ctx.message(JSON.stringify({ type: 'task.live', data: { tasks, projects: [], questions: [] } }));
@@ -467,5 +474,101 @@ test('the words of the row of a fix are in the Russian dictionary (CK-967)', asy
   const row = rowOf(box, 'pg');
   for (const words of ['Claude is not running', 'Open the task of the fix']) assert.ok(row.includes(RU[words]), `«${words}» is not said in Russian`);
   assert.match(RU['Claude is not running'], /[\u0400-\u04ff]/, 'the Russian of «Claude is not running» is English');
+  setFix('cancelled');
+});
+
+test('CK-984: GET /api/health/progress — counts of the walk of the page\'s own request, no walk — not running', async () => {
+  const get = async (url) => { const r = await app.inject({ method: 'GET', url, headers: { host } }); assert.equal(r.statusCode, 200, r.body); return r.json(); };
+  const walk = app.inject({ method: 'GET', url: '/api/health', headers: { host } });
+  const seen = [];
+  for (let i = 0; i < 200; i++) {
+    const p = await get('/api/health/progress');
+    seen.push(p);
+    if (!p.running && seen.length > 1) break;
+    await new Promise((r) => setImmediate(r));
+  }
+  const done = await walk;
+  assert.equal(done.statusCode, 200);
+  const projects = done.json().projects.length;
+  for (const p of seen.filter((x) => x.running)) assert.equal(p.total, projects, JSON.stringify(p));
+  const end = await get('/api/health/progress');
+  assert.deepEqual(end, { running: false, done: projects, total: projects });
+  assert.deepEqual(Object.keys(end).sort(), ['done', 'running', 'total'], 'no names or paths in the answer');
+});
+
+test('CK-976: the summary keeps a number with its word and its count, and the «·» of the norms keeps to the words before it', async () => {
+  const { page, box } = await healthPage({ tr: trRu });
+  await page.renderHealth({ force: true });
+  const sum = box.innerHTML.match(/<div class="hl-sum muted">([^<]*)<\/div>/)?.[1] || '';
+  // the Russian words from the page's own dictionary: a digit holds what follows it, a count holds its colon
+  const held = (k) => `${RU[k].replace(/(\d) /g, '$1\u00a0')}:\u00a0`;
+  assert.match(RU['over 40,000 characters'], /\d \d/, 'the case is gone: the Russian words of the summary hold no plain space after a digit');
+  for (const k of ['over 40,000 characters', 'over 200 lines']) assert.ok(sum.includes(held(k)), `the summary may break inside «${RU[k]}: N»: ${JSON.stringify(sum)}`);
+  assert.doesNotMatch(sum, / ·/, 'a «·» of the summary may start a line');
+  assert.match(box.innerHTML, /\u00a0· <a href="https:\/\/code\.claude\.com/, 'the «·» before the link of the docs may start a line');
+});
+
+const ssePart = (name) => {
+  const sse = pageSrc('sse.js');
+  const at = sse.indexOf(`function ${name}(`);
+  assert.ok(at >= 0, `${name} is not where the test looks for it`);
+  return sse.slice(sse.lastIndexOf('\n', at) + 1, sse.indexOf('\n}\n', at) + 3);
+};
+
+test('the first picture of the sessions redraws the row of a fix — a reload on Health shows its Claude at once (CK-976)', async () => {
+  clearClaudes();
+  const fx = await pageFix();
+  setFix('doing');
+  const { page, box, state } = await healthPage();
+  await page.renderHealth();
+  assert.match(rowOf(box, 'pg'), /Claude is not running/);
+  const noop = () => {};
+  const ctx = vm.createContext({
+    state, liveEvents: 0, liveLoaded: false,
+    api: async (method, url) => { assert.equal(`${method} ${url}`, 'GET /api/live'); return { tasks: [{ id: fx.id, claude: 'working' }], projects: [], questions: [] }; },
+    applyLive: (tasks) => { state.live = Object.fromEntries((tasks || []).map((x) => [x.id, { claude: x.claude }])); return []; },
+    applyTerminalQuestions: () => [], maybeWaitingAlert: noop, maybeQuestionAlert: noop, markNowEntry: noop, repaintReview: noop,
+    repaintHealth: page.repaintHealth,
+  });
+  vm.runInContext(`${ssePart('loadLive')}\nthis.loadLive = loadLive;`, ctx);
+  await ctx.loadLive();
+  assert.match(rowOf(box, 'pg'), /card-live">working/, 'after the first picture of the sessions the row still says «Claude is not running»');
+});
+
+test('a question of the Claude of a fix, and its answer, redraw the row (CK-976)', async () => {
+  clearClaudes();
+  const fx = await pageFix();
+  setFix('doing');
+  const { page, box, state } = await healthPage();
+  await page.renderHealth();
+  const noop = () => {};
+  const ctx = vm.createContext({
+    state, lastSseAt: Date.now(), liveEvents: 0, silentTooLong: () => false, refresh: async () => {}, renderComments: noop,
+    applyLive: noop, applyTerminalQuestions: noop, maybeWaitingAlert: noop, maybeQuestionAlert: noop, markNowEntry: noop, peekTerminal: noop,
+    loadTasks: async () => {}, DASH: 'dash', NOW: 'now', REVIEW: 'review', repaintHealth: page.repaintHealth, callHears: noop,
+    // the badge of a card with a question outranks the state of its session (liveBadge, hasAsk)
+    applyAskEvent: (ev) => { if (ev.type === 'ask.created') state.live[fx.id] = { claude: 'asks you' }; else delete state.live[fx.id]; },
+  });
+  vm.runInContext(`${ssePart('streamMessage')}\nthis.message = streamMessage;`, ctx);
+  ctx.message(JSON.stringify({ type: 'ask.created', data: { task_id: fx.id } }));
+  assert.match(rowOf(box, 'pg'), /card-live">asks you/, 'a question of Claude did not reach the row of the fix');
+  ctx.message(JSON.stringify({ type: 'ask.removed', data: { task_id: fx.id } }));
+  assert.match(rowOf(box, 'pg'), /Claude is not running/, 'the answer to the question did not reach the row of the fix');
+});
+
+test('«Fix» pressed twice while the first press opens and starts the task — one task, one start (CK-976)', async () => {
+  clearClaudes();
+  pageFolder();
+  setFix('cancelled');
+  const { page, box, asked, launched } = await healthPage();
+  await page.renderHealth({ force: true });
+  const btn = box.querySelectorAll('.hl-fix').find((b) => b.dataset.slug === 'pg');
+  assert.ok(btn, 'no «Fix» on the long CLAUDE.md');
+  click(btn);
+  click(btn); // the fake button is not disabled for clicks — the page itself must hold the second press
+  await until(() => launched.length > 0 && asked.filter((a) => a === 'GET /api/health/fixes').length > 1);
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(asked.filter((a) => a === 'POST /api/health/fix').length, 1, 'the second press asked for the task again');
+  assert.equal(launched.length, 1, 'the second press started Claude a second time');
   setFix('cancelled');
 });

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { canRetry, createCommentKeys, createUnsentComments, refusalText } from '../public/js/unsaved.js';
+import { otherBoardLine, termControls } from '../public/js/term-owner-rules.js';
 
 const src = readFileSync(new URL('../public/js/drawer.js', import.meta.url), 'utf8');
 const take = (head) => {
@@ -66,7 +67,7 @@ function card() {
     esc: (s) => String(s),
     ic: () => '',
     seg: (s) => encodeURIComponent(String(s)),
-    canRetry, createCommentKeys, createUnsentComments, refusalText,
+    canRetry, createCommentKeys, createUnsentComments, refusalText, otherBoardLine, termControls,
     server: { mode: 'up' },
     api: async (method, path, body) => {
       calls.posts.push({ method, path, body });
@@ -332,4 +333,26 @@ test('reading above a long screen, the text stays put while the window of a thou
   assert.equal(c.box.rolledBy(same.join('\n'), same.join('\n')), 0, 'a screen that did not change rolled');
   const grown = [...same.slice(0, 900), 'new line'];
   assert.equal(c.box.rolledBy(same.slice(0, 900).join('\n'), grown.join('\n')), 0, 'a window not yet full grows at its bottom, its top stands');
+});
+
+// «Continue», and the refusal came only after a press. The real renderTerminal, the real leaf term-owner-rules.js
+test('another board\'s terminal: one line in place of the field, the keys, «Stop», «Continue» and a note that types', () => {
+  const c = card();
+  const hidden = (id) => c.els[id].classList.contains('hidden');
+  const login = 'Not logged in · Please run /login';
+  c.els['term-note'] = Object.assign(fakeEl(), { querySelector: (sel) => (sel === '.term-login' ? { onclick: null } : null) });
+  for (const dead of [false, true]) {
+    c.box.renderTerminal({ session: 's1', dead, exit: 0, screen: login, other: { port: 3922 } });
+    for (const id of ['term-form', 'term-keys', 'term-stop', 'term-resume']) assert.ok(hidden(id), `${dead ? 'exited' : 'live'}: #${id} is offered on another board's terminal`);
+    assert.ok(!hidden('term-other'), 'the line is not shown');
+    assert.equal(c.els['term-other-text'].textContent, 'ru:This terminal was started by another board — manage it there: port 3922');
+    assert.ok(hidden('term-note'), 'a note whose button types into the terminal is offered on another board\'s terminal');
+    assert.equal(c.els['term-input'].disabled, true);
+  }
+  // a tmux that did not say whose it is: the board's own as before
+  c.box.renderTerminal({ session: 's1', dead: false, screen: login, other: { port: null, silent: true } });
+  for (const id of ['term-form', 'term-keys', 'term-stop']) assert.ok(!hidden(id), `a silent tmux took #${id} away`);
+  assert.ok(hidden('term-other'));
+  assert.equal(c.els['term-input'].disabled, false);
+  assert.equal(c.els['term-note'].dataset.kind, 'login');
 });

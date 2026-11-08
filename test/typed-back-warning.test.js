@@ -26,6 +26,7 @@ before(async () => {
   app = Fastify();
   app.addHook('onSend', routes.typedBackHeader);
   await app.register(routes.default);
+  await app.register((await import('../src/routes/projects.js')).default);
   await app.listen({ port: 0, host: '127.0.0.1' });
   base = `http://127.0.0.1:${app.server.address().port}`;
 });
@@ -154,6 +155,9 @@ test('a move that changes nothing and a note sent again still say the task is in
   moveTyped(row(id), SID);
   // `kb mv X doing` on a task already in doing writes the status again (planPatch); a second `kb lbl X +bug` writes nothing
   // at all — the PATCH answers from the row as it is (no updates), and that answer still says why the task is there
+  const card = await asSession('GET', `/api/tasks/${key}`);
+  assert.equal(card.status, 200);
+  assert.ok(bodyWarned(card, key), `GET of the task did not carry the warning in its body: ${JSON.stringify(card.json.warning)}`);
   const mv = await asSession('PATCH', `/api/tasks/${key}`, { status: 'doing' });
   assert.equal(mv.status, 200, JSON.stringify(mv.json));
   assert.ok(bodyWarned(mv, key), `kb mv to the column it is in did not carry the warning: ${JSON.stringify(mv.json)}`);
@@ -193,4 +197,29 @@ test('words that took a task from To do into prep say nothing of Review', async 
 test('the board puts the header on its root instance, so every route of it carries the word', () => {
   const src = readFileSync(fileURLToPath(new URL('../src/server.js', import.meta.url)), 'utf8');
   assert.match(src, /^app\.addHook\('onSend', typedBackHeader\);$/m);
+});
+
+test('a refused command, a route of projects and two tasks left in doing: every one is named', async () => {
+  const a = handedIn();
+  const b = handedIn();
+  moveTyped(row(a.id), SID);
+  moveTyped(row(b.id), SID);
+  // … so the first is left in doing by words of its own again, as a turn that goes on with both would leave them
+  db.prepare("UPDATE tasks SET status = 'doing' WHERE id = ?").run(a.id);
+  const ev = db.prepare("INSERT INTO task_events (task_id, status, session_id) VALUES (?, 'doing', ?)").run(a.id, SID).lastInsertRowid;
+  db.prepare("INSERT INTO typed_moves (event_id, kind) VALUES (?, 'typed')").run(ev);
+  assert.equal(JSON.parse(decodeURIComponent((await fetch(`${base}/api/projects`, { headers: { 'x-claude-session': SID } })).headers.get('x-kb-typed-back'))).length, 2,
+    'the case is gone: the header does not name two tasks');
+  try {
+    const refused = await kb(['mv', 'DM-9999', 'doing']); // the board's own refusal: 404 on the PATCH
+    assert.equal(refused.code, 2, refused.stderr);
+    const missing = await kb(['show', 'DM-9999']);
+    assert.equal(missing.code, 2, missing.stderr);
+    for (const [what, r] of [['a refused move', refused], ['an unknown task', missing], ['kb p', await kb(['p'])], ['kb info', await kb(['info', 'demo'])]]) {
+      assert.ok(warned(r, a.key) && warned(r, b.key), `${what} did not name both tasks left in doing: ${JSON.stringify(r.stderr)}`);
+      assert.equal(r.stderr.split('kb: warning').length - 1, 2, `${what} said it more or less than once a task: ${r.stderr}`);
+    }
+  } finally {
+    for (const t of [a, b]) assert.equal((await kb(['review', t.key, 'Handed in again.'])).code, 0);
+  }
 });

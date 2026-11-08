@@ -2,7 +2,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
@@ -90,6 +90,9 @@ before(async () => {
   const big = Buffer.alloc(3 * 1024 * 1024 + 17, 7);
   writeFileSync(join(repo, 'data', 'big.db'), big);
   writeFileSync(join(cache, 'data', 'big.db'), big);
+  // with a fix of its own made while merging is (merged below, once main has moved)
+  const mergedClean = stand('merged-clean', 'claude/merged-clean');
+  const mergedEvil = stand('merged-evil', 'claude/merged-evil');
   const tail = stand('tail-data', 'claude/tail-data');
   mkdirSync(join(tail, 'data'));
   writeFileSync(join(tail, 'data', 'big.db'), Buffer.concat([big.subarray(0, big.length - 1), Buffer.from([8])]));
@@ -103,7 +106,23 @@ before(async () => {
   writeFileSync(join(repo, 'q2.txt'), 'more of the squash\n');
   git(repo, 'add', 'q.txt', 'q2.txt'); git(repo, 'commit', '-q', '-m', 'Several tasks in one squash');
   commit(repo, 'w2.txt', 'theirs\n', 'WIP');
+  git(mergedClean, 'merge', '-q', '--no-ff', '--no-edit', 'main');
+  git(mergedEvil, 'merge', '-q', '--no-ff', '--no-commit', 'main');
+  writeFileSync(join(mergedEvil, 'evil.txt'), 'made while merging\n');
+  git(mergedEvil, 'add', 'evil.txt');
+  git(mergedEvil, 'rm', '-q', '-f', 'r2.txt'); // a change of main undone while merging: the merge equals one parent there
+  git(mergedEvil, 'commit', '-q', '-m', 'Merge main into the branch');
   git(repo, 'push', '-q', 'origin', 'main');
+  // more merges than the board merges again (MERGES_MAX = 200): the ones past the bound are no proof — «could not tell»,
+  // not «nothing to lose». Clean merges of an old commit of main, made by git commit-tree (a second each would be slow)
+  const many = stand('many-merges', 'claude/many-merges');
+  const root = git(repo, 'rev-list', '--max-parents=0', 'HEAD').trim();
+  const tree = git(many, 'rev-parse', 'HEAD^{tree}').trim();
+  let tip = git(many, 'rev-parse', 'HEAD').trim();
+  for (let i = 0; i < 201; i += 1) tip = git(many, 'commit-tree', tree, '-p', tip, '-p', root, '-m', `Merge ${i}`).trim();
+  git(many, 'reset', '-q', '--hard', tip);
+  // (refs/heads before refs/remotes) — every stand was measured against the first commit
+  git(repo, 'branch', 'origin/main', git(repo, 'rev-list', '--max-parents=0', 'HEAD').trim());
   sleeper = spawn('/bin/sleep', ['60'], { cwd: proc, stdio: 'ignore' });
   objectsBefore = git(repo, 'count-objects', '-v');
 
@@ -143,13 +162,20 @@ test('each stand reads as free, not handed in, or busy — by its folder, its co
   assert.equal(d.running, false);
   assert.equal(d.repos.length, 1);
   assert.equal(d.repos[0].main, 'origin/main');
+  assert.equal(d.repos[0].ref, 'refs/remotes/origin/main', 'main is named by its short name, which a local branch «origin/main» takes over');
   const by = Object.fromEntries(d.stands.map((s) => [s.path.split('/').pop(), s]));
-  assert.deepEqual(Object.keys(by).sort(), ['STA-1', 'cache', 'cyr-data', 'dirty', 'emptied', 'empty', 'gone', 'half', 'issued', 'kept-data', 'lost', 'on-master', 'retitled-9f3e1a', 'served', 'sessioned', 'squashed', 'sta-2-busy', 'tail-data', 'wip'], 'the main checkout is no stand');
+  assert.deepEqual(Object.keys(by).sort(), ['STA-1', 'cache', 'cyr-data', 'dirty', 'emptied', 'empty', 'gone', 'half', 'issued', 'kept-data', 'lost', 'many-merges', 'merged-clean', 'merged-evil', 'on-master', 'retitled-9f3e1a', 'served', 'sessioned', 'squashed', 'sta-2-busy', 'tail-data', 'wip'], 'the main checkout is no stand');
   assert.equal(by.gone.state, 'unsent', 'a stand whose folder went read as free, its branch never compared with main');
   assert.deepEqual(by.gone.why, ['commits']);
   assert.equal(by.wip.state, 'unsent', '«WIP» in main read as this very work');
-  assert.equal(by['STA-1'].state, 'free');
+  assert.equal(by['STA-1'].state, 'free', `measured against the local branch «origin/main»: ${JSON.stringify(by['STA-1'].commits)}`);
   assert.equal(by['STA-1'].commits[0].found, 'patch');
+  assert.equal(by['merged-clean'].state, 'free', `a merge that caught main up read as work: ${JSON.stringify(by['merged-clean'].commits)}`);
+  assert.equal(by['merged-evil'].state, 'unsent', 'a merge with a change of its own read as nothing to lose — git cherry passes merges over');
+  assert.deepEqual(by['merged-evil'].why, ['merge']);
+  assert.equal(by['many-merges'].state, 'unsent', 'merges past the bound, never merged again, read as nothing to lose');
+  assert.deepEqual(by['many-merges'].why, ['unknown']);
+  assert.deepEqual(by['merged-evil'].commits.map((c) => [c.title, c.found, Boolean(c.merge)]), [['Merge main into the branch', null, true]]);
   assert.equal(by['STA-1'].key, 'STA-1');
   assert.equal(by['STA-1'].task.status, 'review');
   // a title or an issue in main is a hint, not a proof: the changes of these two are in main nowhere
@@ -195,14 +221,20 @@ test('the task of a cleanup takes only the free stands, names the others for the
   assert.equal(r.statusCode, 200, r.body);
   const [t] = r.json().tasks;
   assert.equal(r.json().tasks.length, 1);
-  assert.equal(t.n, 4);  // STA-1, squashed, cache, empty
+  assert.equal(t.n, 5);  // STA-1, squashed, cache, empty, merged-clean
   const task = db.prepare("SELECT t.status, t.description FROM tasks t JOIN projects p ON p.id = t.project_id WHERE p.prefix || '-' || t.task_no = ?").get(t.key);
   assert.equal(task.status, 'todo');
-  for (const name of ['STA-1', 'squashed', 'cache', 'empty']) assert.ok(task.description.includes(`${wt(name)} —`), `${name} is not in the task`);
+  for (const name of ['STA-1', 'squashed', 'cache', 'empty', 'merged-clean']) assert.ok(task.description.includes(`${wt(name)} —`), `${name} is not in the task`);
   for (const name of ['served', 'sta-2-busy', 'sessioned', 'on-master']) assert.ok(!task.description.includes(wt(name)), `a busy stand ${name} got into the task`);
-  for (const name of ['kept-data', 'half', 'issued']) assert.ok(!task.description.includes(`${wt(name)} —`), `${name} got into the task to be removed`);
+  for (const name of ['kept-data', 'half', 'issued', 'merged-evil']) assert.ok(!task.description.includes(`${wt(name)} —`), `${name} got into the task to be removed`);
   const asks = task.description.slice(task.description.lastIndexOf('\n\n', task.description.indexOf(wt('lost'))));
   assert.ok(asks.includes(wt('lost')) && asks.includes(wt('dirty')), 'the stands with work not in main are not named for the owner');
+  // the board speaks Russian here (uiLang): the list and the reasons in Russian, not «branch», «MB» or a code
+  const evilAsk = asks.split('\n').find((l) => l.startsWith(`- ${wt('merged-evil')} `));
+  assert.ok(evilAsk?.endsWith('\u0441\u043b\u0438\u044f\u043d\u0438\u0435 \u0441\u043e \u0441\u0432\u043e\u0438\u043c\u0438 \u043f\u0440\u0430\u0432\u043a\u0430\u043c\u0438'), `the evil merge is not named for the owner in words: ${evilAsk}`);
+  const listed = task.description.split('\n').find((l) => l.startsWith(`- ${wt('cache')} `));
+  assert.match(listed, /\u2014 \u0432\u0435\u0442\u043a\u0430 claude\/cache/, `a Russian task lists «branch»: ${listed}`);
+  assert.match(listed, / \d+ \u041c\u0411/, `a Russian task weighs in MB: ${listed}`);
   assert.match(task.description, /git worktree remove/);
   assert.match(task.description, /git branch -d/);
   assert.match(task.description, /--force/, 'the task does not forbid --force');
@@ -225,12 +257,22 @@ test('the diff of a stand shows what is not in main, and only for a folder of th
   assert.match(lost.text, /Work not handed in/);
   assert.match(lost.text, /\+lost/);
   const kept = (await get(`/api/health/stands/diff?path=${encodeURIComponent(wt('kept-data'))}`)).json();
-  assert.match(kept.text, /ignored, and not in the main checkout/);
   assert.match(kept.text, /data\/app\.db/, 'the diff does not name the ignored data a removal would delete');
+  assert.doesNotMatch(kept.text, /# ignored/, `a Russian board got English headings: ${kept.text}`);
+  assert.match(kept.text, /^# \u0438\u0433\u043d\u043e\u0440\u0438\u0440\u0443\u0435\u0442\u0441\u044f/m);
+  assert.match((await stands.standDiff(wt('kept-data'), 'en')).text, /# ignored, and not in the main checkout/);
+  assert.match((await stands.standDiff(wt('dirty'), 'en')).text, /# not committed/);
+  // a merge shows its own change, not the whole of main it brought in
+  const evil = (await get(`/api/health/stands/diff?path=${encodeURIComponent(wt('merged-evil'))}`)).json();
+  assert.match(evil.text, /\+made while merging/, 'the change made while merging is not in the diff');
+  assert.doesNotMatch(evil.text, /\+batch|\+theirs/, 'the diff of a merge shows the commits of main it brought in');
+  assert.match(evil.text, /^-theirs$/m, 'a change of main undone while merging is not in the diff (a combined diff hides what equals one parent)');
+  assert.equal(git(repo, 'count-objects', '-v'), objectsBefore, 'the diff of a merge wrote objects into the repository of the owner');
   const half = (await get(`/api/health/stands/diff?path=${encodeURIComponent(wt('half'))}`)).json();
   assert.match(half.text, /\+out/, 'the diff hides the commit vouched for by the issue of another');
   const dirty = (await get(`/api/health/stands/diff?path=${encodeURIComponent(wt('dirty'))}`)).json();
   assert.match(dirty.text, /notes\.txt/);
+  assert.doesNotMatch(dirty.text, /# not committed|# untracked/, `a Russian board got English headings: ${dirty.text}`);
   assert.equal((await get(`/api/health/stands/diff?path=${encodeURIComponent(repo)}`)).statusCode, 404, 'the main checkout is no stand');
   assert.equal((await get('/api/health/stands/diff?path=/etc')).statusCode, 404);
   assert.equal((await get('/api/health/stands/diff?path=a&path=b')).statusCode, 400);
@@ -306,13 +348,18 @@ test('the rules by themselves: worktrees, keys, issues and the match of commits'
   assert.equal(stands.telling('Fix tests'), false);
   assert.equal(stands.telling('Same title in main'), true);
   assert.equal(stands.standState({ read: false }).state, 'reading');
+  const at = (status) => stands.standState({ read: true, dirty: 0, commits: [], sessions: 0, processes: 0, ignored: { files: 0 }, task: { status } });
+  for (const st of ['prep', 'doing', 'ready', 'deploy']) assert.deepEqual([at(st).state, at(st).why], ['busy', ['task']], `a task in ${st} does not hold its stand`);
+  for (const st of ['backlog', 'todo', 'review', 'done', 'cancelled']) assert.equal(at(st).state, 'free', `a task in ${st} holds its stand`);
+  assert.deepEqual(stands.standState({ read: true, dirty: 0, commits: [{ found: null, merge: true }], sessions: 0, processes: 0, ignored: { files: 0 } }).why, ['merge']);
 });
 
 test('the task of a cleanup says each rule of the check, in both languages, and no fetch where there is no origin', () => {
   const st = { path: '/r/.claude/worktrees/X-1', branch: 'claude/X-1', head: 'abcdef0123456789', size: 5 * 1024 ** 2 };
+  const big = { path: '/r/.claude/worktrees/X-4', branch: null, head: '0123456789abcdef', size: 1.5 * 1024 ** 3 };
   const gone = { ...st, path: '/r/.claude/worktrees/X-2', branch: 'claude/X-2', missing: true };
   for (const lang of ['en', 'ru']) {
-    const w = stands.cleanupWords(lang, { top: '/r', main: 'origin/main' }, [st, gone], []);
+    const w = stands.cleanupWords(lang, { top: '/r', main: 'origin/main', ref: 'refs/remotes/origin/main' }, [st, gone, big], []);
     const say = (re, what) => assert.match(w, re, `${lang}: ${what}`);
     say(lang === 'en' ? /never --force/ : /\u0431\u0435\u0437 --force/, '--force is not forbidden');
     say(lang === 'en' ? /never -D/ : /\u043d\u0435 -D/, '-D is not forbidden');
@@ -321,20 +368,43 @@ test('the task of a cleanup says each rule of the check, in both languages, and 
     say(lang === 'en' ? /last commit of each removed branch/ : /\u043f\u043e\u0441\u043b\u0435\u0434\u043d\u0438\u0439 \u043a\u043e\u043c\u043c\u0438\u0442 \u043a\u0430\u0436\u0434\u043e\u0439 \u0443\u0434\u0430\u043b\u0451\u043d\u043d\u043e\u0439 \u0432\u0435\u0442\u043a\u0438/, 'the last commit of a removed branch is not asked for');
     say(/status --porcelain --ignored/, 'ignored data is not looked at');
     say(/\.env/, 'the ignored data is not named');
-    say(/git merge-tree --write-tree --merge-base=<sha>\^ origin\/main <sha>/, 'a «+» commit is not checked by its changes');
+    say(/git merge-tree --write-tree --merge-base=<sha>\^ refs\/remotes\/origin\/main <sha>/, 'a «+» commit is not checked by its changes against the full ref');
+    say(/git rev-parse <sha>\^\{tree\} <sha>\^\^\{tree\}/, 'a commit that changes nothing is taken for its changes in main');
+    say(/git cherry refs\/remotes\/origin\/main </, 'main is named by its short name, which a local branch «origin/main» takes over');
+    say(/git rev-list --merges --parents refs\/remotes\/origin\/main\.\.</, 'the merges of the branch are not looked at');
+    say(/git merge-tree --write-tree <[^>]+1> <[^>]+2>/, 'a merge is not merged again from its parents');
     say(/git fetch origin/, 'origin is not fetched');
-    say(/5 MB/, 'a small stand is not in MB');
+    say(lang === 'en' ? / 5 MB/ : / 5 \u041c\u0411/, 'a small stand is not in MB of the language');
+    say(lang === 'en' ? / 1\.5 GB/ : / 1,5 \u0413\u0411/, 'a big stand is not in GB of the language');
+    say(lang === 'en' ? /\u2014 branch claude\/X-1 / : /\u2014 \u0432\u0435\u0442\u043a\u0430 claude\/X-1 /, 'the branch of a stand is not named in the language');
+    say(lang === 'en' ? /\u2014 detached HEAD/ : /\u2014 \u043e\u0442\u0434\u0435\u043b\u0451\u043d\u043d\u044b\u0439 HEAD/, 'a stand without a branch is not named in the language');
     say(/master/, 'the check does not keep master out');
-    const ask = { path: '/r/.claude/worktrees/X-3', branch: 'claude/X-3', read: true, dirty: 1, commits: [{ found: null }], sessions: 0, processes: 0, ignored: { files: 1, paths: [] } };
-    const asks = stands.cleanupWords(lang, { top: '/r', main: 'origin/main' }, [st], [ask]).split('\n').find((l) => l.startsWith(`- ${ask.path} `));
-    assert.doesNotMatch(asks, /(: |, )(dirty|ignored|commits)(,|$)/, `${lang}: the reasons are codes, not words: ${asks}`);
+    // each rule of «not busy» and of the ignored data said in the task — Claude checks by these words alone
+    say(lang === 'en' ? /no project of the board lives in the folder/ : /\u043d\u0435 \u0436\u0438\u0432\u0451\u0442 \u043f\u0440\u043e\u0435\u043a\u0442 \u0434\u043e\u0441\u043a\u0438/, 'a project of the board in the folder is not checked');
+    say(/prep\/doing\/ready\/deploy/, 'the working columns of the task are not all named');
+    say(/lsof \+D <[^>]+>/, 'the processes in the folder are not looked at');
+    say(/lsof \+D <[^>]+>`; [^)]*root/, 'the task does not warn that lsof sees only the processes of its own user');
+    say(/git -c core\.quotePath=false -C <[^>]+> status --porcelain --ignored`/, 'the names of ignored files come quoted (Cyrillic)');
+    say(/--ignored --untracked-files=all -- </, 'a folder of ignored files («!! .claude/») is not looked into');
+    // were codes on a Russian board; a Russian task with English words passed)
+    const ask = { path: '/r/.claude/worktrees/X-3', branch: 'claude/X-3', read: true, dirty: 1, commits: [{ found: null }, { found: null, merge: true }], sessions: 0, processes: 0, ignored: { files: 1, paths: [] } };
+    const ask2 = { path: '/r/.claude/worktrees/X-5', branch: null, detached: true, locked: 'held', read: true, dirty: null, commits: [{ found: null }], sessions: 0, processes: 0, ignored: { files: 0, paths: [] } };
+    assert.deepEqual([...stands.standState(ask).why, ...stands.standState(ask2).why].sort(), ['commits', 'detached', 'dirty', 'ignored', 'locked', 'merge', 'unknown', 'commits'].sort());
+    const text = stands.cleanupWords(lang, { top: '/r', main: 'origin/main', ref: 'refs/remotes/origin/main' }, [st], [ask, ask2]).split('\n');
+    for (const a of [ask, ask2]) {
+      const line = text.find((l) => l.startsWith(`- ${a.path}`));
+      const reasons = line.slice(line.indexOf(': ') + 2).split(', ');
+      assert.ok(!reasons.some((r) => /^[a-z]+$/.test(r)), `${lang}: the reasons are codes, not words: ${line}`);
+      if (lang === 'ru') assert.ok(reasons.every((r) => /[\u0400-\u04ff]/.test(r)), `ru: the reasons are not in Russian: ${line}`);
+      else assert.doesNotMatch(line, /[\u0400-\u04ff]/, `en: the reasons are in Russian: ${line}`);
+    }
     assert.doesNotMatch(w, /\(\u0441 --force\)|\(with --force\)/, `${lang}: --force is advised`);
     const goneLine = w.split('\n').find((l) => l.startsWith(`- ${gone.path} `));
     assert.match(goneLine, /git worktree remove/, `${lang}: the folder-less stand is not told how to drop its record alone`);
     assert.doesNotMatch(goneLine.replace(/(not|\u043d\u0435) `git worktree prune`/g, ''), /git worktree prune/, `${lang}: the folder-less stand is told to prune the whole repository`);
-    const local = stands.cleanupWords(lang, { top: '/r', main: 'main' }, [st], []);
+    const local = stands.cleanupWords(lang, { top: '/r', main: 'main', ref: 'refs/heads/main' }, [st], []);
     assert.doesNotMatch(local, /git fetch origin/, `${lang}: a repository without origin is told to fetch it`);
-    assert.match(local, /git cherry main/);
+    assert.match(local, /git cherry refs\/heads\/main /);
   }
 });
 
@@ -357,7 +427,7 @@ test('lsof is believed only whole: exit 0 with folders, or exit 1 with some', as
   const fake = join(tmp, 'fakebin');
   mkdirSync(fake, { recursive: true });
   const mode = join(fake, 'mode');
-  writeFileSync(join(fake, 'lsof'), `#!/bin/sh\ncase "$(cat '${mode}')" in\n  ok) printf 'p1\\nn${tmp}\\np2\\nn${wt('served')}\\n'; exit 0;;\n  partial1) printf 'p2\\nn${wt('served')}\\n'; exit 1;;\n  partial2) printf 'p1\\nn${tmp}\\n'; exit 2;;\n  empty) exit 0;;\nesac\n`, { mode: 0o755 });
+  writeFileSync(join(fake, 'lsof'), `#!/bin/sh\ncase "$(cat '${mode}')" in\n  ok) printf 'p1\\nn${tmp}\\np2\\nn${wt('served')}\\n'; exit 0;;\n  partial1) printf 'p2\\nn${wt('served')}\\n'; exit 1;;\n  partial2) printf 'p1\\nn${tmp}\\n'; exit 2;;\n  killed) printf 'p1\\nn${tmp}\\n'; kill -KILL $$;;\n  empty) exit 0;;\nesac\n`, { mode: 0o755 });
   const path = process.env.PATH;
   process.env.PATH = `${fake}:${path}`;
   const look = async (m) => {
@@ -372,7 +442,7 @@ test('lsof is believed only whole: exit 0 with folders, or exit 1 with some', as
       assert.deepEqual([by.served.state, by.served.why], ['busy', ['process']], `${m}: the process in the folder was not seen`);
       assert.equal(by['STA-1'].state, 'free', `${m}: a whole answer of lsof was not believed`);
     }
-    for (const m of ['partial2', 'empty']) {
+    for (const m of ['partial2', 'killed', 'empty']) { // killed: by a signal halfway (or by the timeout) — the list is partial
       const by = await look(m);
       assert.ok(!Object.values(by).some((x) => x.state === 'free'), `${m}: a failed lsof let a stand read as free — ${Object.values(by).filter((x) => x.state === 'free').map((x) => x.path).join(', ')}`);
       assert.ok(by['STA-1'].why.includes('unknown'), `${m}: the stand does not say lsof could not tell`);
@@ -380,5 +450,92 @@ test('lsof is believed only whole: exit 0 with folders, or exit 1 with some', as
   } finally {
     process.env.PATH = path;
     stands.forgetStands();
+  }
+});
+
+// on another branch), a project of the board in a repository of its own nested inside a stand (dist/sub, node_modules/x:
+// another git-common-dir, and `git worktree remove` takes it along), and a project reached through a link, either way round
+test('main, a nested project and a project behind a link hold their stand', async () => {
+  const k = join(tmp, 'kept');
+  const far = join(tmp, 'kept-wt');
+  mkdirSync(k); mkdirSync(far);
+  git(k, 'init', '-q', '-b', 'main');
+  writeFileSync(join(k, '.gitignore'), 'dist/\nnode_modules/\n');
+  git(k, 'add', '.gitignore'); git(k, 'commit', '-q', '-m', 'start');
+  git(k, 'checkout', '-q', '-b', 'dev');
+  const add = (dir, ...branch) => { git(k, 'worktree', 'add', '-q', dir, ...branch); return dir; };
+  add(join(far, 'wt-main'), 'main');
+  add(join(far, 'wt-free'), '-b', 'claude/free');
+  const nested = (dir, sub) => {
+    mkdirSync(join(dir, sub), { recursive: true });
+    git(join(dir, sub), 'init', '-q', '-b', 'main');
+    commit(join(dir, sub), 'n.txt', 'n\n', 'nested');
+    return join(dir, sub);
+  };
+  const inDist = nested(add(join(far, 'wt-dist'), '-b', 'claude/dist'), 'dist/sub');
+  const inModules = nested(add(join(far, 'wt-nm'), '-b', 'claude/nm'), 'node_modules/x');
+  // the folder of a stand moved and a link left in its place: git lists it by the old path, the project is named by the real one
+  add(join(tmp, 'kept-hold', 'wt-moved'), '-b', 'claude/moved');
+  execFileSync(fullPath('mv'), [join(tmp, 'kept-hold'), join(tmp, 'kept-hold-real')]);
+  symlinkSync(join(tmp, 'kept-hold-real'), join(tmp, 'kept-hold'));
+  mkdirSync(join(tmp, 'kept-hold-real', 'wt-moved', 'app'));
+  // a project named by a link into a stand
+  mkdirSync(join(add(join(far, 'wt-alias'), '-b', 'claude/alias'), 'app'));
+  symlinkSync(join(far, 'wt-alias'), join(tmp, 'alias'));
+  const ins = db.prepare('INSERT INTO projects (slug, prefix, name, path, next_task_no) VALUES (?, ?, ?, ?, 1)');
+  const ids = [['kpt', 'KPT', k], ['kds', 'KDS', inDist], ['knm', 'KNM', inModules], ['kmv', 'KMV', join(tmp, 'kept-hold-real', 'wt-moved', 'app')], ['kal', 'KAL', join(tmp, 'alias', 'app')]]
+    .map(([slug, prefix, path]) => ins.run(slug, prefix, slug, path).lastInsertRowid);
+  try {
+    const d = await walked();
+    const by = Object.fromEntries(d.stands.filter((x) => x.top === k).map((x) => [x.path.split('/').pop(), x]));
+    assert.deepEqual(Object.keys(by).sort(), ['wt-alias', 'wt-dist', 'wt-free', 'wt-main', 'wt-moved', 'wt-nm']);
+    assert.equal(d.repos.find((r) => r.top === k).ref, 'refs/heads/main', 'a repository without origin is not measured against its own main');
+    assert.deepEqual([by['wt-free'].state, by['wt-free'].why], ['free', []], 'a clean stand of the second repository is not free — the checks below prove nothing');
+    assert.deepEqual([by['wt-main'].state, by['wt-main'].why], ['busy', ['main']], 'a worktree on main read as a stand to remove — the cleanup would delete main');
+    assert.deepEqual([by['wt-dist'].state, by['wt-dist'].why], ['busy', ['project']], 'a project in a repository nested in dist/ of a stand read as free');
+    assert.deepEqual([by['wt-nm'].state, by['wt-nm'].why], ['busy', ['project']], 'a project in a repository nested in node_modules/ of a stand read as free');
+    assert.ok(by['wt-moved'].path !== realpathSync(by['wt-moved'].path), 'the moved stand is listed by its real path — the case is not made');
+    assert.deepEqual([by['wt-moved'].state, by['wt-moved'].why], ['busy', ['project']], 'a project in a stand git lists through a link read as free');
+    assert.deepEqual([by['wt-alias'].state, by['wt-alias'].why], ['busy', ['project']], 'a project named through a link into a stand read as free');
+  } finally {
+    for (const id of ids) db.prepare('UPDATE projects SET archived = 1 WHERE id = ?').run(id);
+  }
+});
+
+test('CK-983: a stand is named by the project of its key wherever that lives, else by the repository; the cleanup goes to a project of the repository', async () => {
+  // a repository with two projects in subfolders and none at its top — as the owner's shared one
+  const shared = join(tmp, 'shared-root');
+  mkdirSync(join(shared, 'site'), { recursive: true });
+  mkdirSync(join(shared, 'bot'), { recursive: true });
+  git(shared, 'init', '-q', '-b', 'main');
+  commit(shared, 'site/s.txt', 's\n', 'start');
+  const add = (name, branch) => { const p = join(shared, '.claude', 'worktrees', name); git(shared, 'worktree', 'add', '-q', p, '-b', branch); return p; };
+  add('loose-thing', 'claude/loose-thing'); // no key
+  add('STA-1', 'claude/STA-1'); // the key of a project of ANOTHER repository (sta lives in `repo`), its task in review
+  add('SHB-1', 'claude/SHB-1'); // the key of the second project of this one
+  const ins = db.prepare('INSERT INTO projects (slug, prefix, name, path, next_task_no) VALUES (?, ?, ?, ?, 2)');
+  const site = ins.run('sha', 'SHA', 'Site first', join(shared, 'site')).lastInsertRowid;
+  const bot = ins.run('shb', 'SHB', 'The bot', join(shared, 'bot')).lastInsertRowid;
+  db.prepare("INSERT INTO tasks (project_id, task_no, title, status) VALUES (?, 1, 'Bot thing', 'review')").run(bot);
+  try {
+    const d = await walked();
+    const by = Object.fromEntries(d.stands.filter((x) => x.top === shared).map((x) => [x.path.split('/').pop(), x]));
+    assert.deepEqual(Object.keys(by).sort(), ['SHB-1', 'STA-1', 'loose-thing']);
+    assert.equal(by['loose-thing'].project, null, 'a stand without a key was given the first project of the repository');
+    assert.equal(by['loose-thing'].repo_name, 'shared-root');
+    assert.deepEqual(by['STA-1'].project, { slug: 'sta', name: 'Stands' }, 'the project of a key from another repository was dropped');
+    assert.deepEqual(by['SHB-1'].project, { slug: 'shb', name: 'The bot' });
+    for (const s of Object.values(by)) assert.equal(s.state, 'free', `${s.path}: ${s.why}`);
+    // the leaf of the page names the repository where there is no project
+    const { cleanupProject } = stands;
+    const repoOf = d.repos.find((r) => r.top === shared);
+    assert.equal(cleanupProject(repoOf, [by['loose-thing'], by['STA-1']], Object.values(by)), 'shb',
+      'with no chosen stand named by a project of this repository, the one naming most of its stands takes the cleanup');
+    assert.equal(cleanupProject(repoOf, [by['loose-thing']], [by['loose-thing']]), 'sha', 'nothing named at all — the first one of the repository');
+    const r = await app.inject({ method: 'POST', url: '/api/health/stands/task', headers: { host }, payload: { paths: [by['loose-thing'].path, by['STA-1'].path] } });
+    assert.equal(r.statusCode, 200, r.body);
+    assert.deepEqual(r.json().tasks.map((t) => [t.project, t.n]), [['shb', 2]], 'the cleanup went to a project not of this repository or to the first one');
+  } finally {
+    db.prepare('UPDATE projects SET archived = 1 WHERE id IN (?, ?)').run(site, bot);
   }
 });

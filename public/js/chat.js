@@ -12,6 +12,7 @@ import { askBlock, isSending, plainLabel, questionAsk, renderAsks } from './asks
 import { intoField, leftoverWords } from './ask-rules.js';
 import { paceStep, paceWords, stalled } from './pace-rules.js';
 import { tokensPhrase } from './usage-rules.js';
+import { otherBoardLine } from './term-owner-rules.js';
 
 const TURNS_STEP = 15;
 const STEP_KIND = {
@@ -713,7 +714,7 @@ export function mountChat(box, { key = null, session = null, scroller = null, fu
       : d.ended.interrupted ? 'The session was interrupted from outside — its conversation is kept: Continue brings Claude back to it here.'
         : 'Claude has finished in its terminal — Continue brings it back to the conversation.') : '';
     note.textContent = !d.session ? ''
-      : c.refused || ended || (!d.send ? tr('This Claude does not run inside the board — its chat can only be read here.')
+      : c.refused || otherBoardLine(d, tr) || ended || (!d.send ? tr('This Claude does not run inside the board — its chat can only be read here.')
         : tr(STATE_NOTE[d.state] || ''));
     if (d.session && ended && !c.refused && c.key) {
       const again = document.createElement('button');

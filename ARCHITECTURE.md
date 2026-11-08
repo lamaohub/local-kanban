@@ -292,6 +292,19 @@ the period's usage and the tasks that cost the most. How it reads on screen is d
 Claude Code often leaves a helper's answers without their final line, so a helper's output is under-recorded;
 the board counts such answers and says so instead of presenting the number as exact.
 
+**A call from Claude** (a trial, off by default) rings over the board on the same news as the sound of
+Review. `public/js/call.js` reads the event stream itself, through one call in the stream handler, so the
+sound and the notifications stay untouched; what to call about, what to say and how to read the answer
+are rules in `public/js/call-rules.js`, a module without imports or DOM. Speech never leaves the
+machine: the browser's on-device recognition and the system's voices; without them the call is typed.
+On a Russian board the call can speak with a neural voice instead: `src/voice.js` keeps one Python process with a
+Silero model loaded (`src/voice-worker.py`) and serves `POST /api/voice` as WAV. The model is not part of the board —
+its licence is CC BY-NC 4.0 — and is installed by hand into `KB_VOICE_DIR` (default
+`~/.local/share/local-kanban/voice`): `uv venv --python 3.13 <dir>/venv`,
+`uv pip install --python <dir>/venv/bin/python torch numpy`, and the model file from
+`https://models.silero.ai/models/tts/ru/v5_6_ru.pt` into `<dir>/models/`. Silero's Russian voices drop Latin letters
+and digits, so every phrase is turned into Russian words first (`src/voice-text.js`).
+
 **The state badge** on a card in work ("working", "waiting for you", "session closed") comes from
 Claude Code's registry of live sessions, checked against whether the process still runs: a registry
 file outlives a crash. The server recomputes it every 3 s and sends `task.live` only on a change;

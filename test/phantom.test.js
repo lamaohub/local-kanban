@@ -943,6 +943,25 @@ test('a turn that left the task untouched sends it back to Review; a commit, a c
   git('commit', '-q', '-m', 'the list');
   assert.deepEqual(await turn('idle', Date.now() + 1), []);
   assert.equal(row().status, 'doing', 'a commit in the project\'s own folder sent the task back to Review');
+  writeFileSync(join(repo, 'next', 'done.txt'), `deployed ${Date.now()}\n`);
+  git('add', 'next/done.txt');
+  git('commit', '-q', '-m', 'the neighbour\'s commit before its deploy');
+  at = await words('is the white list in the tests?');
+  await pause(20);
+  git('reset', '-q', '--keep', 'HEAD~1');
+  writeFileSync(join(repo, 'next', 'done.txt'), `deployed again ${Date.now()}\n`);
+  git('add', 'next/done.txt');
+  git('commit', '-q', '-m', 'the neighbour\'s commit, made anew');
+  assert.deepEqual(await turn('idle', Date.now() + 1), ['TRN-1'], 'a neighbour\'s HEAD moved not forward, the project\'s folder untouched, held the task in Doing');
+  // … but the same with the project's folder changed by the new commit: cannot tell, the words stand
+  at = await words('and the list again');
+  await pause(20);
+  git('reset', '-q', '--keep', 'HEAD~1');
+  writeFileSync(join(repo, 'sub', 'list.txt'), `the list, anew ${Date.now()}\n`);
+  git('add', 'sub/list.txt');
+  git('commit', '-q', '-m', 'the list, anew');
+  assert.deepEqual(await turn('idle', Date.now() + 1), []);
+  assert.equal(row().status, 'doing', 'a HEAD moved not forward with the project\'s folder changed sent the task back to Review');
   db.prepare('UPDATE projects SET path = ? WHERE id = ?').run(repo, pidp);
   assert.equal((await inject('DELETE', '/api/tasks/TRN-1/terminal')).statusCode, 200);
 });

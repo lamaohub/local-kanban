@@ -6,14 +6,17 @@ import { healthView } from '../health.js';
 import { healthFixTask, openFixes } from '../auto-health.js';
 
 let flight = null; // a second request while the folders are walked waits for the same walk
+let step = { done: 0, total: 0 };
 export default async function healthRoutes(app) {
   app.get('/api/health', () => {
     if (!flight) {
       const projects = db.prepare('SELECT slug, name, path, category FROM projects WHERE archived = 0 ORDER BY position, name COLLATE NOCASE').all();
-      flight = healthView(projects).finally(() => { flight = null; });
+      step = { done: 0, total: projects.length };
+      flight = healthView(projects, (done, total) => { step = { done, total }; }).finally(() => { flight = null; });
     }
     return flight;
   });
+  app.get('/api/health/progress', () => ({ running: Boolean(flight), done: step.done, total: step.total }));
   app.get('/api/health/stands', (req, reply) => {
     const q = scalarQuery(req.query, ['refresh']);
     if (q.error) return reply.code(400).send({ error: q.error });
@@ -24,7 +27,7 @@ export default async function healthRoutes(app) {
     const q = scalarQuery(req.query, ['path']);
     if (q.error) return reply.code(400).send({ error: q.error });
     if (!q.values.path || !knownStand(q.values.path)) return reply.code(404).send({ error: 'no such stand in the last look', field: 'path' });
-    return standDiff(q.values.path);
+    return standDiff(q.values.path, uiLang()); // the headings in the language of the board
   });
   // the task of the cleanup — one per repository; the page then starts each as «Fix» does
   app.post('/api/health/stands/task', async (req, reply) => {

@@ -161,6 +161,8 @@ export const TMUX_SLOW = 'tmux did not answer in time — try again';
 const TMUX_BROKEN = /protocol version mismatch/i;
 export const tmuxBrokenWords = () => `tmux was updated while the board's terminals still run on the old one, and the new tmux cannot reach them — close them in Terminal with \`tmux -L ${tmuxSocket()} kill-server\` (the conversations are kept: «Continue» brings each one back)`;
 let brokenSaid = 0;
+/** For a test: forget when the error log last said it — each test then sees its own entry, not one of a test before it. */
+export function forgetBrokenSaid() { brokenSaid = 0; }
 function unknownPane(text) {
   if (!TMUX_BROKEN.test(text)) return { dead: false, unknown: true };
   if (Date.now() - brokenSaid > 3600e3) { brokenSaid = Date.now(); logError('server', 'tmux', tmuxBrokenWords(), text); }

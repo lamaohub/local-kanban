@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { intoField, leftoverWords } from '../public/js/ask-rules.js';
+import { otherBoardLine } from '../public/js/term-owner-rules.js';
 
 const CLIENT_H = 300;
 const ROW_H = 30;
@@ -58,7 +59,7 @@ function chatModule(api, extra = {}) {
   const box = {
     esc: (x) => String(x), tr: (x) => x, ic: () => '', plural: (n, a, b) => (n === 1 ? a : b), seg: (x) => x,
     refusalLine: () => '', wireTermImages: () => {}, chatText: (s) => String(s), questionAsk: () => null, askBlock: () => null, renderAsks: () => {}, SHORT_MONTHS: [], api, modelLabel: () => '', sameModel: () => false, MODELS: [], drawerIsFull: () => false, setDrawerFull: () => {}, openDrawerFull: () => {}, setClaudeView: () => {}, pushLayer: () => {}, popLayer: () => {}, styledConfirm: async () => false, copyText: async () => true, plainLabel: (x) => String(x).replace(/\s*\(recommended\)\s*$/i, ''),
-    document: { hidden: false, addEventListener: () => {} }, setTimeout, clearTimeout, URLSearchParams, intoField, leftoverWords, ...extra,
+    document: { hidden: false, addEventListener: () => {} }, setTimeout, clearTimeout, URLSearchParams, intoField, leftoverWords, otherBoardLine, ...extra,
   };
   vm.runInNewContext(`${src}\nthis.mountChat = mountChat;`, box);
   return box.mountChat;
@@ -775,4 +776,13 @@ test('CK-853: words of a form of the screen come back by themselves when no next
   await c.flight;
   assert.equal(p.form.kids.textarea.value, 'my own words', 'the words stay out of sight until something else rings');
   c.destroy();
+});
+
+// or nothing, and its refusal came only after a press — now it says whose the terminal is and where to manage it
+test('the chat of another board\'s terminal says so under the chat, with its port, and offers no field', async () => {
+  const r = await chatWith({ ...answer, send: false, other: { port: 3922 } });
+  assert.equal(r.note.textContent, 'This terminal was started by another board — manage it there: port 3922');
+  assert.ok(!r.note.classList.contains('hidden'));
+  assert.ok(r.form.classList.contains('hidden'), 'the field of another board\'s Claude is offered');
+  r.c.destroy();
 });

@@ -58,9 +58,11 @@ export const NOT_DELIVERED = {
   'no-box': "Claude's input field is not on its screen — nothing was typed",
   'not-typed': "the words did not show in Claude's input field — not sent",
   'not-sent': "the words are in Claude's input field, but Enter did not send them — press Enter in the terminal",
-  'other-board': 'this terminal was started by another board: answer it there',
-  'tmux-slow': 'tmux did not answer in time — try again',
 };
+/** The 409 body of words sayToTerminal did not type or saw not arrive. Refused before typing, they are said as every other
+    action on such a terminal is: another board's — with its port, a silent tmux — «try again» (not a code of the board). */
+export const notDelivered = (r) => (r.refused === 'other-board' ? otherBoardRefusal(r)
+  : r.refused === 'tmux-slow' ? tmuxRefusal({}) : { error: NOT_DELIVERED[r.refused], reason: r.refused });
 
 /** {status, body} of words typed now. */
 async function sayNow(t, session, text, images) {
@@ -74,7 +76,7 @@ async function sayNow(t, session, text, images) {
   });
   if (r.refused === 'question') return { status: 409, body: { error: 'Claude asks a question — answer it first', reason: 'question' } };
   if (r.refused === 'gone') return { status: 409, body: { error: 'no Claude of the board works on this task — the chat can only be read', reason: 'gone' } };
-  if (r.refused) return { status: 409, body: { error: NOT_DELIVERED[r.refused], reason: r.refused } };
+  if (r.refused) return { status: 409, body: notDelivered(r) };
   if (r.err) {
     logError('server', 'chat', `typing a chat message failed: ${r.err.message}`, r.text);
     return { status: 500, body: { error: r.text || r.err.message } };
@@ -124,15 +126,17 @@ export default async function chatRoutes(app) {
     // whatever runs), from the transcript the chat read
     const own = working && chat.turns.length > 0 && !chat.turns.at(-1).open && await waitsOwnWork(s.session_id, Date.now(), s.transcript);
     // and does not say «not inside the board»
-    const ownTerm = term && !term.unknown && term.session === s.session_id;
+    const ownTerm = term && !term.unknown && !foreign(term) && term.session === s.session_id;
+    // another board's terminal of this very session: the page says so in place of the field, «Stop» and «Continue»
+    const other = term && foreign(term) && term.session === s.session_id ? { port: term.other.port ?? null } : null;
     let ended = ownTerm && term.dead ? { exit: term.exit ?? null, interrupted: Boolean(term.interrupted) } : null;
     // Claude not alive anywhere (a `claude --resume` the person ran in the Terminal is), and its conversation on disk.
     // Not while another Claude of the board works on the task (an older session picked in the chat): a second one on it
-    const free = !term || (term.dead && !ownTerm);
+    const free = !term || (term.dead && !ownTerm && !other);
     if (!ended && free && regState === 'gone') ended = await boardPaneEnded(s.session_id);
     // (it exited with them, or they went back to its field)
     if (!working) chat.waiting = [];
-    const body = { session: s.session_id, sessions: list, ...chat, queue: queued(s.session_id), send, state, working, own, ...(question ? { question } : {}), ...(choice ? { choice } : {}), ...(ended ? { ended } : {}) };
+    const body = { session: s.session_id, sessions: list, ...chat, queue: queued(s.session_id), send, state, working, own, ...(other ? { other } : {}), ...(question ? { question } : {}), ...(choice ? { choice } : {}), ...(ended ? { ended } : {}) };
     const v = chatHash(body);
     const pace = state === 'busy' ? paceOnScreen((await phantomScreen(s.session_id, 0)) ?? '') : null;
     if (state === 'busy' && CHAT_COLS > (term.cols ?? 0) + 2 && !watched(s.session_id)) await phantomResize(s.session_id, CHAT_COLS);
@@ -264,7 +268,7 @@ export default async function chatRoutes(app) {
       return said;
     });
     if (r) {
-      if (r.refused) return reply.code(409).send({ error: NOT_DELIVERED[r.refused], reason: r.refused });
+      if (r.refused) return reply.code(409).send(notDelivered(r));
       if (r.err) {
         logError('server', 'chat', `typing a chat message failed: ${r.err.message}`, r.text);
         return reply.code(500).send({ error: r.text || r.err.message });

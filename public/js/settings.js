@@ -19,6 +19,7 @@ import { guestBackupsHTML, guestHere, renderShareSection } from './share.js';
 import { localStore } from './store.js';
 import { applyAutomations, automations } from './automations.js';
 import { PHONE_DEFAULTS, onPhone } from './phone-rules.js';
+import { CALL_VOICES, hearingState, installHearing, previewVoice, testCall } from './call.js';
 
 function mdInline(text) {
   return esc(text)
@@ -49,7 +50,53 @@ export function mdLite(md) {
   return out.join('');
 }
 
-const SETTINGS_DEFAULTS = { sound: true, soundReview: 'ding', soundDone: 'click', startScreen: 'dashboard', dashRange: 'week', theme: 'light', keepDrawer: false, notifyReview: false, compactCards: false, linkLines: true, keymap: {}, launch: 'board', glyphs: true, permission: 'auto', effort: '', effortCheck: '', showUsage: true, showLimits: true, chatView: 'terminal', showHealth: false };
+const HEARING_WORDS = {
+  local: 'speech is heard on this Mac — ready',
+  download: 'speech recognition of the board language is not on this Mac yet — download it once, then nothing leaves the Mac',
+  downloading: 'downloading speech recognition…',
+  cloud: 'this browser hears speech only through the internet — the call is answered by typing; by voice — in Chrome',
+  unavailable: 'Chrome cannot hear the language of the board on this Mac — the call is answered by typing',
+  silent: 'the browser did not say whether it can hear — the call is answered by typing',
+  none: 'this browser cannot hear speech on the Mac itself — the call is answered by typing; by voice — in Chrome',
+};
+function wireCallSettings(body) {
+  const el = body.querySelector('[data-set="voiceCall"]');
+  const note = $('call-state');
+  const install = $('call-install');
+  if (!el || !note) return;
+  el.checked = !!getSetting('voiceCall');
+  const look = async () => {
+    const st = await hearingState();
+    const voiced = (globalThis.speechSynthesis?.getVoices?.() || []).some((v) => v.localService && v.lang.toLowerCase().startsWith(LANG === 'ru' ? 'ru' : 'en'));
+    if (!$('call-state')) return;
+    note.textContent = `${tr(HEARING_WORDS[st] || HEARING_WORDS.none)}${voiced ? '' : ` · ${tr('no voice of the system for this language — the call shows its words')}`}`;
+    install.classList.toggle('hidden', st !== 'download');
+  };
+  look();
+  globalThis.speechSynthesis?.addEventListener?.('voiceschanged', look, { once: true });
+  el.onchange = async (e) => {
+    setSetting('voiceCall', e.target.checked);
+    // a call over a tab out of sight is a system notification — it needs the browser's permission
+    if (e.target.checked && typeof Notification !== 'undefined' && Notification.permission === 'default') await Notification.requestPermission();
+  };
+  install.onclick = async () => {
+    install.disabled = true;
+    note.textContent = tr(HEARING_WORDS.downloading);
+    const ok = await installHearing();
+    install.disabled = false;
+    if (!ok && $('call-state')) note.textContent = tr('the download did not finish — try again');
+    else look();
+  };
+  $('call-test').onclick = () => testCall();
+  if (!$('sel-callVoice')) return;
+  buildSelect($('sel-callVoice'), { value: getSetting('callVoice'), options: CALL_VOICES.map((v) => ({ value: v.value, label: tr(v.label) })), onChange: (v) => { setSetting('callVoice', v); previewVoice(v); } });
+  $('voice-test').onclick = () => previewVoice(getSetting('callVoice'));
+  api('GET', '/api/voice', undefined, { quiet: true }).then((v) => {
+    if ($('voice-state')) $('voice-state').textContent = tr(v?.installed ? 'the neural voice speaks on this Mac, nothing goes to the internet' : 'the neural voice is not installed on this Mac — the system\'s voice speaks');
+  }).catch(() => { if ($('voice-state')) $('voice-state').textContent = tr('the board did not say whether the neural voice is there'); });
+}
+
+const SETTINGS_DEFAULTS = { sound: true, soundReview: 'ding', soundDone: 'click', startScreen: 'dashboard', dashRange: 'week', theme: 'light', keepDrawer: false, notifyReview: false, compactCards: false, linkLines: true, keymap: {}, launch: 'board', glyphs: true, permission: 'auto', effort: '', effortCheck: '', showUsage: true, showLimits: true, chatView: 'terminal', showHealth: false, voiceCall: false, callVoice: 'xenia' };
 export function getSetting(k) {
   const v = localStore.getItem('kb.set.' + k);
   const d = Object.hasOwn(PHONE_DEFAULTS, k) && onPhone() ? PHONE_DEFAULTS[k] : SETTINGS_DEFAULTS[k];
@@ -305,6 +352,9 @@ async function renderSection(sec) {
       + `<label class="set-row"><span class="set-lab">${tr('Sound notifications')}<small>${tr('sound on Review and Done')}</small></span><input type="checkbox" class="set-toggle" data-set="sound"></label>`
       + `<label class="set-row"><span class="set-lab">${tr('System notifications')}<small>${tr('when a task reaches Review, Claude waits for you or asks a question')}</small></span><input type="checkbox" class="set-toggle" data-set="notifyReview"></label>`
       + `<div class="set-row"><span class="set-lab">${tr('Check notifications')}<small id="notif-state"></small></span><button class="btn-ghost" id="notif-test">${tr('Send a test')}</button></div>`
+      + `<label class="set-row"><span class="set-lab">${tr('Calls from Claude (trial)')}<small>${tr('a call over the board when a task is done or Claude asks — talk to it by voice; speech is heard and said on this Mac only')}</small></span><input type="checkbox" class="set-toggle" data-set="voiceCall"></label>`
+      + `<div class="set-row"><span class="set-lab">${tr('Check the call')}<small id="call-state">…</small></span><span class="call-set-btns"><button class="btn-ghost hidden" id="call-install">${tr('Download speech recognition')}</button><button class="btn-ghost" id="call-test">${tr('Test call')}</button></span></div>`
+      + (LANG === 'ru' ? `<div class="set-row"><span class="set-lab">${tr('Voice of the call')}<small id="voice-state">…</small></span><span class="sound-pick"><div class="kbsel set-sel" id="sel-callVoice"></div><button class="btn-ghost snd-test" id="voice-test" title="▶">▶</button></span></div>` : '')
       + `<div class="set-row"><span class="set-lab">${tr('Sound for Review')}</span><span class="sound-pick"><div class="kbsel set-sel" id="sel-soundReview"></div><button class="btn-ghost snd-test" data-test="soundReview" title="▶">▶</button></span></div>`
       + `<div class="set-row"><span class="set-lab">${tr('Sound for Done')}</span><span class="sound-pick"><div class="kbsel set-sel" id="sel-soundDone"></div><button class="btn-ghost snd-test" data-test="soundDone" title="▶">▶</button></span></div>`
       + `<label class="set-row"><span class="set-lab">${tr('Task sidebar always open')}<small>${tr('keep the right panel visible even with no task selected')}</small></span><input type="checkbox" class="set-toggle" data-set="keepDrawer"></label>`
@@ -337,6 +387,7 @@ async function renderSection(sec) {
     };
     $('notif-state').textContent = notifyTestState(notifyPerm(), !!getSetting('notifyReview'));
     $('notif-test').onclick = () => sendTestNotification($('notif-state'));
+    wireCallSettings(body);
     body.querySelector('[data-set="keepDrawer"]').checked = !!getSetting('keepDrawer');
     body.querySelector('[data-set="keepDrawer"]').onchange = (e) => { setSetting('keepDrawer', e.target.checked); applyKeepDrawer(); };
     buildSelect($('sel-soundReview'), { value: getSetting('soundReview'), options: soundList, onChange: (v) => { setSetting('soundReview', v); playNamedSound(v); } });

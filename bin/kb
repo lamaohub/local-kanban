@@ -112,6 +112,8 @@ async function api(method, path, body, expect = null) {
     }
     return data;
   };
+  TYPED_BACK = typedBackOf(res.headers.get('x-kb-typed-back'));
+  for (const w of TYPED_BACK) warn(w);
   if (res.status === 204) return shaped(null);
   // Headers came and the body did not finish: the board went down in the middle of its answer. That throws here,
   // past the check above, and read as kb itself breaking.
@@ -135,9 +137,6 @@ async function api(method, path, body, expect = null) {
     die(`kb: the board answered ${res.status} with something that is not JSON — is KB_URL (${BASE}) the board?`, EXIT.BOARD_ERROR);
   }
   if (typeof data?.warning?.text === 'string') warn(data.warning);
-  // about the task itself never reached a Claude that went on with another task (TBF-169)
-  TYPED_BACK = typedBackOf(res.headers.get('x-kb-typed-back'));
-  for (const w of TYPED_BACK) warn(w);
   return shaped(data);
 }
 // a task's warning once per command: kb show reads the task and its comments, and both answers name it

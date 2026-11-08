@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { intoField, leftoverWords } from '../public/js/ask-rules.js';
+import { otherBoardLine } from '../public/js/term-owner-rules.js';
 
 const BOX_H = 600;
 const NOTE_H = 40;
@@ -67,7 +68,7 @@ function chatOn(answer) {
     api: async () => { page.asked++; return answer(page.asked); },
     esc: (s) => String(s).replace(/</g, '&lt;'), tr: (s) => s, ic: () => '', seg: (s) => s, plural: (n, a, b) => (n === 1 ? a : b),
     refusalLine: () => '', wireTermImages: () => {}, chatText: (s) => String(s), questionAsk: () => null, askBlock: () => null, renderAsks: () => {}, SHORT_MONTHS: [], matchKey: () => false, modelLabel: () => '', sameModel: () => false, MODELS: [], drawerIsFull: () => false, setDrawerFull: () => {}, openDrawerFull: () => {}, setClaudeView: () => {}, pushLayer: () => {}, popLayer: () => {}, styledConfirm: async () => false, copyText: async () => true, plainLabel: (x) => String(x).replace(/\s*\(recommended\)\s*$/i, ''),
-    document: { addEventListener() {}, hidden: false }, URLSearchParams, intoField, leftoverWords,
+    document: { addEventListener() {}, hidden: false }, URLSearchParams, intoField, leftoverWords, otherBoardLine,
     setTimeout: (fn, ms) => { page.timers.push({ fn, ms }); return page.timers.length; }, clearTimeout: () => {},
   };
   vm.runInNewContext(`${source}\nthis.mountChat = mountChat;`, ctx);

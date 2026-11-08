@@ -64,6 +64,6 @@ test('the card explains the bare mode instead of offering a sign-in that cannot 
   assert.ok(BARE_MODE.test("Bare mode doesn't use the sign-in from /login. It reads ANTHROPIC_API_KEY or an apiKeyHelper from --settings"));
   assert.ok(!BARE_MODE.test('Not logged in · Please run /login'));
   // the bare note wins over the sign-in one, and its button opens the row that names the cause
-  assert.match(src, /const login = live && !bare && needsLogin/);
+  assert.match(src, /const login = noted && !bare && needsLogin/);
   assert.match(src, /openSettingsModal\('claude'\)/);
 });

@@ -21,6 +21,7 @@ import claudeRoutes from './routes/claude.js';
 import shareRoutes from './routes/share.js';
 import automationRoutes from './routes/automations.js';
 import healthRoutes from './routes/health.js';
+import voiceRoutes from './routes/voice.js';
 import { startAutomations } from './automations.js';
 import { guestGuard, restoreShare } from './share.js';
 import { startWorker } from './sync/worker.js';
@@ -45,6 +46,7 @@ app.addHook('onSend', compressAnswer);
 const CSP = [
   "default-src 'self'",
   "img-src 'self' data: blob:",
+  "media-src 'self' blob:",
   "style-src 'self' 'unsafe-inline'",
   "script-src 'self'",
   "connect-src 'self'",
@@ -80,6 +82,7 @@ app.register(claudeRoutes);
 app.register(shareRoutes);
 app.register(automationRoutes);
 app.register(healthRoutes);
+app.register(voiceRoutes);
 
 for (const ev of ['unhandledRejection', 'uncaughtException']) {
   process.on(ev, (err) => {

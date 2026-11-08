@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { REPRINT_HOLD_MS, holdUntil, reprinted } from '../public/js/term-reprint.js';
 import { ASK_FRESH_MS, widthFor } from '../src/phantom.js';
+import * as owner from '../public/js/term-owner-rules.js';
 
 const strip = (file) => readFileSync(new URL(`../public/js/${file}`, import.meta.url), 'utf8')
   .replace(/^import [\s\S]*?;$/gm, '').replace(/^export /gm, '');
@@ -278,4 +279,43 @@ test('CK-880: a column off the screen is not looked at, its chat does not ask, o
   assert.match(src, /if \(!away\) \{ c\.lookedAt = 0; back = true; \}[\s\S]{0,40}if \(back\) soon\(0\);/, 'a column coming into sight waits for the next round');
   assert.match(src, /sight\?\.observe\(el\);/);
   assert.match(src, /sight\?\.unobserve\(c\.el\);/, 'a dropped column stays observed');
+});
+
+// while a column of «Claude now → Terminals» offered that terminal the field, the keys, ✕ and «Continue» — each refused only
+// once pressed. The real paintTerm on stand-ins: another board's terminal, the board's own, and one tmux did not say about.
+test('a column of another board\'s terminal shows its line in place of the field, the keys, ✕ and «Continue»', () => {
+  const el = (sel) => {
+    const cls = new Set(sel === '.now-col-other' ? ['hidden'] : []);
+    return { sel, hidden: sel === '.now-col-resume', disabled: false, textContent: '', title: '', classList: { toggle: (c, on) => (on ? cls.add(c) : cls.delete(c)), contains: (c) => cls.has(c) } };
+  };
+  const column = () => {
+    const parts = Object.fromEntries(['.term-state', '.now-col-resume', '.now-col-close', '.now-col-other', '.term-keys', '.term-form', '.now-col-screen', 'textarea', '.term-send'].map((x) => [x, el(x)]));
+    const c = { key: 'D-1', screen: 'same', el: {
+      querySelector: (x) => parts[x] || null,
+      querySelectorAll: (list) => list.split(',').map((x) => parts[x.trim()]).filter(Boolean),
+    } };
+    return { c, parts };
+  };
+  const box = { setTimeout, clearTimeout, state: {}, document: {}, tr: (x) => `«${x}»`, endedWords: () => 'ended', TERM_ACTIVITY: {}, setTermHint() {}, ...owner };
+  vm.runInNewContext(`${strip('now-terms.js')}\nthis.paintTerm = paintTerm;`, box);
+  const shut = (p) => ['.now-col-close', '.term-keys', '.term-form'].filter((x) => p[x].classList.contains('hidden'));
+  for (const dead of [false, true]) {
+    const { c, parts } = column();
+    box.paintTerm(c, { session: 's1', dead, screen: 'same', other: { port: 3972 } });
+    assert.deepEqual(shut(parts), ['.now-col-close', '.term-keys', '.term-form'], `${dead ? 'an exited' : 'a live'} terminal of another board offered the field, the keys or ✕`);
+    assert.equal(parts['.now-col-resume'].hidden, true, '«Continue» is offered over another board\'s exited terminal');
+    assert.equal(parts['.now-col-other'].classList.contains('hidden'), false, 'the column does not say whose the terminal is');
+    assert.match(parts['.now-col-other'].textContent, /another board.*3972/, 'the line does not name the port of the other board');
+    assert.equal(parts.textarea.disabled, true, 'the field of another board\'s terminal can be typed into');
+  }
+  for (const other of [undefined, { port: null, silent: true }]) {
+    const { c, parts } = column();
+    box.paintTerm(c, { session: 's1', dead: false, screen: 'same', ...(other ? { other } : {}) });
+    assert.deepEqual(shut(parts), [], `${other ? 'a silent tmux' : 'the board\'s own terminal'} lost the field, the keys or ✕`);
+    assert.equal(parts['.now-col-other'].classList.contains('hidden'), true, `${other ? 'a silent tmux' : 'the board\'s own terminal'} is said to be another board's`);
+    assert.equal(parts.textarea.disabled, false);
+  }
+  const { c, parts } = column();
+  box.paintTerm(c, { session: 's1', dead: true, screen: 'same' });
+  assert.equal(parts['.now-col-resume'].hidden, false, 'the board\'s own exited terminal lost «Continue»');
 });

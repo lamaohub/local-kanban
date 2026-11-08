@@ -5,7 +5,7 @@ import { styledAlert, styledConfirm } from './sidebar.js';
 import { refusalLine } from './unsaved.js';
 import { openDrawer } from './drawer.js';
 import { SHORT_MONTHS, STATUS_LABELS, launchInClaude, taskPromptText } from './sse.js';
-import { chosenFree, standGroups, standTotals } from './health-rules.js';
+import { chosenFree, commitWords, diffable, sizeWords, standGroups, standTotals, tickAll, tickable, whyWords, walkBarHTML } from './health-rules.js';
 
 const POLL_MS = 2000; // while the walk runs
 let last = null;
@@ -16,11 +16,7 @@ const opened = new Set(); // stands unfolded
 const diffs = new Map(); // folder → the diff text, once asked for
 let starting = false;
 
-function gb(n) {
-  if (!n) return '—';
-  if (n >= 1024 ** 3) return `${fmtNum(n / 1024 ** 3, 1)} ${tr('GB')}`;
-  return `${fmtNum(Math.max(1, Math.round(n / 1024 ** 2)), 0)} ${tr('MB')}`; // a stand of a few files is no «0.0 GB»
-}
+const gb = (n) => sizeWords(n, { tr, fmtNum });
 const statusWord = (st) => STATUS_LABELS[st] || st;
 function day(ms) {
   if (!ms) return '';
@@ -29,47 +25,23 @@ function day(ms) {
 }
 const hhmm = (ms) => { const d = new Date(ms); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
 
-/** Why a stand is not free, in words. */
-function whyWords(s) {
-  const n = () => (s.commits || []).filter((c) => !c.found).length;
-  return s.why.map((w) => ({
-    session: tr('a Claude session is open in the folder'),
-    process: tr('a process runs in the folder'),
-    task: `${tr('its task is in work')}${s.task ? ` (${statusWord(s.task.status)})` : ''}`,
-    locked: tr('the worktree is locked'),
-    main: `${tr('a branch the repository keeps')}${s.branch ? ` (${s.branch})` : ''}`,
-    project: tr('a project of the board lives in the folder'),
-    unknown: tr('could not tell what is in it'),
-    dirty: `${tr('not committed')}: ${s.changes?.files ?? '?'} ${plural(s.changes?.files ?? 0, 'file', 'files')}`,
-    ignored: `${tr('ignored data not in the main checkout')}: ${s.ignored?.files ?? '?'} ${plural(s.ignored?.files ?? 0, 'file', 'files')}`,
-    commits: `${tr('not in main')}: ${n()} ${plural(n(), 'commit', 'commits')}`,
-    detached: tr('detached HEAD with commits of its own'),
-  }[w] || w)).join(' · ');
-}
-const FOUND = {
-  patch: 'in main as the same change',
-  content: 'its changes are in main',
-};
-const LIKE = {
-  title: 'not in main: its title is, the changes differ',
-  issue: 'not in main: its issue is, the changes differ',
-};
+const why = (s) => whyWords(s, { tr, plural, statusWord });
 
 function rowHTML(s) {
   const name = s.path.split('/').pop();
-  const box = s.state === 'free'
+  const box = tickable(s)
     ? `<input type="checkbox" class="st-pick" data-path="${esc(s.path)}"${chosen.has(s.path) ? ' checked' : ''} aria-label="${esc(`${tr('Remove')} ${name}`)}">`
     : '<span class="st-pick-gap"></span>';
   const key = s.key ? `<a class="hl-fix-key" href="#" data-key="${esc(s.key)}">${esc(s.key)}</a>${s.task ? ` <span class="muted">${esc(statusWord(s.task.status))}</span>` : ''}` : '';
   const head = `<span class="hl-main"><span class="hl-name" title="${esc(s.path)}">${esc(name)}</span>`
-    + `<span class="hl-what"><span>${esc(s.project.name)}</span>${key ? `<span>${key}</span>` : ''}${s.branch && s.branch !== name ? `<span class="st-branch">${esc(s.branch)}</span>` : ''}`
-    + `${s.state !== 'free' && s.state !== 'reading' ? `<span class="st-why">${esc(whyWords(s))}</span>` : ''}</span></span>`
+    + `<span class="hl-what"><span>${esc(s.project ? s.project.name : (s.repo_name || ''))}</span>${key ? `<span>${key}</span>` : ''}${s.branch && s.branch !== name ? `<span class="st-branch">${esc(s.branch)}</span>` : ''}`
+    + `${s.state !== 'free' && s.state !== 'reading' ? `<span class="st-why">${esc(why(s))}</span>` : ''}</span></span>`
     + `<span class="hl-start st-size">${esc(gb(s.size))}${s.changed_at ? ` · ${esc(day(s.changed_at))}` : ''}</span>`;
   const commits = s.commits || [];
   if (!commits.length && !(s.state === 'unsent' && (s.dirty || s.ignored?.files))) return `<div class="hl-row st-row">${box}<span class="st-chev-gap"></span>${head}</div>`;
   const list = commits.map((c) => `<div class="hl-file"><span class="hl-file-path">${esc(c.sha.slice(0, 9))} ${esc(c.title)}</span>`
-    + `<span class="hl-file-kind${c.found ? '' : ' hl-heavy'}">${esc(c.found ? tr(FOUND[c.found] || c.found) : tr(LIKE[c.like] || 'not in main'))}</span></div>`).join('');
-  const diff = s.state === 'unsent'
+    + `<span class="hl-file-kind${c.found ? '' : ' hl-heavy'}">${esc(commitWords(c, tr))}</span></div>`).join('');
+  const diff = diffable(s)
     ? (diffs.has(s.path) ? `<pre class="st-diff">${esc(diffs.get(s.path))}</pre>` : `<button type="button" class="btn-ghost st-diff-btn" data-path="${esc(s.path)}">${esc(tr('Show what is not in main'))}</button>`)
     : '';
   return `<details class="hl-proj st-proj" data-path="${esc(s.path)}"${opened.has(s.path) ? ' open' : ''}><summary class="hl-row st-row">${box}${ic('chevron', 13)}${head}</summary>`
@@ -87,16 +59,14 @@ function paint(d, tabs) {
   const t = standTotals(d.stands);
   const picked = chosenFree(chosen, d.stands);
   const repos = d.repos.map((r) => `<div class="st-repo"><span class="hl-file-path">${esc(r.top)}</span><span class="muted">${r.free ? `${tr('free on the disk')}: ${esc(gb(r.free))}` : ''}${r.main ? ` · ${tr('measured against')} ${esc(r.main)}` : ` · ${tr('no main branch to measure against')}`}</span></div>`).join('');
-  const walk = d.running
-    ? `${tr('Looking at the stands…')} ${d.done} / ${d.total}`
-    : `${tr('Looked at')} ${hhmm(d.at)}`;
+  const walk = `${tr('Looked at')} ${hhmm(d.at)}`;
   const sum = t.n
     ? `${t.n} ${plural(t.n, 'stand', 'stands')} · ${gb(t.size)} · ${tr('can go')}: ${t.freeN} (${gb(t.freeSize)})`
     : (d.running ? '' : tr('No stands: the projects of the board have no git worktrees besides the main one.'));
   const head = '<div class="panel hl-norms">'
     + `<div class="hl-h">${tr('Stands')}<button type="button" class="btn-ghost st-again"${d.running ? ' disabled' : ''}>${tr('Check again')}</button></div>`
     + `<div class="muted hl-hint">${esc(tr('A stand is a git worktree of a task (.claude/worktrees/<KEY>) and its branch. «Can go» — nothing uncommitted, no ignored data the main checkout lacks (a .env, data/), and the changes of every commit are in main; the task you open checks each one again right before removing it, and never removes one with work not in main.'))}</div>`
-    + `${repos}<div class="hl-sum muted">${esc(walk)}</div></div>`;
+    + `${repos}${d.running ? walkBarHTML(esc(tr('Looking at the stands…')), d.done, d.total) : `<div class="hl-sum muted">${esc(walk)}</div>`}</div>`;
   const bar = g.free.length
     ? `<div class="st-bar"><button type="button" class="btn-ghost st-all">${esc(picked.length === g.free.length ? tr('Untick all') : `${tr('Tick all that can go')} (${g.free.length})`)}</button>`
       + `<button type="button" class="btn-primary st-go"${picked.length && !starting ? '' : ' disabled'}>${esc(`${tr('Remove the ticked')} (${picked.length})`)}</button></div>`
@@ -125,7 +95,7 @@ function paint(d, tabs) {
   const all = box.querySelector('.st-all');
   if (all) {
     all.onclick = () => {
-      if (picked.length === g.free.length) chosen.clear(); else g.free.forEach((s) => chosen.add(s.path));
+      tickAll(chosen, d.stands);
       repaint();
     };
   }
@@ -189,7 +159,7 @@ export async function renderStands(tabs, { force = false } = {}) {
   clearTimeout(poll);
   const my = ++seq;
   askedAt = Date.now();
-  if (!last) $('health').innerHTML = `<div class="now-wrap hl-wrap">${tabs}<div class="muted">${tr('Looking at the stands…')}</div></div>`;
+  if (!last) $('health').innerHTML = `<div class="now-wrap hl-wrap">${tabs}${walkBarHTML(esc(tr('Looking at the stands…')), 0, 0)}</div>`;
   let d;
   try { d = await api('GET', `/api/health/stands${force ? '?refresh=1' : ''}`, undefined, { quiet: true }); } catch (e) {
     if (my !== seq || state.slug !== HEALTH) return;

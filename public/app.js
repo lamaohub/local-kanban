@@ -17,6 +17,7 @@ import { applyLimits, renderLimits } from './js/limits.js';
 import { applyAskEvent, renderAsks } from './js/asks.js';
 import { renderBoard } from './js/board.js';
 import { openOnboarding } from './js/onboarding.js';
+import { callSignal, testCall } from './js/call.js';
 
 Object.assign(window, {
   state, api, refresh, loadTasks, loadProjects, selectProject,
@@ -29,4 +30,5 @@ Object.assign(window, {
   retryUnsaved,
   retryLoad,
   renderBoard,
+  callSignal, testCall,
 });

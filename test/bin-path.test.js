@@ -30,9 +30,84 @@ test('bin() gives the full path, found once for a PATH, and a miss is not kept',
   assert.equal(bin('kb-probe-tool'), join(other, 'kb-probe-tool'), 'the PATH is not in the key: the stand-in first in PATH is not the one started');
 });
 
-const CP_MOD = String.raw`['"](?:node:)?child_process['"]`;
+const CP_MOD = String.raw`['"\`](?:node:)?child_process['"\`]`;
 const FNS = ['exec', 'execSync', 'execFile', 'execFileSync', 'spawn', 'spawnSync'];
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// what the shell runs itself, and the words after which the next word is a program again
+const SH_OK = new Set(('. : [ [[ ]] alias bg break builtin cd command continue echo eval exec exit export false fg getopts '
+  + 'hash jobs kill let local printf pwd read readonly return set shift source test times trap true type typeset ulimit '
+  + 'umask unalias unset wait if then else elif fi do done case esac for while until select function in time ! { }').split(' '));
+const SH_THEN = new Set(['!', 'then', 'else', 'elif', 'do', 'if', 'while', 'until', '{']);
+// a program that starts the program named in its arguments: the first argument that is no option, VAR=value or duration
+const SH_WRAP = new Set(['exec', 'command', 'builtin', 'time', 'nohup', 'env', 'nice', 'sudo', 'xargs', 'timeout', 'caffeinate', 'stdbuf']);
+const WRAP_PROG = new RegExp(String.raw`(?:^|[/'"\`(])(?:${[...SH_WRAP].join('|')})['"\`]`);
+const SHELL_PROG = /(?:^|[/'"`(\s])(?:ba|z|da|k|fi)?sh(?:['"`)\s]|$)|SHELL|(?<![\w$])shells?(?![\w$])/;
+
+/** The words of a shell line that stand where the shell starts a program: [{ text, dyn }], `dyn` when the word starts
+    with an expansion (`$x`, `"$@"`, `$(…)`) — its value is not in the line. `$(…)` and backquotes are read inside. */
+export function shellCommands(line, first = true) {
+  const out = [];
+  let word = ''; let dyn = false; let has = false; let cmd = first; let wrap = false; let redirect = false;
+  const end = () => {
+    if (!has) return;
+    const w = word; const d = dyn;
+    word = ''; dyn = false; has = false;
+    if (redirect) { redirect = false; return; } // the file after `>` / `2>`
+    if (/^\d*(?:[<>]+&?|&>)$/.test(w)) { redirect = true; return; }
+    if (/^\d*[<>]/.test(w) || !cmd) return;
+    if (!d && /^[A-Za-z_]\w*=/.test(w)) return; // VAR=value before the program
+    if (wrap && !d && (/^-/.test(w) || /^\d+(?:\.\d+)?[smhd]?$/.test(w))) return;
+    wrap = false;
+    out.push({ text: w, dyn: d });
+    if (SH_WRAP.has(w.replace(/^.*\//, ''))) { wrap = true; return; }
+    if (!SH_THEN.has(w)) cmd = false;
+  };
+  const closeParen = (j) => {
+    let depth = 0;
+    for (let k = j; k < line.length; k += 1) {
+      const ch = line[k];
+      if (ch === '\\') k += 1;
+      else if (ch === '\'') { const e = line.indexOf('\'', k + 1); k = e < 0 ? line.length : e; } else if (ch === '(') depth += 1;
+      else if (ch === ')') { depth -= 1; if (!depth) return k; }
+    }
+    return line.length;
+  };
+  // `$(…)`, `$((…))` or a backquote at `j`: the programs inside; returns where it ends
+  const inner = (j) => {
+    if (line[j] === '`') {
+      let k = j + 1;
+      for (; k < line.length && line[k] !== '`'; k += 1) if (line[k] === '\\') k += 1;
+      out.push(...shellCommands(line.slice(j + 1, k)));
+      return k;
+    }
+    const k = closeParen(j + 1);
+    if (line[j + 2] !== '(') out.push(...shellCommands(line.slice(j + 2, k)));
+    return k;
+  };
+  for (let i = 0; i < line.length; i += 1) {
+    const c = line[i];
+    if (c === '\\') { if (line[i + 1] !== '\n') { word += line[i + 1] ?? ''; has = true; } i += 1; continue; }
+    if (c === '\'') { const e = line.indexOf('\'', i + 1); const to = e < 0 ? line.length : e; word += line.slice(i + 1, to); has = true; i = to; continue; }
+    if (c === '"') {
+      let j = i + 1;
+      for (; j < line.length && line[j] !== '"'; j += 1) {
+        if (line[j] === '\\') { word += line[j + 1] ?? ''; j += 1; } else if ((line[j] === '$' && line[j + 1] === '(') || line[j] === '`') { if (!word) dyn = true; word += '$'; j = inner(j); } else { if (line[j] === '$' && !word) dyn = true; word += line[j]; }
+      }
+      has = true; i = j; continue;
+    }
+    if ((c === '$' && line[i + 1] === '(') || c === '`') { if (!word) dyn = true; word += '$'; has = true; i = inner(i); continue; }
+    if (c === '$' && !word) { dyn = true; word += c; has = true; continue; }
+    if (c === '#' && !has) { const e = line.indexOf('\n', i); i = e < 0 ? line.length : e - 1; continue; }
+    if (c === '&' && /[<>]$/.test(word)) { word += c; continue; } // 2>&1
+    if (';&|\n('.includes(c)) { end(); cmd = true; wrap = false; continue; }
+    if (c === ')') { end(); cmd = false; continue; }
+    if (c === ' ' || c === '\t' || c === '\r') { end(); continue; }
+    word += c; has = true;
+  }
+  end();
+  return out;
+}
 
 // the end of the string or template that opens at `i`
 function skipString(s, i) {
@@ -140,33 +215,52 @@ export function bareStarts(raw, file, allowed = {}) {
   const ok = new Set(allowed[file] || []);
   const found = [];
   const say = (at, what) => found.push(`${file}:${src.slice(0, at).split('\n').length}: ${what}`);
-  const names = new Set(); // what holds a function of child_process
+  const names = new Map(); // what holds a function of child_process → which one (null: not one of FNS)
   const spaces = new Set(); // what holds child_process itself
   const pathFns = new Set(['fileURLToPath', 'join', 'resolve', 'realpathSync']);
   const locals = (list) => list.split(',').map((n) => n.trim()).filter(Boolean)
     .map((n) => { const [a, b] = n.split(/\s+as\s+|\s*:\s*/); return { from: a.trim(), as: (b || a).trim() }; });
+  const fnOf = (from) => (FNS.includes(from) ? from : null);
   for (const m of all(/import\s*\{([^}]*)\}\s*from\s*(['"])([^'"]+)\2/g)) {
-    if (/^(?:node:)?child_process$/.test(m[3])) locals(m[1]).forEach((n) => names.add(n.as));
+    if (/^(?:node:)?child_process$/.test(m[3])) locals(m[1]).forEach((n) => names.set(n.as, fnOf(n.from)));
     if (m[3].startsWith('.')) locals(m[1]).filter((n) => n.from === 'bin' || n.from === 'onPath').forEach((n) => pathFns.add(n.as)); // src/bin-path.js
   }
   const MOD = String.raw`(?:require\s*\(\s*${CP_MOD}\s*\)|\(\s*await\s+import\s*\(\s*${CP_MOD}\s*\)\s*\))`;
-  for (const m of all(new RegExp(String.raw`(?:const|let|var)\s*\{([^}]*)\}\s*=\s*(?:${MOD}|await\s+import\s*\(\s*${CP_MOD}\s*\))`, 'g'))) locals(m[1]).forEach((n) => names.add(n.as));
+  for (const m of all(new RegExp(String.raw`(?:const|let|var)\s*\{([^}]*)\}\s*=\s*(?:${MOD}|await\s+import\s*\(\s*${CP_MOD}\s*\))`, 'g'))) locals(m[1]).forEach((n) => names.set(n.as, fnOf(n.from)));
   for (const m of all(new RegExp(String.raw`import\s+(?:\*\s+as\s+)?(\w+)\s+from\s*${CP_MOD}`, 'g'))) spaces.add(m[1]);
   for (const m of all(new RegExp(String.raw`(?:const|let|var)\s+(\w+)\s*=\s*(?:require|await\s+import)\s*\(\s*${CP_MOD}\s*\)`, 'g'))) spaces.add(m[1]);
+  // the module in a variable — is out of the guard's sight
+  const FN_NAME = String.raw`(?:${FNS.join('|')})(?![\w$])`;
+  for (const m of all(new RegExp(CP_MOD, 'g'))) {
+    const before = src.slice(Math.max(0, m.index - 300), m.index);
+    const after = src.slice(m.index + m[0].length, m.index + m[0].length + 200);
+    if (/\bfrom\s*$|(?:^|[;\n])\s*import\s+$/.test(before)) continue; // import … from / export … from (judged below)
+    const held = /(?:(?:const|let|var)\s*)?(?:\{[^}]*\}|[\w$]+)\s*=\s*(?:(?<![\w.$])require|await\s+import)\s*\(\s*$/.test(before) && /^\s*\)(?!\s*[.(\[])/.test(after);
+    const called = /(?<![\w.$])require\s*\(\s*$/.test(before) && new RegExp(String.raw`^\s*\)\s*\.\s*${FN_NAME}`).test(after);
+    const awaited = /\(\s*await\s+import\s*\(\s*$/.test(before) && new RegExp(String.raw`^\s*\)\s*\)\s*\.\s*${FN_NAME}`).test(after);
+    if (!held && !called && !awaited) say(m.index, 'child_process reached where the guard cannot follow it');
+  }
   const fnRef = () => {
     const owners = [...[...spaces].map((s) => String.raw`(?<![\w.$])${esc(s)}`), MOD];
-    return [...[...names].map((n) => String.raw`(?<![\w.$])${esc(n)}(?![\w$])`), String.raw`(?:${owners.join('|')})\s*\.\s*(?:${FNS.join('|')})(?![\w$])`].join('|');
+    return [...[...names.keys()].map((n) => String.raw`(?<![\w.$])${esc(n)}(?![\w$])`), String.raw`(?:${owners.join('|')})\s*\.\s*(?:${FNS.join('|')})(?![\w$])`].join('|');
   };
   const callable = () => String.raw`(?:(?:util\s*\.\s*)?promisify\s*\(\s*(?:${fnRef()})\s*\)|(?:${fnRef()}))`;
+  // which function of child_process a callable text names: `cp.exec`, `promisify(execFile)`, `run`
+  const fnIn = (text) => {
+    const member = new RegExp(String.raw`\.\s*(${FNS.join('|')})(?![\w$])`).exec(text);
+    if (member) return member[1];
+    for (const [n, f] of names) if (new RegExp(String.raw`(?<![\w.$])${esc(n)}(?![\w$])`).test(text)) return f;
+    return null;
+  };
   // another name for the same function or module: `const run = execFile`, `x = promisify(cp.execFile)`, `.bind(null)`,
   // `const { execFile: run } = cp`, `const cp2 = cp`
   for (let grew = true; grew;) {
     grew = false;
-    const add = (set, n) => { if (!set.has(n)) { set.add(n); grew = true; } };
-    for (const m of all(new RegExp(String.raw`(?<![\w.$])(\w+)\s*=(?![=>])\s*${callable()}(?:\s*\.\s*bind\s*\(\s*[\w.$]*\s*\))?(?!\s*[\w$.(\[])`, 'g'))) add(names, m[1]);
+    const addName = (n, f) => { if (!names.has(n)) { names.set(n, f); grew = true; } };
+    for (const m of all(new RegExp(String.raw`(?<![\w.$])(\w+)\s*=(?![=>])\s*${callable()}(?:\s*\.\s*bind\s*\(\s*[\w.$]*\s*\))?(?!\s*[\w$.(\[])`, 'g'))) addName(m[1], fnIn(m[0].slice(m[0].indexOf('=') + 1)));
     const own = [...spaces].map((s) => String.raw`(?<![\w.$])${esc(s)}`).concat(MOD).join('|');
-    for (const m of all(new RegExp(String.raw`(?:const|let|var)\s*\{([^}]*)\}\s*=\s*(?:${own})(?![\w$.(])`, 'g'))) locals(m[1]).forEach((n) => add(names, n.as));
-    for (const m of all(new RegExp(String.raw`(?<![\w.$])(\w+)\s*=(?![=>])\s*(?:${own})(?![\w$.(\[])`, 'g'))) add(spaces, m[1]);
+    for (const m of all(new RegExp(String.raw`(?:const|let|var)\s*\{([^}]*)\}\s*=\s*(?:${own})(?![\w$.(])`, 'g'))) locals(m[1]).forEach((n) => addName(n.as, fnOf(n.from)));
+    for (const m of all(new RegExp(String.raw`(?<![\w.$])(\w+)\s*=(?![=>])\s*(?:${own})(?![\w$.(\[])`, 'g'))) if (!spaces.has(m[1])) { spaces.add(m[1]); grew = true; }
   }
   // child_process handed on is out of the guard's sight: a re-export, or an export of a name that holds it
   for (const m of all(new RegExp(String.raw`export\s*(?:\*|\{[^}]*\})\s*from\s*${CP_MOD}`, 'g'))) say(m.index, 'child_process exported on');
@@ -176,7 +270,12 @@ export function bareStarts(raw, file, allowed = {}) {
 
   // the functions of the file: name, parameters, body
   const fns = [];
-  const paramNames = (open) => splitTop(src.slice(open + 1, closeOf(src, open))).map((p) => (/^(?:\.\.\.)?\s*([\w$]+)/.exec(p.text) || [])[1] || null);
+  const paramList = (open) => splitTop(src.slice(open + 1, closeOf(src, open))).map((p) => ({ ...p, at: open + 1 + p.at }));
+  const paramNames = (open) => paramList(open).map((p) => (/^(?:\.\.\.)?\s*([\w$]+)/.exec(p.text) || [])[1] || null);
+  const paramDefaults = (open) => paramList(open).map((p) => {
+    const d = /^[\w$]+\s*=(?![=>])\s*/.exec(p.text);
+    return d ? { text: p.text.slice(d[0].length), at: p.at + d[0].length } : null;
+  });
   const bodyOf = (from) => {
     const at = from + (/^\s*/.exec(src.slice(from))[0].length);
     if (src[at] === '{') return { start: at, end: closeOf(src, at), block: true };
@@ -185,21 +284,52 @@ export function bareStarts(raw, file, allowed = {}) {
   for (const m of all(/(?:(export)\s+)?(?:async\s+)?function\s*\*?\s*([\w$]*)\s*\(/g)) {
     const open = m.index + m[0].length - 1;
     const brace = src.indexOf('{', closeOf(src, open));
-    fns.push({ name: m[2] || null, exported: Boolean(m[1]), head: m.index, params: paramNames(open), ...bodyOf(brace) });
+    // a function EXPRESSION's own name is seen only inside it (`{ go: function run(cmd) {…} }` is called as `x.go`):
+    const before = src.slice(Math.max(0, m.index - 200), m.index).trimEnd();
+    const expression = /[:(,=?[!&|]$|(?:^|[^\w$.])return$/.test(before);
+    const name = expression ? ((/(?:const|let|var)\s+([\w$]+)\s*=$/.exec(before) || [])[1] || null) : (m[2] || null);
+    fns.push({ name, exported: Boolean(m[1]), head: m.index, params: paramNames(open), defaults: paramDefaults(open), ...bodyOf(brace) });
   }
   for (const m of all(/(?:(export)\s+)?(?:(?:const|let|var)\s+([\w$]+)\s*=\s*)?(?:async\s*)?(\(|[\w$]+\s*=>)/g)) {
-    let params; let after;
+    let params; let after; let defaults = [];
     if (m[3] === '(') {
       const open = m.index + m[0].length - 1;
       const close = closeOf(src, open);
       const arrow = /^\s*=>/.exec(src.slice(close + 1));
       if (!arrow) continue;
-      params = paramNames(open); after = close + 1 + arrow[0].length;
+      params = paramNames(open); defaults = paramDefaults(open); after = close + 1 + arrow[0].length;
     } else {
       params = [/^[\w$]+/.exec(m[3])[0]]; after = m.index + m[0].length;
     }
-    fns.push({ name: m[2] || null, exported: Boolean(m[1]), head: m.index, params, ...bodyOf(after) });
+    fns.push({ name: m[2] || null, exported: Boolean(m[1]), head: m.index, params, defaults, ...bodyOf(after) });
   }
+  // the brace and bracket pairs of the code: the blocks a `const` lives in, and the patterns of `[a, b] = …`
+  const blocks = []; const patterns = [];
+  {
+    const stack = [];
+    for (let i = 0; i < src.length; i += 1) {
+      const c = src[i];
+      if (c === '\'' || c === '"' || c === '`') { i = skipString(src, i) - 1; continue; }
+      if (c === '{' || c === '[') stack.push([c, i]);
+      else if (c === '}' || c === ']') {
+        const want = c === '}' ? '{' : '[';
+        while (stack.length && stack[stack.length - 1][0] !== want) stack.pop();
+        if (!stack.length) continue;
+        const [, open] = stack.pop();
+        if (c === '}') blocks.push([open, i]);
+        const eq = /^\s*=(?![=>])\s*/.exec(src.slice(i + 1, i + 40));
+        const lead = src.slice(Math.max(0, open - 200), open);
+        // a statement of its own — not `a[i] =`, not `const [a] =` (a declaration), not a default of a parameter
+        if (eq && /(?:^|[;{}]|\n)\s*$/.test(lead) && !/[\w$)\]]\s*$/.test(lead) && !/(?:const|let|var)\s*$/.test(lead)) patterns.push({ open, close: i, value: i + 1 + eq[0].length });
+      }
+    }
+  }
+  // is a declaration at `d` seen at `at`: `at` is inside the innermost block around `d`
+  const visible = (d, at) => {
+    let best = null;
+    for (const b of blocks) if (b[0] < d && d < b[1] && (!best || b[0] > best[0])) best = b;
+    return !best || (best[0] <= at && at <= best[1]);
+  };
   for (const f of fns) if (f.name && new RegExp(String.raw`export\s*\{[^}]*(?<![\w$])${esc(f.name)}(?![\w$])[^}]*\}(?!\s*from)`).test(src)) f.exported = true;
   const named = (name) => fns.find((f) => f.name === name);
 
@@ -217,18 +347,30 @@ export function bareStarts(raw, file, allowed = {}) {
   }
   const argsOf = (open) => splitTop(src.slice(open + 1, closeOf(src, open))).map((p) => ({ text: p.text, at: open + 1 + p.at })).filter((p, k, all) => p.text || k < all.length - 1);
 
-  // where a plain name gets its value: the parameter it is, or every place it is set
-  function judgeName(name, at, seen) {
-    const decls = [...all(new RegExp(String.raw`(?:(?:const|let|var)\s+${esc(name)}(?![\w$])\s*(=(?![=>]))?|for\s*\(\s*(?:const|let|var)\s+${esc(name)}\s+of\s+)`, 'g'))].filter((m) => m.index < at);
+  // every place between `from` and `to` that sets the name again: `x = …`, and a pattern `[x] = […]` / `({ x } = …)`
+  function assignments(name, from = 0, to = src.length) {
+    const sets = [];
+    for (const m of all(new RegExp(String.raw`(?<![\w.$])(?<!(?:const|let|var)\s+)${esc(name)}\s*=(?![=>])\s*`, 'g'))) if (m.index > from && m.index < to) sets.push(valueAt(m.index + m[0].length));
+    const word = new RegExp(String.raw`(?<![\w$.])${esc(name)}(?![\w$])`);
+    for (const p of patterns) if (p.open > from && p.open < to && word.test(src.slice(p.open + 1, p.close))) sets.push(valueAt(p.value));
+    return sets;
+  }
+  // where a plain name gets its value: the parameter it is, or every place it is set. `sh`: the value is a shell line
+  function judgeName(name, at, seen, sh) {
+    const decls = [...all(new RegExp(String.raw`(?:(?:const|let|var)\s+${esc(name)}(?![\w$])\s*(=(?![=>]))?|for\s*\(\s*(?:const|let|var)\s+${esc(name)}\s+of\s+)`, 'g'))]
+      .filter((m) => m.index < at && visible(m.index, at));
     const decl = decls.pop();
     const fn = fns.filter((f) => f.start <= at && at <= f.end && f.params.includes(name)).sort((a, b) => b.start - a.start)[0];
     if (fn && !(decl && decl.index > fn.start)) {
       const key = `p:${fn.head}:${name}`;
       if (seen.has(key)) return null;
       seen.add(key);
-      return judgeParam(fn, fn.params.indexOf(name), seen);
+      const w = judgeParam(fn, fn.params.indexOf(name), seen, sh);
+      if (w) return w;
+      for (const s of assignments(name, fn.start, fn.end)) { const v = judge(s.expr, s.end, seen, sh); if (v) return v; }
+      return null;
     }
-    if (!decl) return name;
+    if (!decl) return sh ? null : name;
     const key = `v:${decl.index}:${name}`;
     if (seen.has(key)) return null;
     seen.add(key);
@@ -236,32 +378,36 @@ export function bareStarts(raw, file, allowed = {}) {
     if (decl[0].startsWith('for')) sets.push(valueAt(decl.index + decl[0].length));
     else if (decl[1]) sets.push({ ...valueAt(decl.index + decl[0].length), at: decl.index });
     // every later assignment of the name — a `let` set to a full path and then to a bare name passed before
-    for (const m of all(new RegExp(String.raw`(?<![\w.$])(?<!(?:const|let|var)\s+)${esc(name)}\s*=(?![=>])\s*`, 'g'))) sets.push(valueAt(m.index + m[0].length));
-    for (const s of sets) { const w = judge(s.expr, s.at ?? s.end, seen); if (w) return w; }
+    sets.push(...assignments(name));
+    for (const s of sets) { const w = judge(s.expr, s.at ?? s.end, seen, sh); if (w) return w; }
     return null;
   }
-  // a parameter: what every call of its function gives it — directly, or through the function it is handed to
-  function judgeParam(fn, k, seen) {
+  // a parameter: its default, and what every call of its function gives it — directly, or through the function it is
+  // handed to. In a shell line (`sh`) what cannot be followed is not read: only the text of the line is
+  function judgeParam(fn, k, seen, sh) {
     const name = fn.params[k];
-    if (!fn.name) return `${name} (a parameter of a function with no name to follow)`;
-    if (fn.exported) return `${name} (a parameter of ${fn.name}, which other files call)`;
+    const d = fn.defaults && fn.defaults[k];
+    if (d) { const w = judge(d.text, d.at, seen, sh); if (w) return w; }
+    const lost = (why) => (sh ? null : why);
+    if (!fn.name) return lost(`${name} (a parameter of a function with no name to follow)`);
+    if (fn.exported) return lost(`${name} (a parameter of ${fn.name}, which other files call)`);
     for (const m of all(new RegExp(String.raw`(?<![\w.$])${esc(fn.name)}\s*\(`, 'g'))) {
       if (/function\s*\*?\s*$/.test(src.slice(0, m.index))) continue;
       const a = argsOf(m.index + m[0].length - 1)[k];
-      if (a) { const w = judge(a.text, a.at, seen); if (w) return w; }
+      if (a) { const w = judge(a.text, a.at, seen, sh); if (w) return w; }
     }
     for (const m of all(new RegExp(String.raw`(?<![\w.$])${esc(fn.name)}(?![\w$]|\s*\(|\s*=(?![=>]))`, 'g'))) {
       if (/(?:function\s*\*?|const|let|var)\s*$/.test(src.slice(0, m.index)) || (m.index >= fn.head && m.index < fn.start)) continue;
       // handed as an argument to a function of the file: follow what that one calls it with
       const through = fns.filter((g) => g.name).flatMap((g) => all(new RegExp(String.raw`(?<![\w.$])${esc(g.name)}\s*\(`, 'g'))
         .map((c) => ({ g, j: argsOf(c.index + c[0].length - 1).findIndex((a) => a.at === m.index && a.text === fn.name) })).filter((x) => x.j >= 0));
-      if (!through.length) return `${fn.name} (handed where its calls cannot be followed)`;
+      if (!through.length) return lost(`${fn.name} (handed where its calls cannot be followed)`);
       for (const { g, j } of through) {
         const p = g.params[j];
-        if (!p) return `${fn.name} (handed where its calls cannot be followed)`;
+        if (!p) return lost(`${fn.name} (handed where its calls cannot be followed)`);
         for (const c of all(new RegExp(String.raw`(?<![\w.$])${esc(p)}\s*\(`, 'g')).filter((x) => x.index > g.start && x.index < g.end)) {
           const a = argsOf(c.index + c[0].length - 1)[k];
-          if (a) { const w = judge(a.text, a.at, seen); if (w) return w; }
+          if (a) { const w = judge(a.text, a.at, seen, sh); if (w) return w; }
         }
       }
     }
@@ -275,17 +421,47 @@ export function bareStarts(raw, file, allowed = {}) {
     return all(/(?<![\w$.])return\s+/g).filter((m) => m.index > f.start && m.index < f.end).map((m) => ({ text: valueAt(m.index + m[0].length).expr, at: m.index }));
   }
   const LIST_PICK = String.raw`(?:\.\s*(?:find|filter)\s*\([\s\S]*\)(?:\s*\[\s*0\s*\])?|\[\s*0\s*\]|\.\s*at\s*\(\s*0\s*\))`;
-  function judge(text, at, seen = new Set()) {
+  // a shell line written in the file: every word where the shell starts a program (`sh` = 'args': the line goes on
+  // after a program and its first word is an argument — the arguments of `{ shell: true }`)
+  function shellLine(body, q, at, seen, sh) {
+    const holes = [];
+    let line = '';
+    for (let j = 0; j < body.length; j += 1) {
+      if (body[j] === '\\') { const ch = body[j + 1] ?? ''; line += ch === 'n' ? '\n' : ch === 't' ? '\t' : ch; j += 1; } else if (q === '`' && body[j] === '$' && body[j + 1] === '{') {
+        const close = closeOf(body, j + 1);
+        holes.push(body.slice(j + 2, close));
+        line += `\u0001${holes.length - 1}\u0002`;
+        j = close;
+      } else line += body[j];
+    }
+    const shown = (w) => w.replace(/\u0001(\d+)\u0002/g, (x, n) => `\${${holes[n]}}`);
+    for (const w of shellCommands(line, sh !== 'args')) {
+      const hole = /^\u0001(\d+)\u0002/.exec(w.text);
+      if (hole) {
+        const rest = w.text.slice(hole[0].length);
+        if (rest.includes('/')) continue; // `${folder}/bin/x` — a path under something
+        if (rest && !rest.includes('\u0001')) return shown(w.text);
+        const v = judge(holes[hole[1]], at, seen, true);
+        if (v) return v;
+        continue;
+      }
+      if (w.dyn || !w.text || w.text.includes('/') || SH_OK.has(w.text)) continue;
+      return shown(w.text);
+    }
+    return null;
+  }
+  function judge(text, at, seen = new Set(), sh = false) {
     let expr = String(text).trim();
     while (expr.startsWith('(') && closeOf(expr, 0) === expr.length - 1) expr = expr.slice(1, -1).trim();
     if (ok.has(expr) || /^(?:null|undefined|false)$/.test(expr)) return null;
     let parts = splitTop(expr, ['||', '??']);
     if (parts.length === 1) parts = ternary(expr) || parts; // c ? x : y — each side
-    if (parts.length > 1) { for (const p of parts) { const w = judge(p.text, at, seen); if (w) return w; } return null; }
-    if (/^await\s/.test(expr)) return judge(expr.replace(/^await\s+/, ''), at, seen);
+    if (parts.length > 1) { for (const p of parts) { const w = judge(p.text, at, seen, sh); if (w) return w; } return null; }
+    if (/^await\s/.test(expr)) return judge(expr.replace(/^await\s+/, ''), at, seen, sh);
     if (/^process\.execPath$/.test(expr) || /^new URL\(/.test(expr)) return null;
     if (/^[\w$]+(?:\??\.[\w$]+)*\??\.cmd$/.test(expr)) return null; // every `cmd:` is judged where it is written
     const lit = /^(['"`])([\s\S]*)\1$/.exec(expr);
+    if (lit && closeOfString(expr) && sh) return shellLine(lit[2], lit[1], at, seen, sh);
     if (lit && closeOfString(expr)) {
       const body = lit[2].trimStart();
       if (lit[1] === '`' && body.startsWith('${')) {
@@ -301,43 +477,90 @@ export function bareStarts(raw, file, allowed = {}) {
       const close = closeOf(expr, 0);
       const rest = expr.slice(close + 1).trim();
       const items = splitTop(expr.slice(1, close)).filter((p) => p.text);
-      if (/^\.\s*join\s*\(/.test(rest)) return items.length ? judge(items[0].text, at, seen) : null; // a command line shown: its first word
-      if (!rest || new RegExp(`^${LIST_PICK}$`).test(rest)) { for (const p of items) { const w = judge(p.text, at, seen); if (w) return w; } return null; }
-      return expr;
+      if (/^\.\s*join\s*\(/.test(rest)) return items.length ? judge(items[0].text, at, seen, sh) : null; // a command line shown: its first word
+      if (!rest || new RegExp(`^${LIST_PICK}$`).test(rest)) { for (const p of items) { const w = judge(p.text, at, seen, sh); if (w) return w; } return null; }
+      return sh ? null : expr;
     }
     const pick = new RegExp(String.raw`^([\w$]+)\s*${LIST_PICK}$`).exec(expr);
-    if (pick) return judge(pick[1], at, seen);
+    if (pick) return judge(pick[1], at, seen, sh);
     const call = /^([\w$]+)\s*\(/.exec(expr);
     if (call && closeOf(expr, call[0].length - 1) === expr.length - 1) {
       if (pathFns.has(call[1])) return null;
       const key = `f:${call[1]}`;
       if (seen.has(key)) return null;
       const rets = returnsOf(call[1]);
-      if (!rets) return expr;
+      if (!rets) return sh ? null : expr;
       seen.add(key);
-      for (const r of rets) { const w = judge(r.text, r.at, seen); if (w) return w; }
+      for (const r of rets) { const w = judge(r.text, r.at, seen, sh); if (w) return w; }
       return null;
     }
-    if (/^[A-Za-z_$][\w$]*$/.test(expr)) return judgeName(expr, at, seen);
-    return expr;
+    if (/^[A-Za-z_$][\w$]*$/.test(expr)) return judgeName(expr, at, seen, sh);
+    return sh ? null : expr;
   }
   const closeOfString = (s) => skipString(s, 0) === s.length;
 
+  const items = (p) => (p && p.text.startsWith('[') && closeOf(p.text, 0) === p.text.length - 1
+    ? splitTop(p.text.slice(1, -1)).filter((x) => x.text).map((x) => ({ text: x.text, at: p.at + 1 + x.at })) : null);
+  const judgeCall = (fn, args) => {
+    const [a, list, ...rest] = args;
+    const what = judge(a.text, a.at);
+    // the line of exec goes to a shell: its first word may be a builtin or VAR=value, read with the rest of the line
+    if (what && !((fn === 'exec' || fn === 'execSync') && (SH_OK.has(what) || /^[A-Za-z_]\w*=/.test(what)))) return what;
+    const shell = rest.concat(list || []).some((p) => /(?<![\w$.])shell\s*:\s*(?!false\b|null\b|undefined\b|0\b|''|"")/.test(p.text));
+    // the line of `exec` and of `{ shell: true }`: the program and every command after it
+    if (fn === 'exec' || fn === 'execSync' || shell) {
+      const w = judge(a.text, a.at, new Set(), true);
+      if (w) return w;
+      // Node joins the arguments with spaces into the same line: read them joined, a value not written here as `$x`
+      const joined = ((shell && items(list)) || []).map((p) => (/^(['"])[\s\S]*\1$/.test(p.text) && closeOfString(p.text) ? p.text.slice(1, -1) : '$x'));
+      if (joined.length) { const v = judge(JSON.stringify(joined.join(' ')), list.at, new Set(), 'args'); if (v) return v; }
+    }
+    const xs = items(list);
+    if (!xs) return null;
+    // a shell and `-c`: the line after it
+    const c = xs.findIndex((p) => /^(['"`])-[A-Za-z]*c[A-Za-z]*\1$/.test(p.text));
+    if (SHELL_PROG.test(a.text) && c >= 0 && xs[c + 1]) { const w = judge(xs[c + 1].text, xs[c + 1].at, new Set(), true); if (w) return w; }
+    // env, nohup, nice, timeout, …: the program among their arguments
+    if (WRAP_PROG.test(a.text)) {
+      const p = xs.find((x) => !/^(['"`])(?:-|[A-Za-z_]\w*=|\d+(?:\.\d+)?[smhd]?\1)/.test(x.text));
+      if (p) { const w = judge(p.text, p.at, new Set(), true); if (w) return w; }
+    }
+    return null;
+  };
   for (const m of all(new RegExp(String.raw`${callable()}\s*(?:\.\s*(call|apply|bind)\s*)?\(`, 'g'))) {
     const args = argsOf(m.index + m[0].length - 1);
     let a = args[0];
     if (m[1] === 'call' || m[1] === 'bind') a = args[1];
     if (m[1] === 'apply') a = args[1] && args[1].text.startsWith('[') ? { text: splitTop(args[1].text.slice(1, closeOf(args[1].text, 0)))[0].text, at: args[1].at } : args[1];
     if (!a) { if (m[1] !== 'bind') say(m.index, '(no program)'); continue; }
-    const what = judge(a.text, a.at);
+    const what = m[1] ? judge(a.text, a.at) : judgeCall(fnIn(m[0]), args);
     if (what) say(m.index, what);
   }
+  // `run(execFile)`, `{ execFile }` — or the module read by a computed key (`cp['execFile']`): the guard cannot see its calls
+  const refs = [...names.keys(), ...spaces].map((n) => String.raw`(?<![\w.$])${esc(n)}(?![\w$])`);
+  for (const m of refs.length ? all(new RegExp(refs.join('|'), 'g')) : []) {
+    const before = src.slice(Math.max(0, m.index - 400), m.index);
+    const after = src.slice(m.index + m[0].length, m.index + m[0].length + 200);
+    if (spaces.has(m[0]) ? /^\s*\.\s*[\w$]/.test(after) : /^\s*(?:\(|\.\s*(?:call|apply|bind)\s*\()/.test(after)) continue; // a call, read above
+    if (/promisify\s*\(\s*$/.test(before) && /^\s*\)/.test(after)) continue;
+    if (/(?:(?<![\w.$])[\w$]+|\})\s*=(?![=>])\s*$/.test(before) || /(?:const|let|var|typeof)\s+$/.test(before) || /^\s*(?:=(?![=>])|:)/.test(after)) continue; // another name, its own declaration, a key
+    if (/(?:(?:const|let|var|import|export)\s*\{[^}]*|import\s+(?:\*\s+as\s+)?|export\s+default\s+)$/.test(before)) continue; // an import, a destructuring, an export (judged above)
+    const r = /Reflect\s*\.\s*apply\s*\(\s*$/.exec(before);
+    if (r && !spaces.has(m[0])) {
+      const args = argsOf(m.index - before.length + r.index + r[0].indexOf('('));
+      const list = args[2] && (items(args[2]) || [args[2]]);
+      if (!list || !list[0]) say(m.index, '(no program)');
+      else { const w = judge(list[0].text, list[0].at); if (w) say(m.index, w); }
+      continue;
+    }
+    say(m.index, `${m[0]} handed where its calls cannot be followed`);
+  }
   // a spec of the board's code that something starts later: every `cmd` is judged where it is written (the tests hold
-  // such specs as expectations and as texts to show)
   if (!file.startsWith('test/')) {
-    for (const m of all(/(?<=[{,]\s*)cmd\s*:\s*/g)) { const w = judge(valueAt(m.index + m[0].length).expr, m.index); if (w) say(m.index, w); }
+    const KEY = "(?:'cmd'|\"cmd\"|`cmd`)";
+    for (const m of all(new RegExp(String.raw`(?<=[{,]\s*)(?:cmd|${KEY}|\[\s*${KEY}\s*\])\s*:\s*`, 'g'))) { const w = judge(valueAt(m.index + m[0].length).expr, m.index); if (w) say(m.index, w); }
     for (const m of all(/(?<=(?:(?<!\$)\{|,)\s*)cmd(?=\s*[,}])/g)) { const w = judge('cmd', m.index); if (w) say(m.index, w); }
-    for (const m of all(/\.\s*cmd\s*=(?![=>])\s*/g)) { const w = judge(valueAt(m.index + m[0].length).expr, m.index); if (w) say(m.index, w); }
+    for (const m of all(new RegExp(String.raw`(?:\.\s*cmd|\[\s*${KEY}\s*\])\s*=(?![=>])\s*`, 'g'))) { const w = judge(valueAt(m.index + m[0].length).expr, m.index); if (w) say(m.index, w); }
   }
   return found;
 }
@@ -431,6 +654,59 @@ test('the guard follows every way to child_process: require, a promisified names
     assert.equal(hits.length, 1, `not caught: ${code} → ${JSON.stringify(hits)}`);
     assert.ok(hits[0].endsWith(`: ${name}`), `${code} → ${hits[0]}`);
   }
+});
+
+test('the guard reads defaults, scopes, patterns, quoted keys, shell lines, wrappers and the module reached another way', () => {
+  const head = "import { execFile, exec, execSync, spawn } from 'node:child_process';\nimport { bin } from '../src/bin-path.js';\n";
+  for (const [line, name] of [
+    // a default of a parameter, a parameter set again, a function expression's own name
+    ["function run(cmd = 'git', args = []) { return execFile(cmd, args); }\nrun();", 'git'],
+    ["function run(cmd) { cmd = 'git'; execFile(cmd, []); }\nrun(bin('git'));", 'git'],
+    ["const api = { go: function run(cmd) { return execFile(cmd, []); } };\napi.go('git');", 'cmd (a parameter of a function with no name to follow)'],
+    // the key of a spec in quotes, computed, set by a computed member
+    ["const spec = { 'cmd': 'git', args: [] };", 'git'], ['const spec = { "cmd": \'git\' };', 'git'],
+    ["const spec = { ['cmd']: 'git', args: [] };", 'git'], ["const spec = {};\nspec['cmd'] = 'git';", 'git'],
+    // a destructuring assignment, and a name of an inner block that is not the one used
+    ["let tool = bin('git');\n[tool] = ['git'];\nexecFile(tool, []);", 'git'],
+    ["const tool = 'git';\nfunction f() { const tool = bin('git'); return tool; }\nexecFile(tool, []);", 'git'],
+    // Reflect.apply, and a function of child_process handed on
+    ["Reflect.apply(execFile, null, ['git', []]);", 'git'], ['somewhere(execFile);', 'execFile handed where its calls cannot be followed'],
+    // shell lines: `-c` of a shell, the line of exec, `{ shell: true }`, command substitution
+    ["execFile(bin('sh'), ['-c', 'git status']);", 'git'], ["execFile('/bin/bash', ['-lc', 'cd /tmp && git status']);", 'git'],
+    ["const sh = '/bin/sh';\nexecFile(sh, ['-c', `${'git'} status`]);", 'git'],
+    ["execFile('/bin/sh', ['-c', 'echo \"$(git rev-parse HEAD)\"']);", 'git'],
+    ["exec(`${bin('git')} status && git push`);", 'git'], ["execSync('cd /tmp; npm install');", 'npm'],
+    ["spawn(`${bin('cd')} . ; git status`, { shell: true });", 'git'],
+    ["spawn(bin('git'), ['status;', 'npm', 'i'], { shell: true });", 'npm'],
+    ["const line = 'true && git fetch';\nexecFile('/bin/sh', ['-c', line]);", 'git'],
+    // the program a wrapper starts — in a shell line and as an argument
+    ["execFile('/bin/sh', ['-c', 'env FOO=1 git status']);", 'env'], ["execFile('/bin/sh', ['-c', '/usr/bin/env -i git status']);", 'git'],
+    ["execFile(bin('env'), ['FOO=1', 'git', 'status']);", 'git'], ["execFile('/usr/bin/timeout', ['5', 'git', 'fetch']);", 'git'],
+    // the module reached another way
+    ["import('node:child_process').then((m) => m.execFile('git', []));", 'child_process reached where the guard cannot follow it'],
+    ["import { createRequire } from 'node:module';\ncreateRequire(import.meta.url)('child_process').execFileSync('git');", 'child_process reached where the guard cannot follow it'],
+    ["const MOD = 'node:child_process';\nconst cp = await import(MOD);\ncp.execFile('git', []);", 'child_process reached where the guard cannot follow it'],
+    ['const cp = await import(`node:child_process`);\ncp.execFile(\'git\', []);', 'git'],
+  ]) {
+    const hits = bareStarts(head + line, 'x.js');
+    assert.equal(hits.length, 1, `not caught: ${line} → ${JSON.stringify(hits)}`);
+    assert.ok(hits[0].endsWith(`: ${name}`), `${line} → ${hits[0]}`);
+  }
+  const computed = bareStarts("import * as cp from 'node:child_process';\ncp['execFile']('git', []);", 'x.js');
+  assert.deepEqual(computed.map((h) => h.replace(/^[^ ]+ /, '')), ['cp handed where its calls cannot be followed']);
+  for (const line of [
+    "execFile('/bin/sh', ['-c', 'umask 077; exec \"$@\"', 'sh', process.execPath]);",
+    "execFile('/bin/sh', ['-c', `printf %s ${x} | ${bin('cat')} >/dev/null 2>&1`]);",
+    "execFile('/bin/sh', ['-c', 'for f in a b; do echo $f; done; ( \"$0\" show ) | true']);",
+    "exec(`${bin('git')} status && ${bin('git')} push`);", "execFile('/bin/sh', ['-c', line]);",
+    "execFile(bin('env'), ['FOO=1', bin('git'), 'status']);", "execFile(bin('git'), ['-c', 'user.name=t', 'commit']);",
+    "function f() { const tool = 'git'; return tool; }\nconst tool = bin('git');\nexecFile(tool, []);",
+    "function run(cmd = bin('git')) { execFile(cmd, []); }\nrun();", "const spec = { cmd: bin('git') };\nspec['cmd'] = bin('npm');",
+    "const re = { exec: 1 };\nconst run = execFile;\nrun(bin('git'));", "spawn(bin('git'), ['status'], { shell: false });",
+  ]) {
+    assert.deepEqual(bareStarts(head + line, 'x.js'), [], `a full path read as bare: ${line}`);
+  }
+  assert.deepEqual(bareStarts("const { execFile: run } = await import('node:child_process');\nrun(process.execPath, []);", 'x.js'), []);
 });
 
 // every program the board and its tests start goes by the full path: a bare name in execFile/spawn is the stream again

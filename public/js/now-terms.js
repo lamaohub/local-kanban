@@ -3,6 +3,7 @@ import { wholeAnswer } from './term-delta.js';
 import { $, NOW, api, esc, ic, seg, state, tr } from './core.js';
 import { IMAGE_ACCEPT, TERM_ACTIVITY, TERM_KEYS, cardTermSession, endedWords, growTermInput, openTerminalOf, rolledBy, sayRefused, setTermHint, takeTermHint, wireTermImages } from './drawer.js';
 import { resumeOnBoard } from './sse.js';
+import { otherBoardLine, termControls } from './term-owner-rules.js';
 import { popLayer, pushLayer, styledAlert, styledConfirm } from './sidebar.js';
 import { refusalLine, refusalText } from './unsaved.js';
 import { wireTermCopy } from './term-copy.js';
@@ -114,6 +115,7 @@ function termHTML() {
   const down = esc(tr('To the end of the screen'));
   return '<div class="now-col-term">'
     + `<div class="now-col-scr"><pre class="term-screen now-col-screen"></pre><button type="button" class="btn-ghost now-col-down" title="${down}" aria-label="${down}" hidden>↓</button></div>`
+    + '<div class="term-other now-col-other hidden"></div>'
     + `<div class="term-keys">${TERM_KEYS.map((k, i) => `<button type="button" class="btn-ghost term-key" data-i="${i}" title="${esc(tr(k.title))}" disabled>${esc(k.label)}</button>`).join('')}</div>`
     + `<div class="comment-form term-form"><textarea rows="1" autocomplete="off" placeholder="${esc(tr('Answer Claude…'))}" title="${esc(tr('Answer Claude… (↵ sends, ⇧↵ — new line)'))}" disabled></textarea>`
     + `<input type="file" class="hidden" accept="${IMAGE_ACCEPT}" multiple><button type="button" class="btn-ghost form-attach" disabled></button>`
@@ -158,12 +160,18 @@ function paintTerm(c, r) {
   const live = !gone && !r.dead;
   const lost = gone && Boolean(c.run?.ended?.lost);
   st.textContent = lost ? tr('Session interrupted') : gone ? tr('Not running') : r.dead ? endedWords(r) : tr(TERM_ACTIVITY[r.activity] || 'Running');
+  // a terminal another board started: one line in place of the field, the keys, the ✕ and «Continue», as in the card
+  const can = termControls(r);
   const go = c.el.querySelector('.now-col-resume');
-  if (go) go.hidden = !((r.dead && r.session) || lost);
+  if (go) go.hidden = can.other || !((r.dead && r.session) || lost);
+  c.el.querySelector('.now-col-close')?.classList.toggle('hidden', can.other);
+  c.el.querySelectorAll('.term-keys, .term-form').forEach((b) => b.classList.toggle('hidden', can.other));
+  const line = c.el.querySelector('.now-col-other');
+  if (line) { line.classList.toggle('hidden', !can.other); line.textContent = can.other ? otherBoardLine(r, tr) : ''; }
   st.title = r.dead && !gone ? endedWords(r, true) : st.textContent;
   st.classList.toggle('live', live);
   st.classList.toggle('calm', live && r.activity !== undefined && !['busy', 'background', 'own'].includes(r.activity));
-  c.el.querySelectorAll('.term-key, .term-send, .form-attach, textarea').forEach((b) => { b.disabled = !live; });
+  c.el.querySelectorAll('.term-key, .term-send, .form-attach, textarea').forEach((b) => { b.disabled = !live || can.other; });
   c.live = live;
   c.ended = !live;
   c.activity = live ? r.activity : null;

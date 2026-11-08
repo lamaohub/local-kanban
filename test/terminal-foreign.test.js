@@ -103,6 +103,15 @@ test('the card types into another board\'s Claude nowhere — not its answer, no
     assert.equal(r.statusCode, 409, `${url}: ${r.body}`);
     assert.equal(r.json().reason, 'other-board', `the chat's ${url} reached another board's Claude`);
   }
+  const { enqueue, takeQueued, setQueueDeps } = await import('../src/chat-queue.js');
+  setQueueDeps({ timer: false }); // no tick of the queue types them meanwhile
+  try {
+    const taskId = db.prepare("SELECT t.id FROM tasks t JOIN projects p ON p.id = t.project_id WHERE p.prefix || '-' || t.task_no = ?").get(keys[THEIRS_LIVE]).id;
+    const { id: itemId } = enqueue(THEIRS_LIVE, taskId, 'zzqueued');
+    const now = await inject('POST', `/api/tasks/${keys[THEIRS_LIVE]}/chat/queue/${itemId}/now`, {});
+    assert.deepEqual([now.statusCode, now.json().reason], [409, 'other-board'], `«now» of queued words reached another board's Claude: ${now.body}`);
+    assert.ok(takeQueued(THEIRS_LIVE, itemId), 'the refused «now» lost the queued words');
+  } finally { setQueueDeps(null); }
   // looking is allowed; laying its window out for this card is not
   const width = () => tmux('display-message', '-p', '-t', `=kb-${THEIRS_LIVE}:`, '#{window_width}').trim();
   const was = width();
@@ -130,6 +139,19 @@ test('«Continue» does not clear the exited pane of another board to start its 
   const ours = await inject('POST', '/api/launch', { mode: 'board', resume: OURS_DEAD, project: 'frn', keys: [keys[OURS_DEAD]] });
   assert.equal(ours.statusCode, 200, `«Continue» of this board's own exited Claude was refused: ${ours.body}`);
   assert.equal(ours.json().resumed, true);
+});
+
+test('▶ over a live Claude another board or nobody started says whose it is', { skip }, async () => {
+  const { setLookHold } = await import('../src/phantom.js');
+  setLookHold(0);
+  const theirs = await inject('POST', '/api/launch', { mode: 'board', text: 'go', project: 'frn', keys: [keys[THEIRS_LIVE]] });
+  assert.equal(theirs.statusCode, 409, theirs.body);
+  assert.deepEqual([theirs.json().reason, theirs.json().port, theirs.json().running], ['other-board', Number(THEIR_PORT), undefined],
+    `▶ over another board's live Claude: ${theirs.body}`);
+  const nobodys = await inject('POST', '/api/launch', { mode: 'board', text: 'go', project: 'frn', keys: [keys[NO_URL]] });
+  assert.deepEqual([nobodys.statusCode, nobodys.json().reason, nobodys.json().port], [409, 'other-board', null], nobodys.body);
+  assert.ok(alive(THEIRS_LIVE) && !dead(THEIRS_LIVE) && alive(NO_URL), 'a refused ▶ touched a terminal');
+  // (▶ over this board's own live Claude — «already works», `running` — is held by test/phantom.test.js)
 });
 
 // The panes here run `sleep`: no registry, nothing on the screen, so each reads as a Claude at its prompt

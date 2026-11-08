@@ -8,6 +8,32 @@ version it goes out as and opens an empty one again. Released sections are histo
 
 ## [Unreleased]
 
+## [2.0.0-beta.12]
+
+### Added
+
+- Calls from Claude, a trial (Settings → General, off by default): when a task reaches Review or Ready, Claude waits for you, or asks a question or a permission, the board rings with an incoming call. Take it, and the board reads the news aloud and listens: «accept», «later» and «hang up» it does itself; an option or yes / no answers Claude; anything else goes to Claude, and its short answer is read back — a conversation, one at a time. Speech is heard and said on this Mac only: the browser's on-device recognition (Chrome; its language pack is downloaded once) and the system's voices. A browser that cannot hear on the device is answered by typing in the call, and the call says why it cannot hear and what to do — the download of the language pack is a button right in the call.
+- A neural voice for calls, optional: a Silero model run by Python on this Mac speaks the call in a natural voice (Settings → General → Voice of the call, five Russian voices, the system's voice as before). The board does not ship the model — its licence is non-commercial — and speaks with the system's voice until it is installed; `ARCHITECTURE.md` says how. Latin words and numbers are turned into Russian words first, as the voice would drop them.
+
+### Fixed
+
+- Health no longer stands empty while it measures: a bar shows how many projects are measured of how many (and how many stands are looked at, on Stands), and the projects are measured four at a time — about 2.5 times faster.
+- Health → Stands names a stand by the project of its task key wherever that project lives, and a stand without a key by its repository — before, every stand of a repository with no project at its top was named by its first project, and the cleanup task went there. The cleanup of a repository now goes to the project of that repository that names most of the chosen stands.
+- Health → Stands shows the folder of a repository whole, wrapped, instead of cutting it with «…».
+- On a phone, the summary of Health keeps a number with its word («40 000 characters: 2» no longer breaks inside), and no line of the norms starts with «·».
+- Words typed to a handed-in task go back to Review when, during the turn, another session of the same repository remade its own commit (a deploy's cherry-pick and reset, a rebase) and the project's folder stayed the same: before, the task stayed in Doing.
+- ▶ over a live Claude another board started says the terminal is that board's, with its port, instead of «Claude of the board already works» and opening it as this board's.
+- `kb` names the tasks the person's words left in Doing even when the command itself is refused (an unknown key, a refused move).
+
+- Words waiting in a chat's queue are no longer lost while tmux does not answer whose the terminal is: they stay first in the queue and go once tmux answers, exactly once. Before, three such looks counted as three failed deliveries and the words went to the error log instead of to Claude.
+- A terminal another board started is said so before anything is pressed: the card's Terminal tab, its chat and its column in Claude now → Terminals show one line — the other board started it, on which port, and it is managed there — instead of the field, «Stop» (✕ in the column) and «Continue» that were refused only after a press. A tmux that does not say whose the terminal is keeps the field.
+- Words of the chat refused before they were typed are said as every other refusal of such a terminal — another board's with its port, a slow tmux as «try again» — not in words of their own.
+- Health → Stands no longer offers to remove a stand whose branch holds a merge with changes of its own — a fix made while merging, or a conflict resolved by hand: `git cherry` passes merges over, so such a branch read as «can go». Each merge is merged again from its parents (a branch with more than 200 merges reads as «could not tell»); a merge that only caught main up still counts as nothing to lose, and «Show what is not in main» shows a merge's own changes, not the whole of main it brought in.
+- Health → Stands no longer offers to remove a stand that holds a project of the board in a repository of its own inside it (`dist/…`, `node_modules/…`), or one reached through a link: `git worktree remove` would take the project with it.
+- Health → Stands measures against `refs/remotes/origin/main` by its full name: a local branch named `origin/main` took its place, and every stand was compared with it.
+- On a Russian board, the diff of a stand and the list of stands in the cleanup task are in Russian too (headings, «branch», «MB»).
+- The task of a cleanup also checks the merges of each branch, looks into a folder of ignored files that `git status` shows as one line, takes no proof from a commit that changes nothing, and warns that `lsof` sees only the processes of its own user.
+
 ## [2.0.0-beta.11]
 
 ### Changed

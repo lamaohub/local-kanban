@@ -7,7 +7,7 @@ import { selectProject, styledAlert, styledConfirm } from './sidebar.js';
 import { refusalLine } from './unsaved.js';
 import { openDrawer } from './drawer.js';
 import { STATUS_LABELS, launchInClaude, taskPromptText } from './sse.js';
-import { fileState, fixStage, fixable, healthCounts, healthGroups, startTotal } from './health-rules.js';
+import { fileState, fixStage, fixable, healthCounts, healthGroups, startTotal, walkBarHTML } from './health-rules.js';
 import { renderStands, stopStands } from './health-stands.js';
 import { localStore } from './store.js';
 
@@ -46,6 +46,7 @@ const opened = new Set(); // the projects whose files are unfolded — kept thro
 const num = (n) => Number(n || 0).toLocaleString(LANG === 'ru' ? 'ru-RU' : 'en-US');
 const NB = '\u00a0';
 const DOT = `${NB}· `;
+const keepNumbers = (s) => String(s).replace(/(\d) /g, `$1${NB}`);
 const size = (f) => `${num(f.lines)}${NB}${plural(f.lines, 'line', 'lines')}${DOT}${num(f.chars)}${NB}${plural(f.chars, 'character', 'characters')}`;
 
 const STATE_WORDS = {
@@ -111,7 +112,7 @@ function normsHTML(d) {
   const row = (lead, why) => `<div class="hl-norm"><span class="hl-norm-n">${lead}</span><span class="muted">${why}</span></div>`;
   return '<div class="panel hl-norms">'
     + `<div class="hl-h">${tr('The norms')}<button type="button" class="btn-ghost hl-again">${tr('Check again')}</button></div>`
-    + row(`${num(n.lines)} ${plural(n.lines, 'line', 'lines')}`, `${esc(tr('in one CLAUDE.md — the docs of Claude Code: a longer file takes more context, and Claude follows it worse'))} · <a href="${DOCS_URL}" target="_blank" rel="noopener noreferrer">${tr('the docs')}</a>`)
+    + row(`${num(n.lines)} ${plural(n.lines, 'line', 'lines')}`, `${esc(tr('in one CLAUDE.md — the docs of Claude Code: a longer file takes more context, and Claude follows it worse'))}${DOT}<a href="${DOCS_URL}" target="_blank" rel="noopener noreferrer">${tr('the docs')}</a>`)
     + row(`${num(n.file_chars)} ${plural(n.file_chars, 'character', 'characters')}`, esc(tr('in one file — from here Claude Code itself warns «Large CLAUDE.md will impact performance» (on a window of 200k; on a larger window later)')))
     + row(`${num(n.total_chars)} ${plural(n.total_chars, 'character', 'characters')}`, esc(tr('in all the instructions of a session together — «Instruction files will impact performance»')))
     + `<div class="muted hl-hint">${esc(tr('A file imported with @ loads together with the CLAUDE.md and counts too. What is needed only now and then goes into .claude/rules with paths: or into the CLAUDE.md of a subfolder — they load only when Claude works with those files.'))}</div>`
@@ -133,7 +134,7 @@ function paint(d) {
   const { own, bare, away } = healthGroups(d.projects, d.norms);
   const n = healthCounts(own, d.norms);
   const sum = own.length
-    ? `${tr('Own CLAUDE.md')}: ${own.length} · ${tr('over 200 lines')}: ${n.long} · ${tr('over 40,000 characters')}: ${n.heavy}`
+    ? [[tr('Own CLAUDE.md'), own.length], [tr('over 200 lines'), n.long], [tr('over 40,000 characters'), n.heavy]].map(([w, k]) => `${keepNumbers(w)}:${NB}${k}`).join(DOT)
     : tr('No project of the board has a CLAUDE.md of its own.');
   const mine = d.everywhere.files.length
     ? `<div class="panel hl-list"><details class="hl-proj" data-slug="__mine"${opened.has('__mine') ? ' open' : ''}><summary class="hl-row">${ic('chevron', 13)}`
@@ -196,6 +197,23 @@ async function fixProject(slug, btn) {
   renderHealth().catch(() => {});
 }
 
+const WALK_POLL_MS = 300;
+const walkBar = (done = 0, total = 0) => walkBarHTML(esc(tr('Measuring the instructions of the projects…')), done, total, 'files');
+function watchWalk(my) {
+  let stopped = false;
+  let timer = 0;
+  const tick = async () => {
+    let p;
+    try { p = await api('GET', '/api/health/progress', undefined, { quiet: true }); } catch { p = null; }
+    if (stopped || my !== seq) return;
+    const el = $('health').querySelector('.hl-walk[data-walk="files"]');
+    if (p && p.total && el) el.outerHTML = walkBar(p.done, p.total);
+    timer = setTimeout(tick, WALK_POLL_MS);
+  };
+  timer = setTimeout(tick, WALK_POLL_MS / 2);
+  return () => { stopped = true; clearTimeout(timer); };
+}
+
 let seq = 0;
 /** Draw the section; the folders are walked again only when the last answer is older than FRESH_MS, or on `force`. */
 export function repaintHealth() {
@@ -220,16 +238,24 @@ export async function renderHealth({ force = false } = {}) {
     return;
   }
   const my = ++seq;
-  if (!last || !$('health').querySelector('.hl-again')) $('health').innerHTML = `<div class="now-wrap hl-wrap">${tabsHTML()}<div class="muted">${tr('Measuring the instructions of the projects…')}</div></div>`;
+  const box = $('health');
+  // an event of the board while the walk goes keeps the bar where it is — drawn anew it would jump back to zero
+  if (!box.querySelector('.hl-walk[data-walk="files"]')) {
+    if (!last || !box.querySelector('.hl-again')) box.innerHTML = `<div class="now-wrap hl-wrap">${tabsHTML()}${walkBar()}</div>`;
+    else box.querySelector('.hl-sum')?.insertAdjacentHTML('beforebegin', walkBar()); // «Check again»: the last picture stays, the bar over it
+  }
+  const stopWatch = watchWalk(my);
   let d;
   try { [d] = await Promise.all([api('GET', '/api/health', undefined, { quiet: true }), loadFixes()]); }
   catch {
+    stopWatch();
     if (my !== seq || state.slug !== HEALTH) return;
     if (tab !== 'files') return;
     if (!last) $('health').innerHTML = `<div class="now-wrap hl-wrap">${tabsHTML()}<div class="muted">${tr('Could not measure the instructions of the projects.')}</div></div>`;
-    else { const b = $('health').querySelector('.hl-again'); if (b) b.disabled = false; }
+    else { $('health').querySelector('.hl-walk')?.remove(); const b = $('health').querySelector('.hl-again'); if (b) b.disabled = false; }
     return; // a failed reload keeps the last picture
   }
+  stopWatch();
   if (my !== seq) return;
   last = { at: Date.now(), d };
   if (state.slug !== HEALTH || tab !== 'files') return; // the person moved on; the answer waits for the next opening

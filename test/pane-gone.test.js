@@ -27,6 +27,7 @@ before(async () => {
     '  mismatch) echo "protocol version mismatch (client 8, server 7)" >&2; exit 1;;',
     // the first call finds no session, every next one is refused for good: «Continue» looks at its pane after the task's look
     `  gonethenmismatch) echo mismatch > '${said}'; echo "can't find session: =kb-x" >&2; exit 1;;`,
+    `  gonetwicethenmismatch) echo gonethenmismatch > '${said}'; echo "can't find session: =kb-x" >&2; exit 1;;`,
     '  dead) echo "1|1|120|4242|4141";;',
     '  up) echo "0||120|4242|4141";;',
     `  chain) case "$*" in *list-panes*) echo "kb-${SID}|0";; *) echo "can't find pane: kb-x" >&2; exit 1;; esac;;`,
@@ -160,8 +161,11 @@ test('a start inside the board that tmux refuses for good says what to do, and m
     assert.match(r.json().error, new RegExp(`tmux -L ${process.env.KB_TMUX_SOCKET} kill-server`), 'the refusal does not say what to do');
     assert.ok(!r.json().error.includes('protocol version'), 'tmux\'s raw words went to the page');
     assert.equal(db.prepare('SELECT status FROM tasks WHERE id = ?').get(id).status, 'todo', 'a start that did not happen moved the task');
-    // the error log says it once an hour, as a look does (the look of the test above said it already)
-    assert.ok(db.prepare("SELECT 1 FROM app_errors WHERE message LIKE 'tmux was updated%'").get(), 'the error log does not say it');
+    db.prepare("DELETE FROM app_errors WHERE message LIKE 'tmux was updated%'").run();
+    phantom.forgetBrokenSaid();
+    const again = await app.inject({ method: 'POST', url: '/api/launch', payload: { mode: 'board', text: 'Do PB-1', project: 'pb', keys: ['PB-1'] } });
+    assert.equal(again.json().reason, 'tmux-broken', again.body);
+    assert.ok(db.prepare("SELECT 1 FROM app_errors WHERE message LIKE 'tmux was updated%'").get(), 'the start refused for good wrote nothing to the error log');
   } finally { await app.close(); }
 });
 
@@ -202,4 +206,34 @@ test('a start or «Continue» inside the board over a terminal tmux refuses for 
     await app.close();
     delete process.env.KB_LAUNCH_DRYRUN;
   }
+});
+
+test('«Continue» whose start tmux refuses for good says what to do, and the error log has it', async () => {
+  const SID3 = '6a6e0000-0000-4000-8000-000000000976';
+  const folder = join(dir, 'folder-976');
+  mkdirSync(folder);
+  delete process.env.KB_LAUNCH_DRYRUN;
+  assert.ok(process.env.KB_CLAUDE_BIN?.startsWith(dir), 'the fake claude of the test above is not set — the real one must never start');
+  const { db } = await import('../src/db.js');
+  const pid = db.prepare("INSERT INTO projects (slug, prefix, name, path, next_task_no) VALUES ('pr','PR','resume',?,2)").run(folder).lastInsertRowid;
+  const id = db.prepare("INSERT INTO tasks (project_id, task_no, title, status) VALUES (?,1,'Resumed','doing')").run(pid).lastInsertRowid;
+  db.prepare('INSERT INTO task_sessions (task_id, session_id) VALUES (?, ?)').run(id, SID3);
+  sessions.markBoardSession(SID3);
+  const Fastify = (await import('fastify')).default;
+  const app = Fastify();
+  await app.register((await import('../src/routes/system.js')).default);
+  await app.ready();
+  try {
+    db.prepare("DELETE FROM app_errors WHERE message LIKE 'tmux was updated%'").run();
+    phantom.forgetBrokenSaid();
+    answer('gonetwicethenmismatch');
+    const r = await app.inject({ method: 'POST', url: '/api/launch', payload: { mode: 'board', project: 'pr', keys: ['PR-1'], resume: SID3 } });
+    assert.equal(r.statusCode, 409, `«Continue» refused for good at its start: ${r.body}`);
+    assert.equal(r.json().reason, 'tmux-broken', 'a start refused for good read as one for a few seconds');
+    assert.match(r.json().error, new RegExp(`tmux -L ${process.env.KB_TMUX_SOCKET} kill-server`), 'the refusal does not say what to do');
+    assert.ok(!r.json().error.includes('protocol version'), 'tmux\'s raw words went to the page');
+    assert.deepEqual(r.json().keys, ['PR-1']);
+    assert.ok(db.prepare("SELECT 1 FROM app_errors WHERE message LIKE 'tmux was updated%'").get(), 'the error log does not say it');
+    assert.equal(db.prepare('SELECT status FROM tasks WHERE id = ?').get(id).status, 'doing', '«Continue» moves nothing');
+  } finally { await app.close(); }
 });

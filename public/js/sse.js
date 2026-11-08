@@ -10,6 +10,7 @@ import { CHANNEL, createLink } from './live-link.js';
 import { applyLimits, loadLimits } from './limits.js';
 import { applyAutomations, loadAutomations } from './automations.js';
 import { applyAskEvent, loadAsks } from './asks.js';
+import { callHears } from './call.js';
 import { usageLine } from './usage-rules.js';
 import { KB_DEFAULT_PORT, boardOnly, checksOnly, launchPick, manualRefusal, startEffort, withBoardAddress } from './launch-rules.js';
 import { refusalLine, refusalText } from './unsaved.js';
@@ -345,6 +346,7 @@ function streamMessage(data) {
   const ownComment = ev.type === 'task.comment' && ev.data?.key === state.drawerKey;
   if (stale) { refresh().catch(() => {}); if (state.drawerKey && !ownComment) renderComments(state.drawerKey); }
   if (ev.type === 'ping') return;
+  callHears(ev);
   if (ev.type === 'sync.status') { refreshSync(); return; }
   if (ev.type === 'session.chat') { chatEvent(ev.data?.session); return; }
   if (ev.type === 'task.work') { const open = state.drawerKey && (ev.data?.keys || []).includes(state.drawerKey); if (open) refreshUsage(state.drawerKey); if (open) refreshWork(state.drawerKey); return; }

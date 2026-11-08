@@ -596,6 +596,7 @@ export default async function systemRoutes(app) {
     keys.forEach((k) => launching.add(k));
     try {
       const running = [];
+      let foreign = null;
       const unsure = []; let broken = false;
       for (const t of tasks) {
         let term = await taskTerminal(t.id);
@@ -605,8 +606,12 @@ export default async function systemRoutes(app) {
           await phantomStop(term.session);
           term = await taskTerminal(t.id);
         }
-        if (term?.unknown) { unsure.push(t.key); broken ||= Boolean(term.broken); } else if (term && !term.dead) running.push(t.key);
+        if (term?.unknown) { unsure.push(t.key); broken ||= Boolean(term.broken); } else if (term && !term.dead) {
+          running.push(t.key);
+          if (term.other && !term.other.silent) foreign ||= term.other;
+        }
       }
+      if (foreign) return reply.code(409).send({ ...otherBoardRefusal(foreign), keys: running });
       if (running.length) return reply.code(409).send({ error: `Claude of the board already works on ${running.join(', ')}`, running });
       if (unsure.length && broken) return reply.code(409).send({ ...tmuxRefusal({ broken }), keys: unsure });
       if (unsure.length) {
