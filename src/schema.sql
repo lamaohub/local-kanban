@@ -285,3 +285,34 @@ CREATE TABLE IF NOT EXISTS automations (
   plan        TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_automations_state ON automations(state);
+CREATE TABLE IF NOT EXISTS task_plans (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id     INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  version     INTEGER NOT NULL,
+  body        TEXT NOT NULL,
+  session_id  TEXT,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_plans_task ON task_plans(task_id, version);
+CREATE TABLE IF NOT EXISTS epic_batches (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  epic_id     INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  title       TEXT NOT NULL DEFAULT '',
+  position    REAL NOT NULL DEFAULT 0,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_batches_epic ON epic_batches(epic_id, position);
+CREATE TABLE IF NOT EXISTS batch_tasks (
+  task_id     INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+  batch_id    INTEGER NOT NULL REFERENCES epic_batches(id) ON DELETE CASCADE,
+  position    REAL NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_batch_tasks_batch ON batch_tasks(batch_id, position);
+CREATE TABLE IF NOT EXISTS epics (
+  task_id      INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+  portion      INTEGER NOT NULL DEFAULT 3,
+  auto_next    INTEGER NOT NULL DEFAULT 0,
+  moved_event  INTEGER,
+  run          TEXT NOT NULL DEFAULT '{}',
+  launch       TEXT NOT NULL DEFAULT '{}'
+);

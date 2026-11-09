@@ -644,6 +644,7 @@ button.ask-opt:disabled { opacity: .6; cursor: default; }
 .card-ship { font-size: 11px; color: var(--muted); white-space: nowrap; }
 .card-ship.ship-branch { color: var(--accent); }
 .card-pr { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.card-epic { font-size: 11px; color: var(--muted); white-space: nowrap; }
 .card-attach { font-size: 11px; color: var(--muted); }
 .card-title-empty { color: var(--muted); font-style: italic; font-weight: 400; }
 .row-untitled { color: var(--muted); font-style: italic; }
@@ -2877,6 +2878,50 @@ a.hl-name:hover { color: var(--accent); }
 .branch-conflict > .ic { color: var(--accent); }
 .branch-conflict > span { overflow-wrap: anywhere; min-width: 0; }
 .branch-note:empty { display: none; }
+.epic-row { display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; }
+.epic-plan { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-width: 0; }
+.epic-plan > .ic { color: var(--muted); }
+.epic-plan-l { font-weight: 500; }
+.doc-head { flex-wrap: wrap; }
+.doc-tools { display: flex; align-items: center; gap: 4px 6px; flex-wrap: wrap; margin-left: auto; font-size: 12.5px; }
+.doc-tools .btn-icon:disabled { opacity: .35; cursor: default; }
+.doc-ver { white-space: nowrap; }
+.doc-dl { text-decoration: none; display: inline-flex; align-items: center; gap: 4px; }
+.epic-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-width: 0; }
+.epic-set { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; margin-left: auto; }
+.epic-set .btn-icon { width: 22px; height: 22px; }
+.epic-portion { min-width: 1.2em; text-align: center; font-variant-numeric: tabular-nums; }
+.epic-auto { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); cursor: pointer; }
+.epic-batches { display: flex; flex-direction: column; gap: 8px; }
+.eb { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); overflow: hidden; }
+.eb.eb-closed { opacity: .72; }
+.eb.eb-over { border-color: var(--accent); }
+.eb.eb-before { box-shadow: 0 -2px 0 var(--accent); }
+.eb.eb-after { box-shadow: 0 2px 0 var(--accent); }
+.eb-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 6px 8px 6px 10px; background: var(--hover); cursor: grab; }
+.eb-n { font-weight: 600; white-space: nowrap; }
+.eb-title { font: inherit; color: var(--text); background: none; border: none; padding: 0; cursor: text; min-width: 0; overflow-wrap: anywhere; text-align: left; }
+.eb-title:hover { color: var(--accent); }
+.eb-prog { white-space: nowrap; }
+.eb-tools { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+.eb-tools .link-chip { display: inline-flex; align-items: center; gap: 4px; }
+.eb-del { width: 22px; height: 22px; color: var(--muted); }
+.eb-run { padding: 4px 10px 0; color: var(--muted); overflow-wrap: anywhere; }
+.eb-run-bad { color: var(--accent); }
+.epic-row > .eb-run { padding: 0; }
+.eb-tasks { display: flex; flex-direction: column; padding: 4px 4px 6px; min-height: 26px; }
+.eb-task { display: flex; align-items: center; gap: 7px; padding: 4px 6px; border-radius: 6px; cursor: pointer; min-width: 0; }
+.eb-task:hover { background: var(--hover); }
+.eb-task.eb-before { box-shadow: 0 -2px 0 var(--accent); }
+.eb-task.eb-dragging { opacity: .4; }
+.eb-task .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+.eb-key { flex: none; font-family: var(--mono, ui-monospace, monospace); color: var(--muted); }
+.eb-t { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.eb-empty { padding: 4px 6px; }
+.epic-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.eb-loose { display: flex; flex-direction: column; width: 100%; border: 1px dashed var(--border); border-radius: 10px; padding: 4px; }
+.eb-loose.eb-loose-empty { display: none; }
+.eb-loose.eb-over { border-color: var(--accent); }
 .changes { display: flex; flex-direction: column; gap: 10px; font-size: 12.5px; }
 .ch-head { font-size: 12.5px; }
 .ch-commit { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); overflow: hidden; }

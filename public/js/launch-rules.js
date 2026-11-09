@@ -17,7 +17,7 @@ export function waitsForCheck(t, all) {
   return Boolean(lead) && lead.id !== t.id;
 }
 
-export const forClaude = (tasks, all = tasks) => tasks.filter((t) => !isManual(t) && !waitsForCheck(t, all));
+export const forClaude = (tasks, all = tasks) => tasks.filter((t) => !isManual(t) && !t.epic && !waitsForCheck(t, all));
 
 export const checksOnly = (keys = [], tasks = []) => keys.length > 0 && keys.every((k) => isCheck(tasks.find((t) => t.key === k)));
 

@@ -247,3 +247,14 @@ test('the release script leaves npm to CI and says how to check it', (t) => {
   assert.match(yml, /tags: \['v\*'\]/);
   assert.match(yml, /npm publish/);
 });
+
+// The command kb-mcp came into package.json without its line in the lockfile: `npm ls --package-lock-only` (the release
+// check) compares dependencies only, and every `npm install` on a copy of the board wrote the line in — the personal
+// board's `git pull` then refused its own lockfile. The root package of the lockfile is the package.json it was made from.
+test('the lockfile knows the package as package.json declares it: its name, version and commands', () => {
+  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
+  const lock = JSON.parse(readFileSync(join(ROOT, 'package-lock.json'), 'utf8'));
+  const root = lock.packages?.[''] || {};
+  assert.deepEqual([root.name, root.version, lock.version], [pkg.name, pkg.version, pkg.version], 'the lockfile names another package — run npm install');
+  assert.deepEqual(root.bin || {}, pkg.bin || {}, 'the commands of package.json are not in the lockfile — run npm install --package-lock-only');
+});

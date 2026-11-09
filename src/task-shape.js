@@ -1,4 +1,5 @@
 import { db } from './db.js';
+import { epicSummary } from './epics.js';
 
 /** SQL: a task is (or, `only` false, is not) one the person does by hand. `alias` — the table's prefix ('t.'). */
 export const noclaudeFilter = (alias = '', only = false) => `${alias}labels ${only ? '' : 'NOT '}LIKE '%"noclaude"%'`;
@@ -8,6 +9,9 @@ export function isManual(labels) {
   if (typeof list === 'string') { try { list = JSON.parse(list || '[]'); } catch { list = []; } }
   return Array.isArray(list) && list.includes('noclaude');
 }
+
+/** SQL: the task (or, `only`, not) is no epic. `id` — the column of the task's id ('t.id'). */
+export const notEpic = (id = 't.id', only = false) => `${only ? '' : 'NOT '}EXISTS (SELECT 1 FROM epic_batches eb WHERE eb.epic_id = ${id})`;
 
 export function listShape(t) {
   return {
@@ -25,6 +29,7 @@ export function listShape(t) {
     work_truncated: t.work_truncated || 0,
     updated_at: t.updated_at,
     pr: t.pr_url ? { number: t.pr_number ?? null, state: t.pr_state, url: t.pr_url } : null,
+    epic: t.epic ?? null,
   };
 }
 
@@ -44,5 +49,5 @@ export function taskEvent(id) {
       r.number AS pr_number, r.state AS pr_state, r.url AS pr_url
     FROM tasks t JOIN projects p ON p.id = t.project_id LEFT JOIN task_prs r ON r.task_id = t.id WHERE t.id = ?
   `).get(id);
-  return row ? listShape(row) : null;
+  return row ? listShape({ ...row, epic: epicSummary(id) }) : null;
 }

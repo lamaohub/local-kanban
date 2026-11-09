@@ -52,7 +52,9 @@ const OWNER_ONLY = [/^\/api\/claude\/hooks/, /^\/api\/update/, /^\/api\/fs\/pick
   /^\/api\/projects\/(clone|server-git|ssh-check)/, /^\/api\/projects\/[^/]+\/docs/, /^\/api\/sync\/config/, /^\/api\/share/, /^\/api\/flow/,
   /^\/api\/tasks\/[^/]+\/chat\/run/, // the chat's command opens a Terminal window on the owner's screen
   /^\/api\/import\//,
-  /^\/api\/profiles/, /^\/api\/tasks\/[^/]+\/profile$/];
+  /^\/api\/profiles/, /^\/api\/tasks\/[^/]+\/profile$/,
+  /^\/api\/tasks\/[^/]+\/plan$/,
+  /^\/api\/tasks\/[^/]+\/batches\/[^/]+\/(run|stop)$/];
 export const ownerOnly = (method, path) => OWNER_READ.some((r) => r.test(path))
   || (method !== 'GET' && method !== 'HEAD' && OWNER_ONLY.some((r) => r.test(path)));
 const NOT_A_GUEST = 'this stays with the owner of the board';

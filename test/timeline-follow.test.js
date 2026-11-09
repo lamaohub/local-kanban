@@ -28,7 +28,7 @@ function card(status = 'todo') {
       return { key: 'VV-1', labels: [], description: '', ...box.server };
     },
     renderTimeline: (t) => { calls.drawn.push((t.events || []).map((e) => e.status)); },
-    refreshDrawerFields: async () => {}, renderIssueRow: () => {}, renderBranchRow: () => {}, buildStatusSelect: () => {}, renderLaunchButtons: () => {},
+    refreshDrawerFields: async () => {}, renderIssueRow: () => {}, renderBranchRow: () => {}, renderEpic: () => {}, buildStatusSelect: () => {}, renderLaunchButtons: () => {},
     setDrawerLock: () => {}, doAutosave: async () => {}, styledAlert: () => {}, closeDrawer: () => {},
     selVal: () => box.state.tasks[0]?.status,
   };

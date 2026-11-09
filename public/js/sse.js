@@ -19,6 +19,7 @@ import { setTerminalQuestions } from './attention.js';
 import { typeset } from './typeset.js';
 import { chatEvent } from './chat.js';
 import { applyShare, loadShare } from './share.js';
+import { applyEpicEvent, applyPlanEvent } from './epic.js';
 
 export async function refreshSync() {
   try {
@@ -355,6 +356,8 @@ function streamMessage(data) {
   if (ev.type === 'limits.updated') { applyLimits(ev.data); return; }
   if (ev.type === 'share.updated') { applyShare(ev.data); return; }
   if (ev.type === 'automation.updated') { applyAutomations(ev.data); return; }
+  if (ev.type === 'task.plan') { applyPlanEvent(ev.data); return; }
+  if (ev.type === 'task.epic') { applyEpicEvent(ev.data); return; }
   if (ev.type === 'ask.created' || ev.type === 'ask.removed') { applyAskEvent(ev); repaintHealth(); return; }
   if (ev.type === 'task.comment') commentArrived(ev.data.key, ev.data.comment, ev.data.comments_n);
   maybeReviewSound(ev);
@@ -424,7 +427,7 @@ const fmtDay = (ymd) => {
 };
 export const usageFmt = { num: fmtNum, tr, plural, esc, date: fmtDay, gap: LANG === 'ru' ? ' ' : '' };
 
-function fmtDate(iso) {
+export function fmtDate(iso) {
   if (!iso) return '';
   const d = new Date(iso + 'Z');
   const hh = String(d.getHours()).padStart(2, '0');

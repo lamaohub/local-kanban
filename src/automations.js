@@ -12,6 +12,7 @@ import { EFFORT_LEVELS } from './launch.js';
 import { ADOPT_TOKEN } from './claude-sessions.js';
 import { RESUME_LAUNCH, RESUME_SWITCH, boardNote, tickResume } from './auto-resume.js';
 import { HEALTH_SWITCH, healthSoon, tickHealth } from './auto-health.js';
+import { notEpic } from './task-shape.js';
 
 export const SWITCH_KEY = 'automations.on';
 export const QUEUE_KIND = 'todo-queue';
@@ -379,7 +380,7 @@ export async function awaySummary(since, runs) {
 }
 
 export function queueBatch(tasks, keep = new Set()) {
-  return tasks.filter((t) => t.status === 'todo' && !t.blocked && !isCheck(t) && !t.labels.includes('noclaude') && !t.labels.includes('ask') && !keep.has(t.id))
+  return tasks.filter((t) => t.status === 'todo' && !t.blocked && !t.epic && !isCheck(t) && !t.labels.includes('noclaude') && !t.labels.includes('ask') && !keep.has(t.id))
     .sort((a, b) => (b.pinned || 0) - (a.pinned || 0) || (b.priority || 0) - (a.priority || 0) || (a.position || 0) - (b.position || 0) || a.id - b.id)
     .slice(0, QUEUE_BATCH).map((t) => t.key);
 }
@@ -412,21 +413,24 @@ function givenUp(projectId) {
   }
   return out;
 }
+export async function launchOnBoard(app, payload, keys) {
+  const go = (k) => app.inject({ method: 'POST', url: '/api/launch', headers: own, payload: payload(k) });
+  let res = await go(keys);
+  const held = res.statusCode === 409 ? res.json().running : null;
+  const free = Array.isArray(held) && Array.isArray(keys) ? keys.filter((k) => !held.includes(k)) : [];
+  if (free.length) { res = await go(free); keys = free; }
+  return { res, keys };
+}
 async function startBatch(app, rule, slug, keys, text, now, extra = {}) {
   if (!stillArmed(rule.id) || !automationsOn()) return false; // taken off while the look went on: nothing starts
-  const go = (k) => app.inject({ method: 'POST', url: '/api/launch', headers: own, payload: { mode: 'board', text: typeof text === 'function' ? text(k) : text, project: slug, keys: k, ...extra, ...JSON.parse(rule.launch || '{}') } });
-  let res = await go(keys);
-  // a task a live Claude still holds (it stands at its prompt, the check that returned it) does not hold the free ones
-  const held = res.statusCode === 409 ? res.json().running : null;
-  const free = Array.isArray(held) ? keys.filter((k) => !held.includes(k)) : [];
-  if (free.length) res = await go(free);
+  const { res } = await launchOnBoard(app, (k) => ({ mode: 'board', text: typeof text === 'function' ? text(k) : text, project: slug, keys: k, ...extra, ...JSON.parse(rule.launch || '{}') }), keys);
   if (res.statusCode < 300) { waitAgain(rule, rule.task_id, now, true); return true; }
   fixWait.set(rule.id, now + FIX_RETRY_MS);
   waitAgain(rule, rule.task_id, now, false, refusal(res, res.json()));
   return false;
 }
 async function tickQueue(app, rule, ctx, now) {
-  const tasks = db.prepare('SELECT id, pinned, priority, position FROM tasks WHERE project_id = ?').all(rule.project_id);
+  const tasks = db.prepare(`SELECT id, pinned, priority, position, ${notEpic('tasks.id', true)} AS epic FROM tasks WHERE project_id = ?`).all(rule.project_id);
   const more = new Map(tasks.map((t) => [t.id, t]));
   const full = ctx.tasks.map((t) => ({ ...t, ...more.get(t.id) }));
   let j = queueJudge({ ...ctx, over: overLimit(now), batch: queueBatch(full, givenUp(rule.project_id)) });

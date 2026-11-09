@@ -135,7 +135,7 @@ test('an answer long by design is timed but makes no minute slow; unknown addres
   for (const k of W.WAITS) assert.ok(!W.HELD_OPEN.has(k));
   // the routes named are the board's own templates
   const { readFileSync } = await import('node:fs');
-  const src = ['health', 'system', 'chat', 'branch'].map((f) => readFileSync(new URL(`../src/routes/${f}.js`, import.meta.url), 'utf8')).join('\n');
+  const src = ['health', 'system', 'chat', 'branch', 'voice'].map((f) => readFileSync(new URL(`../src/routes/${f}.js`, import.meta.url), 'utf8')).join('\n');
   for (const k of W.WAITS) {
     const [method, url] = k.split(' ');
     assert.ok(src.includes(`app.${method.toLowerCase()}('${url}'`), `no route ${k}`);

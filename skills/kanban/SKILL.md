@@ -64,6 +64,12 @@ kb check <key> <n>            # tick checklist item n (from 1, in the order show
 kb link <key> <key> [child|parent]   # link two tasks (the board draws a line); `child` makes the
                               # second task a sub-task of the first, `parent` its parent, no word
                               # = plain related · kb unlink to unlink
+kb plan <key> [<file>|-]      # an epic's plan on the board: no file — print the current one; a file (or -
+                              # for stdin) — keep it as the next version (--versions lists them,
+                              # --version N prints an earlier one); kb show carries one "plan:" line
+kb add <proj> "title" --epic <key> --batch <n|"title">   # a sub-task straight into a batch of an epic
+                              # (a title not there makes the batch at the end)
+kb batch <key> <n|"title"|-> [--epic <key>]   # move a sub-task to another batch of its epic, - = none
 kb block <key> "why" · kb unblock <key>
 kb info <proj>                # path, deploy_skill, server, pm2, domain, the project's description
                               # (the owner's context for work — read it) and "docs: CLAUDE.md,
@@ -229,6 +235,12 @@ One line of summary at the end.
   link them with `kb link`. `kb show`/`kb take` print a task's links as `↑ parent KEY title
   (status)`, `↓ subtask …`, `↔ related …` — look at them before you start: a linked task in To do
   is usually meant to go together with this one, and a parent explains why the task exists.
+- **A plan for a big task** (an epic) → write it as a markdown file and keep it on the board with `kb plan <key>
+  <file>`, never as notes on the card: each write is a version, the person opens it from the card. In the card one
+  line at most — "plan v3 on the board". Its stages become the epic's batches: create the sub-tasks with
+  `kb add <proj> "…" --epic <key> --batch "Stage 1 …"`; the person starts each batch from the epic's card, in portions.
+  `kb show <epic>` prints the batches; the epic itself is never `kb take`n — it moves to Review by itself once every
+  task of its batches is accepted. Questions about the plan go to the chat, not into the plan.
 - **A discussion or question task** (no code): study it in `prep`, put the full answer in
   `kb note <key> "..."`, then `kb mv <key> review`. **With the `ask` label it goes back to `todo`
   instead** (see above): there the discussion is a step before the work, not the work itself. You

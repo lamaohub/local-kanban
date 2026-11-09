@@ -5,6 +5,7 @@ import { markKbCursor, openCardMenu, openDrawer, openDrawerNew, openMovePicker, 
 import { columnComparator, DEFAULT_SORT, dropPatch, orderColumn, slotBefore, sortMode } from './order.js';
 import { inSearch } from './live-rules.js';
 import { forClaude, isManual } from './launch-rules.js';
+import { epicBadge } from './epic-rules.js';
 import { hasAsk } from './asks.js';
 import { getSetting, plural } from './settings.js';
 import { NARROW, popLayer, pushLayer, styledAlert, styledConfirm } from './sidebar.js';
@@ -858,6 +859,7 @@ function cardParts(t) {
       ${workTimer(t)}
       ${ship ? `<span class="card-ship ship-${ship}" title="${esc(tr(SHIP_TITLES[ship]))}">${tr(SHIP_WORDS[ship])}</span>` : ''}
       ${pr ? `<span class="card-pr pr-${pr.state}" title="${esc(tr('Pull request'))}${prNo}: ${esc(tr(pr.state))}">PR${prNo}${pr.state === 'open' ? '' : ` · ${esc(tr(pr.state))}`}</span>` : ''}
+      ${t.epic ? `<span class="card-epic" title="${esc(tr('Epic: the batches accepted and the tasks closed'))}">${esc(epicBadge(t.epic, tr))}</span>` : ''}
       ${stale ? `<span class="chip-stale" title="${tr('no movement — the chat is probably closed')}">${tr('stuck')} ${stale}${tr('h')}</span>` : ''}
       ${pri ? `<span class="pri ${pri[1]}" title="${esc(tr('priority:'))} ${pri[2]}">${pri[0]}</span>` : ''}
       ${t.labels.map(labelChip).join('')}

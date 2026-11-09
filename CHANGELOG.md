@@ -8,6 +8,18 @@ version it goes out as and opens an empty one again. Released sections are histo
 
 ## [Unreleased]
 
+## [2.0.0-beta.15]
+
+### Added
+
+- An epic's plan lives on the board: `kb plan <key> <file>` keeps a markdown plan in the board's database as a new version, the card shows «Plan · vN» and opens it in a window — headings, tables and lists drawn, earlier versions one click away, «Download .md» for the file. The plan is never copied into the description or the notes; `kb show` carries one line of it.
+- Epics with batches: a card's sub-tasks laid out in batches, dragged between and within them, each batch with its progress. «Start the batch» runs it inside the board in portions of N tasks — the next portion once the last is out of work; the next batch starts by itself only after the last one is accepted, if the epic asks for it and Automations are on, and two batches of one epic run at once only by hand, after a question. The board moves the epic itself: to Review once every task is accepted. `kb add … --epic <key> --batch <n|title>`, `kb batch`, and `kb show` prints the batches; `kb take` and the queue never take the epic itself.
+
+### Fixed
+
+- `npm install` in a clone of the board no longer changes `package-lock.json` (the command `kb-mcp` was missing from it), so the next `git pull` of an update is not refused.
+- The voice of the call (warming the model, speaking) no longer writes the board down as slow.
+
 ## [2.0.0-beta.14]
 
 ### Fixed

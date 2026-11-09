@@ -3,7 +3,7 @@
 // Tasks are addressed by key (TIC-3) or by global id. One line of output per action.
 
 import { parsePm2Services } from '../src/pm2-services.js';
-import { closeSync, writeSync } from 'node:fs';
+import { closeSync, readFileSync, writeSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { memoryText, moneyText, tokensText } from '../public/js/usage-rules.js';
 import { HOOK_WAIT_MS } from '../src/claude-hooks.js';
@@ -65,6 +65,8 @@ const TAKEN = ['a taken task', (d) => isObj(d) && Number.isInteger(d.blocked_n) 
 const SYNC = ['the sync state', (d) => isObj(d) && (d.configured === false || (Number.isInteger(d.pending) && Array.isArray(d.failed)))];
 const OK = ['a confirmation', (d) => isObj(d) && d.ok === true];
 const NOTHING = ['an empty answer', (d) => d === null];
+const EPIC = ['an epic', (d) => isObj(d) && Array.isArray(d.batches)];
+const PLAN = ['a plan', (d) => isObj(d) && Number.isInteger(d.version) && (typeof d.body === 'string' || typeof d.changed === 'boolean')];
 
 // fetch resolves `..` in a path: `kb note '../backups?' x` posted to /api/backups (a database
 // snapshot), `kb unlink '../errors?' x` cleared the error log, `kb desc '../projects/<slug>?' …`
@@ -194,14 +196,32 @@ function printIssue(t) {
   if (t.worktree) console.log(`worktree: ${t.worktree.path} (branch ${t.worktree.branch}) — work and commit there, not in the main checkout`);
   if (t.pr) console.log(`pr: ${t.pr.url} (${String(t.pr.state || '').toLowerCase()})`);
   if (t.profile_name) console.log(`profile: ${t.profile_name}${t.profile == null ? " (the project's)" : ''}`);
+  if (t.plan) console.log(`plan: v${t.plan.version}, ${when({ created_at: t.plan.at }).slice(1, -2)}, ${t.plan.size} characters — kb plan ${t.key} prints it`);
+  printEpic(t);
+}
+
+// sub-task says which batch of which epic it lies in
+const batchName = (b) => `batch ${b.n}${b.title ? ` «${b.title}»` : ''}`;
+function printEpic(t) {
+  if (t.batch) console.log(`in ${batchName(t.batch)} of ${t.batch.batches_n} of the epic ${t.batch.epic}`);
+  const e = t.epic;
+  if (!e || !Array.isArray(e.batches)) return;
+  const now = e.current ? `batch ${e.current} of ${e.batches_n}` : `all ${e.batches_n} batches through`;
+  console.log(`epic: ${now}, ${e.closed_n} of ${e.tasks_n} tasks closed, portions of ${e.portion}${e.auto_next ? ', the next batch starts by itself once the last is accepted' : ''}`);
+  for (const b of e.batches) {
+    const closed = b.counts.done + b.counts.cancelled;
+    console.log(`${batchName(b)} (${closed}/${b.counts.total} closed): ${b.tasks.map((x) => `${x.key} ${x.status}`).join(', ') || '—'}`);
+  }
+  if (e.loose?.length) console.log(`in no batch: ${e.loose.map((x) => `${x.key} ${x.status}`).join(', ')}`);
 }
 
 // sees cards in the column, and a bare "empty" made Claude report that there was nothing there.
 // so Claude can name them instead of reporting an empty column.
-function emptyLine(blocked, byHand = []) {
+function emptyLine(blocked, byHand = [], epics = []) {
   const parts = [];
   if (blocked) parts.push(`${blocked} blocked`);
   if (byHand.length) parts.push(`${byHand.length} by hand: ${byHand.join(' ')}`);
+  if (epics.length) parts.push(`${epics.length} epic${epics.length === 1 ? '' : 's'}: ${epics.join(' ')} — its batches start from the card`);
   return parts.length ? `empty (${parts.join(', ')})` : 'empty';
 }
 
@@ -468,10 +488,13 @@ const commands = {
     if (!proj) die('kb next <project>');
     const ts = await api('GET', `/api/tasks?${new URLSearchParams({ project: proj, status: 'todo' })}`, null, LIST);
     // a task the human does by hand (noclaude) is never the next one for Claude: take skips it too
-    const mine = ts.filter((t) => !(Array.isArray(t.labels) && t.labels.includes('noclaude')));
+    const manual = (t) => Array.isArray(t.labels) && t.labels.includes('noclaude');
+    const mine = ts.filter((t) => !manual(t) && !t.epic);
     const free = mine.filter((t) => !t.blocked).sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
-    const byHand = ts.filter((t) => !mine.includes(t)).sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0)).map((t) => t.key);
-    console.log(free.length ? taskLine(free[0]) : emptyLine(mine.length - free.length, byHand));
+    const pinFirst = (a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0);
+    const byHand = ts.filter(manual).sort(pinFirst).map((t) => t.key);
+    const epics = ts.filter((t) => !manual(t) && t.epic).sort(pinFirst).map((t) => t.key);
+    console.log(free.length ? taskLine(free[0]) : emptyLine(mine.length - free.length, byHand, epics));
   },
 
   // take the next task and put it straight into prep (study before code); prints what the human
@@ -481,8 +504,9 @@ const commands = {
   async take() {
     const [proj] = args;
     if (!proj) die('kb take <project>');
-    const { task: t, blocked_n: blocked, by_hand: byHand } = await api('POST', '/api/tasks/take', { project: proj }, TAKEN);
-    if (!t) return console.log(emptyLine(blocked, Array.isArray(byHand) ? byHand.filter((k) => typeof k === 'string') : []));
+    const { task: t, blocked_n: blocked, by_hand: byHand, epics } = await api('POST', '/api/tasks/take', { project: proj }, TAKEN);
+    const keysOf = (v) => (Array.isArray(v) ? v.filter((k) => typeof k === 'string') : []);
+    if (!t) return console.log(emptyLine(blocked, keysOf(byHand), keysOf(epics)));
     console.log(taskLine(t));
     if (t.description) console.log(t.description);
     printChecklist(t);
@@ -545,10 +569,16 @@ const commands = {
 
   async add() {
     const flagVals = new Set();
-    ['-d', '-p', '-s'].forEach((f) => { const i = args.indexOf(f); if (i >= 0) flagVals.add(i + 1); });
+    ['-d', '-p', '-s', '--epic', '--batch'].forEach((f) => { const i = args.indexOf(f); if (i >= 0) flagVals.add(i + 1); });
     const pos = args.filter((a, i) => !a.startsWith('-') && !flagVals.has(i));
     const [proj, title] = pos;
-    if (!proj || !title) die('kb add <project> "title" [-d "description"] [-p high|med|low] [-s todo]');
+    if (!proj || !title) die('kb add <project> "title" [-d "description"] [-p high|med|low] [-s todo] [--epic <key> --batch <n|"title">]');
+    const ei = args.indexOf('--epic');
+    const bi = args.indexOf('--batch');
+    const epicKey = ei >= 0 ? key(args[ei + 1] || '') : null;
+    const batchWord = bi >= 0 ? args[bi + 1] : null;
+    if ((ei >= 0) !== (bi >= 0) || (bi >= 0 && !String(batchWord || '').trim())) die('kb add … --epic <key> --batch <n|"title">  (both together)');
+    if (epicKey) await api('GET', `/api/tasks/${epicKey}`, null, TASK); // the epic first: no task is made for an epic that is not there
     const di = args.indexOf('-d');
     const pi = args.indexOf('-p');
     const si = args.indexOf('-s');
@@ -564,7 +594,12 @@ const commands = {
       if (!body.status) die('kb: status backlog|todo|prep|doing|ready|deploy|review|done');
     }
     const t = await api('POST', '/api/tasks', body, TASK);
-    console.log(`${t.key} ${t.status} ${t.project}`);
+    console.log(`${t.key} ${t.status} ${t.project}`); // the key first, whatever the batch says: the task is made
+    if (epicKey) {
+      const v = await api('POST', `/api/tasks/${epicKey}/epic/place`, { key: t.key, batch_name: batchWord }, EPIC);
+      const b = v.batches.find((x) => x.tasks.some((y) => y.key === t.key));
+      console.log(`→ ${v.key} ${b ? batchName(b) : ''}`.trimEnd());
+    }
     for (const w of TYPED_BACK) process.stderr.write(`kb: if ${t.key} is what the person's words on ${w.key} asked for, link them: kb link ${w.key} ${t.key}\n`);
   },
 
@@ -654,6 +689,53 @@ const commands = {
     if (!id || !other || !Object.hasOwn(REL, rel)) die('kb link <key> <key> [child|parent|related]  (child: the second task becomes a sub-task of the first)');
     const links = await api('POST', `/api/tasks/${key(id)}/links`, { key: other, rel }, LIST);
     console.log(linksLine(id, links));
+  },
+
+  // stdin) writes a new version from the file, `--versions` lists them, `--version N` prints an earlier one.
+  async plan() {
+    const usage = 'kb plan <key> [<file>|-] [--versions] [--version N]  (no file: print the plan; a file: write it as the new version)';
+    const vi = args.indexOf('--version');
+    const n = vi >= 0 ? args[vi + 1] : null;
+    if (vi >= 0 && !/^\d+$/.test(n || '')) die(usage);
+    const pos = args.filter((a, i) => !a.startsWith('--') && (vi < 0 || i !== vi + 1));
+    const [id, file] = pos;
+    if (!id || pos.length > 2 || (file && (vi >= 0 || args.includes('--versions')))) die(usage);
+    const k = key(id);
+    if (file) {
+      let body;
+      try { body = file === '-' ? readFileSync(0, 'utf8') : readFileSync(file, 'utf8'); }
+      catch (e) { die(`kb: cannot read ${file} — ${e.code || e.message}`); }
+      const r = await api('PUT', `/api/tasks/${k}/plan`, { body }, PLAN);
+      return console.log(`${r.key || id} plan v${r.version}${r.changed ? '' : ' (unchanged)'}`);
+    }
+    const p = await api('GET', `/api/tasks/${k}/plan${n ? `?version=${n}` : ''}`, null, PLAN);
+    if (args.includes('--versions')) {
+      for (const v of p.versions || []) console.log(`v${v.version} ${when(v).slice(1, -2)} ${v.size} characters${v.version === p.current ? ' (current)' : ''}`);
+      return;
+    }
+    if (n && p.version !== p.current) process.stderr.write(`kb: ${p.key} plan v${p.version} — an earlier version; the current one is v${p.current}\n`);
+    process.stdout.write(p.body.endsWith('\n') ? p.body : p.body + '\n');
+  },
+
+  // the batch at the end), `-` — out of the batches (it stays a sub-task); --epic names the epic of a task in none yet
+  async batch() {
+    const usage = 'kb batch <key> <n|"title"|-> [--epic <key>]  (- takes it out of the batches)';
+    const ei = args.indexOf('--epic');
+    const pos = args.filter((a, i) => (ei < 0 || (i !== ei && i !== ei + 1)));
+    const [id, word] = pos;
+    if (!id || word === undefined || pos.length > 2 || (ei >= 0 && !args[ei + 1]) || !String(word).trim()) die(usage);
+    const k = key(id);
+    let epicKey = ei >= 0 ? key(args[ei + 1]) : null;
+    if (!epicKey) {
+      const t = await api('GET', `/api/tasks/${k}`, null, TASK);
+      epicKey = t.batch?.epic || null;
+      if (!epicKey) die(`kb: ${t.key} lies in no batch — name its epic: kb batch ${t.key} ${word} --epic <key>`);
+      epicKey = key(epicKey);
+    }
+    const body = word === '-' ? { key: id, batch: null } : { key: id, batch_name: word };
+    const v = await api('POST', `/api/tasks/${epicKey}/epic/place`, body, EPIC);
+    const b = v.batches.find((x) => x.tasks.some((y) => y.key.toLowerCase() === String(id).toLowerCase()));
+    console.log(`${id} ${b ? `${batchName(b)} of ${v.key}` : `in no batch of ${v.key}`}`);
   },
 
   async unlink() {
@@ -759,7 +841,7 @@ const commands = {
 // `__proto__` — they come from the prototype — and `kb constructor` exited with 1 ("the board is not
 // responding") and a raw stack.
 if (!cmd || !Object.hasOwn(commands, cmd)) {
-  die('kb p|ls|next|take|show|add|mv|review|done|cancel|pri|lbl|desc|note|link|unlink|check|uncheck|block|unblock|rm|info|svc|sync|retry|statusline|hook');
+  die('kb p|ls|next|take|show|add|mv|review|done|cancel|pri|lbl|desc|note|plan|batch|link|unlink|check|uncheck|block|unblock|rm|info|svc|sync|retry|statusline|hook');
 }
 commands[cmd]().catch((e) => {
   // die() inside a command already exited the process — only real exceptions reach here.

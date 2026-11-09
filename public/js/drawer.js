@@ -21,6 +21,7 @@ import { renderChanges } from './changes.js';
 import { buildProfileSelect, profiles } from './profiles.js';
 import { WORDS_SAID, prButtonShown, prStateWord, sendWords } from './branch-rules.js';
 import { paintPick } from './pick.js';
+import { renderEpic } from './epic.js';
 
 /* ── Drawer ── */
 let drawerLabels = [];
@@ -1393,10 +1394,11 @@ export function openLightbox(url) {
   img.onerror = () => { img.replaceWith(Object.assign(document.createElement('div'), { className: 'lightbox-none', textContent: tr('The picture could not be opened') })); };
   overlay.onclick = popUp(overlay, img);
 }
-export function openDoc(name, read, refused) {
+export function openDoc(name, read, refused, { tools = '', wire = null } = {}) {
   const overlay = document.createElement('div');
   overlay.className = 'lightbox doc-over';
   overlay.innerHTML = `<div class="doc-box" role="dialog" aria-label="${esc(name)}"><div class="doc-head"><span class="doc-name">${esc(name)}</span>`
+    + `${tools ? `<span class="doc-tools">${tools}</span>` : ''}`
     + `<button type="button" class="btn-icon doc-close" aria-label="${esc(tr('Close'))}" title="${esc(tr('Close'))}">✕</button></div>`
     + `<div class="doc-body chat-claude" tabindex="0"><div class="muted">${esc(tr('Loading…'))}</div></div></div>`;
   const body = overlay.querySelector('.doc-body');
@@ -1404,7 +1406,9 @@ export function openDoc(name, read, refused) {
   overlay.onclick = (e) => { if (e.target === overlay) close(); };
   overlay.querySelector('.doc-close').onclick = close;
   body.focus({ preventScroll: true }); // the arrows and the space read the file at once
+  wire?.(overlay, body);
   read().then((html) => { body.innerHTML = html; }, (e) => { body.textContent = refused(e); });
+  return { overlay, body, close };
 }
 
 async function deleteAttachment(attId) {
@@ -1646,6 +1650,7 @@ export function openDrawer(key, { quiet = false } = {}) {
     renderDrawerLinks(t.links);
     renderIssueRow(t);
     renderBranchRow(t);
+    renderEpic(t);
     renderTaskProfile(t);
     paintPick(t);
     $('d-return').classList.toggle('hidden', t.status !== 'review');
@@ -1730,6 +1735,7 @@ export function openDrawerNew(status = 'backlog') {
   $('d-editor').classList.add('hidden');
   $('d-preview').classList.add('hidden');
   paintPick(null);
+  renderEpic(null);
   $('drawer').classList.remove('hidden');
   holdBack();
   applyCommentDraft(null);
@@ -2559,7 +2565,7 @@ export async function syncOpenDrawerStatus({ moved = false } = {}) {
   if (t.key && t.key !== key) { await followMovedTask(key, t.key); return; }
   followTimeline(key, t, moved);
   drawerPinned = t.pinned ? 1 : 0;
-  if ('description' in t) { renderIssueRow(t); renderBranchRow(t); }
+  if ('description' in t) { renderIssueRow(t); renderBranchRow(t); renderEpic(t); }
   await refreshDrawerFields(t);
   if (drawerSnapshot && selVal('d-status') === t.status) drawerSnapshot.status = t.status;
   if (!DrawerSync.shouldSyncDrawerStatus(drawerStatus, selVal('d-status'), t.status)) return;

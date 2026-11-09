@@ -14,7 +14,8 @@ export const HELD_OPEN = new Set(['GET /api/events', 'GET /api/asks/:id/wait']);
 export const WAITS = new Set(['GET /api/health', 'GET /api/health/stands', 'GET /api/update-check', 'GET /api/whats-new',
   'POST /api/update', 'POST /api/launch', 'POST /api/tasks/:id/chat', 'POST /api/tasks/:id/chat/queue/:itemId/now',
   // the branch of a task's copy asks GitHub of its pull request (gh, up to 20 s); a pull request pushes and asks gh
-  'GET /api/tasks/:id/branch', 'POST /api/tasks/:id/pr']);
+  'GET /api/tasks/:id/branch', 'POST /api/tasks/:id/pr',
+  'POST /api/voice/warm', 'POST /api/voice']);
 
 const ms = (ns) => Math.round(ns / 1e6);
 

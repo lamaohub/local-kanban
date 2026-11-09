@@ -22,7 +22,7 @@ export default async function dashboardRoutes(app) {
   const RANGE_DAYS = { week: 7, month: 30, half: 182, year: 365 };
 
   const DASH_TTL = 30_000;
-  const DASH_QUIET = new Set(['task.work', 'task.live', 'task.comment', 'task.linked', 'task.attached', 'sync.status', 'session.chat', 'share.updated', 'automation.updated']);
+  const DASH_QUIET = new Set(['task.work', 'task.live', 'task.comment', 'task.linked', 'task.attached', 'sync.status', 'session.chat', 'share.updated', 'automation.updated', 'task.plan', 'task.epic']);
   const dashCache = new Map(); // range -> { at, data }
   bus.on('event', (ev) => { if (!DASH_QUIET.has(ev?.type)) dashCache.clear(); });
 

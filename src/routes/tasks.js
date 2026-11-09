@@ -1,4 +1,5 @@
 import { gateOfProject, labelDodges, skipsReady, workedSince } from '../ready-gate.js';
+import { batchesOf, boardMovedLast, epicMove, epicOf, epicSummaries, epicView, markMoved, planMeta } from '../epics.js';
 import { execFile } from 'node:child_process';
 import { writeFileSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -12,7 +13,7 @@ import { kick } from '../sync/worker.js';
 import { LABELS } from '../sync/github.js';
 import { repoHttpsBase } from '../repo-base.js';
 import { STAT_FORMAT, mirrorName, namesTask, statCommit, wordsOf } from '../shipped.js';
-import { isManual, listShape, noclaudeFilter, snapshot, taskEvent } from '../task-shape.js';
+import { isManual, listShape, noclaudeFilter, notEpic, snapshot, taskEvent } from '../task-shape.js';
 import { requestSession, requestHostSession, bindSession, taskSessions, mayReprep, unclaimedLaunch, claimLaunch, markLaunch } from '../claude-sessions.js';
 import { taskFeed } from '../work-feed.js';
 import { taskUsage } from '../claude-usage.js';
@@ -145,6 +146,7 @@ function taskLinks(id) {
 function removeLinkPair(a, b) {
   db.prepare('DELETE FROM task_links WHERE (task_id = ? AND linked_task_id = ?) OR (task_id = ? AND linked_task_id = ?)')
     .run(a, b, b, a);
+  db.prepare('DELETE FROM batch_tasks WHERE task_id IN (?, ?) AND batch_id IN (SELECT id FROM epic_batches WHERE epic_id IN (?, ?))').run(a, b, a, b);
 }
 
 function placeAdjacent(a, b) {
@@ -176,11 +178,22 @@ async function fullTask(t) {
   const events = db.prepare('SELECT e.status, e.created_at, m.kind AS typed FROM task_events e LEFT JOIN typed_moves m ON m.event_id = e.id WHERE e.task_id = ? ORDER BY e.id').all(t.id);
   const moves = db.prepare(`SELECT (mp.prefix || '-' || mv.task_no) AS key, mv.moved_at FROM task_moves mv JOIN projects mp ON mp.id = mv.project_id
     WHERE mv.task_id = ? ORDER BY mv.moved_at, mv.rowid`).all(t.id);
-  return { ...t, labels: JSON.parse(t.labels || '[]'), events, moves, links: taskLinks(t.id), attachments: taskAttachments(t.id), checklist: taskChecklist(t.id), commit_url: await commitUrlFor(t), sessions: await taskSessions(t.id), usage: await taskUsage(t.id), terminal: await taskTerminal(t.id), worktree: worktreeOf(t.id), pr: knownPr(t.id), profile: db.prepare('SELECT profile_id FROM task_profiles WHERE task_id = ?').get(t.id)?.profile_id ?? null, profile_name: profileNameOf(t) };
+  return { ...t, labels: JSON.parse(t.labels || '[]'), events, moves, links: taskLinks(t.id), attachments: taskAttachments(t.id), checklist: taskChecklist(t.id), commit_url: await commitUrlFor(t), sessions: await taskSessions(t.id), usage: await taskUsage(t.id), terminal: await taskTerminal(t.id), worktree: worktreeOf(t.id), pr: knownPr(t.id), profile: db.prepare('SELECT profile_id FROM task_profiles WHERE task_id = ?').get(t.id)?.profile_id ?? null, profile_name: profileNameOf(t), plan: planMeta(t.id), ...epicOfCard(t) };
+}
+function epicOfCard(t) {
+  const sum = epicSummaries([t.id]).get(t.id);
+  const out = { epic: sum ? { ...sum, ...epicView(t.id) } : null, batch: null };
+  const epicId = epicOf(t.id);
+  if (epicId) {
+    const e = resolveTask(String(epicId));
+    const b = e && batchesOf(epicId).find((x) => x.tasks.some((y) => y.id === t.id));
+    if (b) out.batch = { epic: e.key, n: b.n, title: b.title, batches_n: batchesOf(epicId).length };
+  }
+  return out;
 }
 const profileNameOf = (t) => profileFor([t], db.prepare('SELECT profile_id FROM projects WHERE id = ?').get(t.project_id))?.name ?? null;
 
-function planPatch(t, b, sid = null, { undone = false } = {}) {
+function planPatch(t, b, sid = null, { undone = false, epic = false } = {}) {
   const updates = [];
   const values = [];
   let claim = null;
@@ -234,12 +247,12 @@ function planPatch(t, b, sid = null, { undone = false } = {}) {
       if (!mayReprep(t.id, sid)) return { code: 409, error: `${t.key} is already taken: it is in prep. To take a free task: kb take ${t.project}` };
       claim = unclaimedLaunch(t.id);
     }
-    if (!isManual(labels || t.labels) && ['backlog', 'todo'].includes(t.status) && ['ready', 'review', 'done'].includes(b.status)) {
+    if (!epic && !isManual(labels || t.labels) && ['backlog', 'todo'].includes(t.status) && ['ready', 'review', 'done'].includes(b.status)) {
       return bad(`cannot go straight from "${t.status}" to "${b.status}" — it has to pass through the working statuses`, 'status');
     }
     // a check has nothing to ship, and words undone only put back what they moved. The labels the task HAD: one given in this
     // very request frees nothing
-    if (!undone && !isCheck(t) && !isManual(t.labels) && skipsReady(t.status, b.status, t.status === 'prep' && b.status === 'review' && workedSince(t.id)) && gateOfProject(t.project_id)) {
+    if (!undone && !epic && !isCheck(t) && !isManual(t.labels) && skipsReady(t.status, b.status, t.status === 'prep' && b.status === 'review' && workedSince(t.id)) && gateOfProject(t.project_id)) {
       return { code: 409, error: `${t.key} goes to ready first: this project ships on the person's word — kb mv ${t.key} ready, and deploy once they say so`, reason: 'ready-first', field: 'status' };
     }
     updates.push('status = ?'); values.push(b.status);
@@ -294,6 +307,35 @@ function afterPatch(t, b, fresh, { sid = null, undo = false } = {}) {
   if (statusChanged && (b.status === 'done' || b.status === 'cancelled')) closeFinishedTerminals().catch(() => {});
   emit('task.updated', { ...taskEvent(fresh.id), prev_status: t.status });
   if (statusChanged && !WORK_IN.has(t.status) && WORK_IN.has(b.status)) settleTyped(sid, t.id);
+  if (statusChanged) followEpic(epicOf(t.id));
+}
+
+/** The epics whose batches lost a task (a link taken off) — each told once, and only if it really lost one. */
+function followEpics(before) {
+  for (const id of new Set(before.filter(Boolean))) followEpic(id);
+}
+export function followEpic(epicId) {
+  if (!epicId) return;
+  const epic = resolveTask(String(epicId));
+  if (!epic) return;
+  const subs = db.prepare('SELECT t.status FROM batch_tasks bt JOIN epic_batches b ON b.id = bt.batch_id JOIN tasks t ON t.id = bt.task_id WHERE b.epic_id = ?').all(epicId).map((r) => r.status);
+  const to = epicMove(epic.status, subs, boardMovedLast(epicId));
+  if (to) {
+    const b = { status: to };
+    const plan = planPatch(epic, b, null, { epic: true });
+    if (!plan.error) {
+      const fresh = db.transaction(() => {
+        const f = commitPatch(epic, b, plan, null, null);
+        markMoved(epicId, db.prepare('SELECT id FROM task_events WHERE task_id = ? ORDER BY id DESC LIMIT 1').get(epicId).id);
+        return f;
+      })();
+      afterPatch(epic, b, fresh);
+      emit('task.epic', { id: epic.id, key: epic.key });
+      return;
+    }
+  }
+  emit('task.updated', taskEvent(epicId));
+  emit('task.epic', { id: epic.id, key: epic.key });
 }
 
 export function moveLaunched(tasks, sid, via) {
@@ -505,7 +547,7 @@ export const SEARCH_MAX = 200;
 export const IMAGE_MAX_BYTES = 6 * 1024 * 1024;
 
 const LIST_QUIET = new Set(['task.work', 'task.live', 'task.checklist', 'session.chat', 'sync.status', 'limits.updated',
-  'ask.created', 'ask.removed', 'share.updated', 'automation.updated']);
+  'ask.created', 'ask.removed', 'share.updated', 'automation.updated', 'task.plan', 'task.epic']);
 const LIST_TTL_MS = 60_000;
 export const LIST_KEEP = 16;
 export const NEWEST_MAX = 100;
@@ -580,6 +622,8 @@ export default async function taskRoutes(app) {
       FROM tasks t JOIN projects p ON p.id = t.project_id LEFT JOIN task_prs r ON r.task_id = t.id WHERE 1=1${where}
       ${newest === null ? 'ORDER BY t.status, t.priority DESC, t.position, t.id' : `ORDER BY t.id DESC LIMIT ${newest}`}`;
     const list = db.prepare(sql).all(...args).map(listShape);
+    const sums = epicSummaries(list.map((t) => t.id));
+    for (const t of list) t.epic = sums.get(t.id) || null;
     const linkMap = {};
     const linkRows = list.length
       ? db.prepare(`WITH shown(id) AS (SELECT value FROM json_each(?))
@@ -737,6 +781,7 @@ export default async function taskRoutes(app) {
     const b = { status: 'prep' };
     const taken = db.transaction(() => {
       const t = db.prepare(`${TASK_SELECT} WHERE t.project_id = ? AND t.status = 'todo' AND t.blocked = 0 AND ${noclaudeFilter('t.')}
+        AND ${notEpic('t.id')}
         ORDER BY t.pinned DESC, t.priority DESC, t.position, t.id LIMIT 1`).get(p.id);
       return t ? { t, fresh: commitPatch(t, b, planPatch(t, b, sid), sid, host) } : null;
     })();
@@ -744,19 +789,23 @@ export default async function taskRoutes(app) {
     // those left, a bare "empty" made Claude report an empty column while the human sees cards there
     const by_hand = db.prepare(`SELECT task_no FROM tasks WHERE project_id = ? AND status = 'todo' AND ${noclaudeFilter('', true)}
       ORDER BY pinned DESC, priority DESC, position, id`).all(p.id).map((r) => `${p.prefix}-${r.task_no}`);
-    if (!taken) return { task: null, blocked_n, by_hand };
+    const epics = db.prepare(`SELECT task_no FROM tasks t WHERE project_id = ? AND status = 'todo' AND blocked = 0 AND ${noclaudeFilter()} AND ${notEpic('t.id', true)}
+      ORDER BY pinned DESC, priority DESC, position, id`).all(p.id).map((r) => `${p.prefix}-${r.task_no}`);
+    if (!taken) return { task: null, blocked_n, by_hand, epics };
     afterPatch(taken.t, b, taken.fresh, { sid });
-    return { task: await fullTask(taken.fresh), blocked_n, by_hand };
+    return { task: await fullTask(taken.fresh), blocked_n, by_hand, epics };
   });
 
   app.delete('/api/tasks/:id', (req, reply) => {
     const t = taskOr404(req, reply); if (!t) return reply;
+    const epicId = epicOf(t.id);
     db.prepare('DELETE FROM sync_queue WHERE task_id = ?').run(t.id);
     db.prepare('DELETE FROM tasks WHERE id = ?').run(t.id);
     closeFinishedTerminals().catch(() => {});
     try { rmSync(join(ATTACH_DIR, String(t.id)), { recursive: true, force: true }); } catch {  }
     if (t.gh_issue_number) { enqueue('delete_issue', null, snapshot(t)); kick(); }
     emit('task.deleted', { id: t.id, key: t.key, project: t.project });
+    followEpic(epicId);
     return reply.code(204).send();
   });
 
@@ -843,12 +892,14 @@ export default async function taskRoutes(app) {
     if (!other) return reply;
     if (other.id === t.id) return reply.code(400).send({ error: 'a task cannot be linked to itself' });
     const rel = ['child', 'parent'].includes(req.body?.rel) ? req.body.rel : 'related';
+    const epicsBefore = [epicOf(t.id), epicOf(other.id)];
     removeLinkPair(t.id, other.id);
     if (rel === 'child') db.prepare("INSERT INTO task_links (task_id, linked_task_id, kind) VALUES (?, ?, 'parent')").run(t.id, other.id);
     else if (rel === 'parent') db.prepare("INSERT INTO task_links (task_id, linked_task_id, kind) VALUES (?, ?, 'parent')").run(other.id, t.id);
     else { const [a, b] = [t.id, other.id].sort((x, y) => x - y); db.prepare("INSERT INTO task_links (task_id, linked_task_id, kind) VALUES (?, ?, 'related')").run(a, b); }
     placeAdjacent(t, other);
     emit('task.linked', { id: t.id, key: t.key, linked: { [t.id]: linkedIds(t.id), [other.id]: linkedIds(other.id) } });
+    followEpics(epicsBefore);
     return taskLinks(t.id);
   });
 
@@ -856,8 +907,10 @@ export default async function taskRoutes(app) {
     const t = taskOr404(req, reply); if (!t) return reply;
     const other = taskOr404(req, reply, req.params.linkedId, 'the task to link to was not found');
     if (!other) return reply;
+    const epicsBefore = [epicOf(t.id), epicOf(other.id)];
     removeLinkPair(t.id, other.id);
     emit('task.linked', { id: t.id, key: t.key, linked: { [t.id]: linkedIds(t.id), [other.id]: linkedIds(other.id) } });
+    followEpics(epicsBefore);
     return taskLinks(t.id);
   });
 

@@ -198,7 +198,7 @@ test('kb take and kb next pass a task done by hand by — a pinned, urgent one t
   assert.equal(take.code, 0, take.stderr);
   assert.match(take.stdout, /^HD-2 prep/, `kb take took a task done by hand:\n${take.stdout}`);
   const again = await app.inject({ method: 'POST', url: '/api/tasks/take', payload: { project: 'hand' } });
-  assert.deepEqual(again.json(), { task: null, blocked_n: 0, by_hand: ['HD-1', 'HD-3'] }, 'a manual task was taken, or counted as a blocked one of Claude\'s');
+  assert.deepEqual(again.json(), { task: null, blocked_n: 0, by_hand: ['HD-1', 'HD-3'], epics: [] }, 'a manual task was taken, or counted as a blocked one of Claude\'s');
   assert.equal((await kb(['take', 'hand'])).stdout.trim(), 'empty (2 by hand: HD-1 HD-3)');
   assert.equal((await kb(['next', 'hand'])).stdout.trim(), 'empty (2 by hand: HD-1 HD-3)');
   assert.deepEqual(db.prepare('SELECT status FROM tasks WHERE project_id = ? ORDER BY task_no').all(p).map((r) => r.status), ['todo', 'prep', 'todo']);

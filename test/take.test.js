@@ -119,7 +119,7 @@ test('the take answers like the board: the full card, an empty queue, a project 
   assert.ok(Array.isArray(body.task.checklist) && Array.isArray(body.task.links) && Array.isArray(body.task.events),
     'the answer is not the full card — kb would need a second request for it');
   assert.equal(body.blocked_n, 1);
-  assert.deepEqual((await app.inject({ method: 'POST', url: '/api/tasks/take', payload: { project: p.slug } })).json(), { task: null, blocked_n: 1, by_hand: [] });
+  assert.deepEqual((await app.inject({ method: 'POST', url: '/api/tasks/take', payload: { project: p.slug } })).json(), { task: null, blocked_n: 1, by_hand: [], epics: [] });
   assert.equal((await app.inject({ method: 'POST', url: '/api/tasks/take', payload: { project: 'no-such-project' } })).statusCode, 404);
   for (const payload of [{}, { project: '' }, { project: 5 }, { project: ['x'] }]) {
     assert.equal((await app.inject({ method: 'POST', url: '/api/tasks/take', payload })).statusCode, 400, JSON.stringify(payload));

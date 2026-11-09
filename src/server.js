@@ -26,6 +26,8 @@ import importRoutes from './routes/import.js';
 import mentionRoutes from './routes/mention.js';
 import branchRoutes from './routes/branch.js';
 import profileRoutes from './routes/profiles.js';
+import epicRoutes from './routes/epics.js';
+import { startEpicRuns } from './epic-run.js';
 import { startAutomations } from './automations.js';
 import { guestGuard, restoreShare } from './share.js';
 import { startWorker } from './sync/worker.js';
@@ -93,6 +95,7 @@ app.register(importRoutes);
 app.register(mentionRoutes);
 app.register(branchRoutes);
 app.register(profileRoutes);
+app.register(epicRoutes);
 
 for (const ev of ['unhandledRejection', 'uncaughtException']) {
   process.on(ev, (err) => {
@@ -124,6 +127,7 @@ app.listen({ port: PORT, host: '127.0.0.1' }).then(() => {
     startTerminalSweep();
     restoreShare();
     startAutomations(app);
+    startEpicRuns(app);
     const swept = sweepStalePreviews();
     if (swept) console.log(`restore: swept ${swept} stale preview director${swept === 1 ? 'y' : 'ies'}`);
     const uploads = sweepStaleUploads();

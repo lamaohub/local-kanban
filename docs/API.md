@@ -176,6 +176,35 @@ project, hand-ins no more than an hour apart, with `session: null` (then `starte
 labelled `noclaude` are left out. A task is `{id, key, project, project_name, title, preview, status, handed_at,
 done_at}`.
 
+**An epic's plan** is a markdown document kept on the board with its versions. `GET /api/tasks/:id/plan` gives the current
+one — `{key, version, at, body, current, versions}`, `versions` being `[{version, size, created_at}]` newest first — and
+`?version=N` an earlier one; a task without a plan answers 404 with `reason: 'no-plan'`. `GET /api/tasks/:id/plan.md`
+(`?version=N`) is the same text as a file (`<KEY>-plan.md`). `PUT /api/tasks/:id/plan` with `{body}` keeps it as the next
+version — the same text as the current one writes nothing (`changed: false`); at most 300 000 characters, the last 50
+versions are kept. The card (`GET /api/tasks/:id`) carries `plan: {version, at, size, versions_n}` or `null`. A guest of the
+Wi-Fi door reads the plan and does not write it.
+
+**An epic's batches.** An epic is a task whose sub-tasks are laid out in batches, started batch by batch. `GET
+/api/tasks/:id/epic` is `{key, batches, loose, portion, auto_next, run}`: a batch is `{id, n, title, tasks, counts, closed}`
+— `n` its place from 1, `tasks` `[{id, key, project, title, status, blocked, priority, labels}]` in order, `counts` `{todo,
+working, ready, review, done, cancelled, total}`, `closed` — every task done or cancelled; `loose` — sub-tasks in no batch;
+`run` — `{<batch id>: {state, keys, project, at, error}}`, `state` one of `starting`, `running`, `accepting` (nothing left to
+start, the person's acceptance awaited), `done`, `stopped`, `failed`. `PATCH` takes `portion` (1–10, how many tasks one start
+takes, default 3) and `auto_next` (the next batch starts by itself once every task of the last one is accepted, while
+Automations are on). `POST /api/tasks/:id/batches` `{title}` adds one at the end, `PUT …/batches/order` `{batches: [ids]}`
+orders all of them, `PATCH|DELETE …/batches/:batchId` renames or deletes one (its tasks stay sub-tasks, in no batch).
+`POST /api/tasks/:id/epic/place` `{key, batch, before}` puts a task into a batch (`batch: null` — out of the batches;
+`batch_name` instead — a number or a title, a title not there makes the batch) before the task `before`, or at the end; the
+task becomes a sub-task of the epic. Every one answers with the epic's view. `POST …/batches/:batchId/run` `{words: {run,
+doTask, epic}, launch: {permission, effort}, force}` starts the batch's next portion inside the board and the following ones
+as each goes out of work; with another batch of the epic running it is refused with 409 `reason: 'batch-running'` and that
+batch's `batch`, unless `force`; nothing to start — 409 `nothing`. `POST …/batches/:batchId/stop` starts no next portion.
+Starting and stopping are the owner's only. The list and `task.updated` carry `epic: {batches_n, tasks_n, closed_n, current}`
+on an epic (`current` — the first batch not through, `null` when all are) and `null` on any other task; the card carries
+`epic` with the batches as above and, on a sub-task in a batch, `batch: {epic, n, title, batches_n}`. The board moves an epic
+itself: into `review` once every task of its batches is closed and one at least was done, back to `todo` when one opens
+again — only from a Review it gave. `POST /api/tasks/take` never takes an epic and names the epics left in To do as `epics`.
+
 **Automations** (`GET /api/automations`) is `{on, rules, now}`. A rule is `{id, project, project_name, kind, delay_s,
 state, created_at, ended_at, error, check_key, check_status, repeat}`, times in milliseconds; a repeating rule stays waiting after its check and adds `fires_n`, `fires_max` — its checks of the last 24 hours and their limit; `state` is `armed`, `fired`,
 `failed`, `cancelled` or `covered` — a check was made by hand after the rule was set (the last 20 ended ones are kept). A waiting rule adds `phase` — `idle` (no work in the project
@@ -270,6 +299,12 @@ as the list gives it (with `comments_n` and `attachments_n`); `task.comment` (`{
 comment, comments_n}` — `comment` is absent when one was deleted) and `task.attached` (`{task_id, key,
 attachments_n}`) carry the new count; `task.linked` (`{id, key, linked}`) carries the links of both tasks
 as `{<id>: [linked ids]}`, the same as `linked_ids` in the list.
+
+`task.epic` (`{id, key}`) says an epic's batches changed — read `GET /api/tasks/:id/epic` again if you show them; its card came
+as `task.updated`.
+
+`task.plan` (`{id, key, plan}`) says a new version of a task's plan was kept; `plan` is the card's `plan`. The list of
+tasks carries no plan, so it is not a reason to re-read the board.
 
 `task.work` (`{ids, keys}`) says the transcript of a session working on those tasks has grown — read
 their feed again if you show it. It comes at most every second and a half per session while Claude

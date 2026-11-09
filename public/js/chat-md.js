@@ -86,11 +86,11 @@ function listHTML(items, tools = null) {
   return html;
 }
 
-function blocksHTML(text, depth = 0, tools = null) {
+function blocksHTML(text, depth = 0, tools = null, soft = false) {
   const lines = text.split('\n');
   let html = '';
   let para = [];
-  const flush = () => { if (para.length) html += `<p>${para.map((l) => inlineMd(l, tools)).join('<br>')}</p>`; para = []; };
+  const flush = () => { if (para.length) html += `<p>${para.map((l) => inlineMd(l, tools)).join(soft ? ' ' : '<br>')}</p>`; para = []; };
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (!line.trim()) { flush(); continue; }
@@ -102,7 +102,7 @@ function blocksHTML(text, depth = 0, tools = null) {
       const q = [];
       while (i < lines.length && (m = QUOTE.exec(lines[i]))) { q.push(m[1]); i++; }
       i--;
-      html += `<blockquote class="md-quote">${blocksHTML(q.join('\n'), depth + 1, tools)}</blockquote>`;
+      html += `<blockquote class="md-quote">${blocksHTML(q.join('\n'), depth + 1, tools, soft)}</blockquote>`;
       continue;
     }
     if (line.includes('|') && i + 1 < lines.length && TABLE_SEP.test(lines[i + 1].trim())
@@ -156,14 +156,12 @@ const FENCE = /^[ \t]*```([^\n]*)$/gm;
 /** The language of a fence's info string — its first word, lower case ('' for none). */
 export const fenceLang = (info) => String(info ?? '').trim().split(/\s+/)[0].toLowerCase();
 
-/** Claude's words as HTML: fenced code apart, the rest as Markdown blocks. `codeTools(lang, closed, code)` — the buttons a
-    block of code gets beside it (markup the caller makes; none — the block alone); `closed` — a fence ends the block. */
-export function chatText(s, codeTools = null) {
+export function chatText(s, codeTools = null, { soft = false } = {}) {
   const text = String(s ?? '');
   const parts = text.split(/^[ \t]*```[^\n]*$/m);
   const langs = [...text.matchAll(FENCE)].map((m) => fenceLang(m[1]));
   return parts.map((p, i) => {
-    if (!(i % 2)) return blocksHTML(p, 0, codeTools);
+    if (!(i % 2)) return blocksHTML(p, 0, codeTools, soft);
     const code = p.replace(/^\n/, '').replace(/\n$/, '');
     const pre = `<pre class="chat-code">${esc(code)}</pre>`;
     return codeTools ? `<div class="chat-code-box">${pre}${codeTools(langs[i - 1] ?? '', i < parts.length - 1, code)}</div>` : pre;
