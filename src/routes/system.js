@@ -23,9 +23,9 @@ import { isManual } from '../task-shape.js';
 import { packagedSkillNames, packagedSkillState, refreshPackagedSkill } from '../skills.js';
 import { isGuest } from '../share.js';
 import { bin } from '../bin-path.js';
-import { taskFolder, worktreeOf } from '../worktrees.js';
+import { taskFolder } from '../worktrees.js';
 import { markSessionProfile, profileById, profileFor, settingsFile } from '../profiles.js';
-import { attemptOf } from '../attempts.js';
+import { attemptOf, resumeFolder } from '../attempts.js';
 
 export const ONBOARDING_VERSION = 5;
 
@@ -553,7 +553,7 @@ export default async function systemRoutes(app) {
     let spec;
     const profile = b.mode === 'terminal' && p ? profileFor(picked.tasks, p) : null;
     let prof = {};
-    try { prof = profile ? { settings: settingsFile(profile, PORT), model: profile.model || null, effort: profile.effort || b.effort } : {}; } catch (e) {
+    try { prof = profile ? { settings: settingsFile(profile, PORT, {}, 'term'), model: profile.model || null, effort: profile.effort || b.effort } : {}; } catch (e) {
       logError('server', 'launch', `the settings of the launch profile were not written: ${e.message}`);
       return reply.code(500).send({ error: 'the settings of the launch profile could not be written' });
     }
@@ -569,7 +569,7 @@ export default async function systemRoutes(app) {
     try {
       // two `worktree add`), after the refusals; a session going on runs where it ran (only a copy it is tied to, never a new one)
       if (p && picked.tasks.length && p.worktrees) {
-        const copy = b.resume ? { path: picked.tasks.map((t) => worktreeOf(t.id)?.path).find(Boolean) || p.path } : await taskCopy(p, picked.tasks);
+        const copy = b.resume ? { path: await resumeFolder(b.resume, p, picked.tasks) } : await taskCopy(p, picked.tasks);
         if (copy.error) return reply.code(409).send({ error: copy.error, reason: copy.reason });
         if (copy.path !== folder) {
           folder = copy.path;
@@ -715,7 +715,7 @@ export default async function systemRoutes(app) {
     const other = pane ? await otherBoard(sid, pane.pid) : null;
     if (other) return reply.code(409).send({ ...otherBoardRefusal(other), keys });
     const name = keys.length > 1 ? `${keys[0]} +${keys.length - 1}` : keys[0];
-    const folder = tasks.map((t) => worktreeOf(t.id)?.path).find(Boolean) || p.path;
+    const folder = await resumeFolder(sid, p, tasks);
     const profile = profileById(db.prepare('SELECT profile_id FROM session_profiles WHERE session_id = ?').get(sid)?.profile_id) || profileFor(tasks, p);
     let spec;
     try { spec = phantomSpec({ sid, name, folder, permission: b.permission, port: PORT, allow: doneRules(tasks), effort: b.effort, resume: true, profile }); } catch (e) {

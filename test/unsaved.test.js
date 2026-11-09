@@ -173,13 +173,16 @@ test('the project page, the editors and the reload guard follow the rules', () =
   assert.match(modal, /pushLayer\('settings-overlay', requestCloseSettings\)/, 'Esc closes Settings over an unsaved skill without asking');
   for (const [where, re] of [
     ['the close button', /\.sm-close'\)\.onclick = requestCloseSettings;/],
-    ['another section', /n\.onclick = async \(\) => \{\s*if \(!await leaveSkillEditor\(\)\) return;/],
-    ['another skill', /row\.onclick = async \(\) => \{ if \(await leaveSkillEditor\(\)\) selectSkillRow\(row\.dataset\.name\); \};/],
+    ['another section', /n\.onclick = async \(\) => \{\s*if \(!await leaveUnsavedEdits\(\)\) return;/],
+    ['another skill', /row\.onclick = async \(\) => \{ if \(await leaveUnsavedEdits\(\)\) selectSkillRow\(row\.dataset\.name\); \};/],
+    ['the close of the window', /try \{ ok = await leaveUnsavedEdits\(\); \}/],
   ]) assert.match(settings, re, `the skill editor is left without asking: ${where}`);
+  assert.match(settings, /const leaveUnsavedEdits = async \(\) => !\(skillDirty\(\) \|\| templatesDirty\(\) \|\| profilesDirty\(\)\) \|\| confirmDiscard\(\);/,
+    'Settings close over an edited template or launch profile without asking');
   const init = read('init.js');
   const unsaved = init.slice(init.indexOf('function hasUnsavedInput('), init.indexOf('export async function checkVersion('));
-  assert.match(unsaved, /projectSettingsDirty\(\) \|\| fileEditorHasChanges\(\) \|\| skillDirty\(\)/,
-    'a reload for a new version can wipe a filled-in form that has lost the focus');
+  assert.match(unsaved, /projectSettingsDirty\(\) \|\| fileEditorHasChanges\(\) \|\| skillDirty\(\) \|\| templatesDirty\(\) \|\| profilesDirty\(\)/,
+    'a reload for a new version can wipe a filled-in form that has lost the focus (CK-1011: the templates, the profiles)');
 });
 
 test('the project page and the skill editor see a change typed into them, and only that', () => {
@@ -232,6 +235,54 @@ test('the project page and the skill editor see a change typed into them, and on
   assert.equal(box.out.project(), true, 'a renamed project counts as saved: a new board version would reload the tab over it');
   els.projset.classList.contains = (c) => c === 'hidden';
   assert.equal(box.out.project(), false, 'a hidden project page still holds the tab back');
+});
+
+test('the editors of the templates and of the launch profiles see a change typed into them, and only that', () => {
+  const read = (rel) => readFileSync(new URL(`../public/js/${rel}`, import.meta.url), 'utf8');
+  const take = (src, head) => {
+    const at = src.indexOf(head);
+    assert.ok(at >= 0, `${head} is gone`);
+    return src.slice(at, src.indexOf('\n}\n', at) + 2).replace(/^export /, '');
+  };
+  const line = (src, head) => { const at = src.indexOf(head); assert.ok(at >= 0, `${head} is gone`); return src.slice(at, src.indexOf(';\n', at) + 2); };
+  const settings = read('settings.js');
+  const profiles = read('profiles.js');
+  const field = (value) => ({ value, dataset: {} });
+  const box = (rows) => ({ querySelector: (q) => (q === '.tpl-list' ? {} : null), querySelectorAll: () => rows });
+  const els = {};
+  const ctx = { $: (id) => els[id] || null, document: { getElementById: (id) => els[id] || null }, out: {} };
+  vm.runInNewContext([
+    'let tplSnap = null;', line(settings, 'const readTemplates = '), take(settings, 'export function templatesDirty('),
+    line(profiles, 'const rowValues = '), take(profiles, 'export function profilesDirty('),
+    'out.templates = templatesDirty; out.profiles = profilesDirty; out.snap = (v) => { tplSnap = v; }; out.read = readTemplates;',
+  ].join('\n'), ctx);
+  const tplRow = (name, text) => { const f = { '.tpl-name': field(name), '.tpl-text': field(text) }; return { querySelector: (q) => f[q], f }; };
+  assert.equal(ctx.out.templates(), false, 'no editor of templates is open');
+  const rows = [tplRow('bug', 'Steps:\n'), tplRow('idea', 'Why:\n')];
+  els['tpl-box'] = box(rows);
+  ctx.out.snap(JSON.stringify(ctx.out.read(els['tpl-box'])));
+  assert.equal(ctx.out.templates(), false, 'an untouched editor of templates counts as unsaved');
+  rows[0].f['.tpl-name'].value = 'mybug';
+  assert.equal(ctx.out.templates(), true, 'a renamed template counts as saved: Esc would drop it without asking');
+  rows[0].f['.tpl-name'].value = 'bug';
+  rows.push(tplRow('', ''));
+  assert.equal(ctx.out.templates(), false, 'an empty row just added counts as a change (Save drops it)');
+
+  const pfRow = (vals) => {
+    const f = { '.pf-name': field(vals[0]), '.pf-model': field(vals[1]), '.pf-effort': { dataset: { value: vals[2] } }, '.pf-env': field(vals[3]) };
+    return { querySelector: (q) => f[q], f, dataset: {} };
+  };
+  assert.equal(ctx.out.profiles(), false, 'no editor of profiles is open');
+  const pr = pfRow(['OpenRouter', 'anthropic/claude-opus', '', 'ANTHROPIC_AUTH_TOKEN=•••']);
+  els['pf-box'] = { querySelectorAll: () => [pr] };
+  vm.runInNewContext('this.mark = (el) => { el.dataset.saved = rowValues(el); };', ctx);
+  ctx.mark(pr);
+  assert.equal(ctx.out.profiles(), false, 'an untouched profile counts as unsaved');
+  pr.f['.pf-env'].value = 'ANTHROPIC_AUTH_TOKEN=a-new-key';
+  assert.equal(ctx.out.profiles(), true, 'a new key typed into a profile counts as saved: Esc would drop it without asking');
+  pr.f['.pf-env'].value = 'ANTHROPIC_AUTH_TOKEN=•••';
+  pr.f['.pf-effort'].dataset.value = 'high';
+  assert.equal(ctx.out.profiles(), true, 'a new effort counts as saved');
 });
 
 test('a comment that did not go waits per task, in the order typed', () => {

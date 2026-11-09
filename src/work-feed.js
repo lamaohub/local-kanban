@@ -162,7 +162,7 @@ function readSessionEvents(sid) {
   if (own.some((e) => !e.launch) || !isBoardSession(sid)) return plain(own);
   const borrowed = db.prepare(`SELECT e.id, e.task_id, e.status, e.created_at FROM task_events e
     JOIN task_sessions s ON s.task_id = e.task_id AND s.session_id = ?
-    WHERE e.session_id IS NULL AND e.created_at >= s.first_seen ORDER BY e.id`).all(sid);
+    WHERE +e.session_id IS NULL AND e.created_at >= s.first_seen ORDER BY e.id`).all(sid);
   if (!own.length) return plain(borrowed);
   const launched = db.prepare('SELECT e.id, e.task_id, e.status, e.created_at FROM task_events e WHERE e.session_id = ? ORDER BY e.id').all(sid);
   return plain([...launched, ...borrowed].sort((a, b) => a.id - b.id));

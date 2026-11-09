@@ -107,3 +107,46 @@ test('the line of «Health» says the figures in words, the accent only for a sl
   assert.equal(slow.routes, 'Slowest answers this hour: GET /api/now 4.2 s');
   for (const s of new Set(said)) assert.ok(core.includes(`'${s}':`), `no Russian for «${s}»`);
 });
+
+// folders, the check of an update, the chat's wait for the field; and the hook of server.js, the guest's refusal and the
+// unknown addresses stood unguarded
+test('an answer long by design is timed but makes no minute slow; unknown addresses are not counted', async () => {
+  let clock = 0;
+  const logged = [];
+  const watch = W.createSlowWatch({ now: () => clock, log: (...a) => logged.push(a), histogram: fakeLoop() });
+  for (const k of ['GET /api/health', 'GET /api/update-check', 'POST /api/tasks/:id/chat', 'GET /api/tasks/:id/branch']) {
+    const [method, url] = k.split(' ');
+    watch.onResponse({ method, routeOptions: { url } }, { elapsedTime: W.ROUTE_SLOW_MS * 2, getHeader: () => 'application/json' });
+  }
+  const app = Fastify();
+  app.addHook('onResponse', watch.onResponse);
+  await app.ready();
+  for (let i = 0; i < 50; i++) await app.inject(`/api/nothing-${i}?secret=${i}`);
+  await app.close();
+  clock += W.WINDOW_MS;
+  const win = watch.tick();
+  assert.equal(logged.length, 0, `a minute of answers long by design was logged: ${logged.map((l) => l[2])}`);
+  assert.equal(watch.view().slow, false);
+  assert.ok(win.routes.every((r) => r.waits), JSON.stringify(win.routes));
+  assert.equal(win.answers, 4, 'the 404s of unknown addresses were counted');
+  const { loadWords } = await import('../public/js/health-rules.js');
+  const words = loadWords({ ...watch.view(), last: { ...watch.view().last, loop: { p95: 30 } } }, { tr: (x) => x, fmtNum: (n) => String(n) });
+  assert.equal(words.routes, '', 'the line named an answer long by design as slow');
+  for (const k of W.WAITS) assert.ok(!W.HELD_OPEN.has(k));
+  // the routes named are the board's own templates
+  const { readFileSync } = await import('node:fs');
+  const src = ['health', 'system', 'chat', 'branch'].map((f) => readFileSync(new URL(`../src/routes/${f}.js`, import.meta.url), 'utf8')).join('\n');
+  for (const k of W.WAITS) {
+    const [method, url] = k.split(' ');
+    assert.ok(src.includes(`app.${method.toLowerCase()}('${url}'`), `no route ${k}`);
+  }
+});
+
+test('server.js times every answer with the watch, and a guest of the Wi-Fi does not read it', async () => {
+  const { readFileSync } = await import('node:fs');
+  const server = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
+  assert.match(server, /addHook\('onResponse', slowWatch\.onResponse\)/);
+  assert.match(server, /startSlowWatch\(\)/);
+  const { ownerOnly } = await import('../src/share.js');
+  assert.equal(ownerOnly('GET', '/api/health/load'), true);
+});

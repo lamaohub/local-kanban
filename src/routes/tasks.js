@@ -22,6 +22,7 @@ import { closeFinishedTerminals, taskTerminal } from '../phantom.js';
 import { CHECK_LABEL, OPEN_CHECK, isCheck, leadCheck, openCheck, secondCheck } from '../review-check.js';
 import { treePrint, turnCommits } from '../tree-print.js';
 import { worktreeOf } from '../worktrees.js';
+import { profileFor } from '../profiles.js';
 const knownPr = (id) => db.prepare('SELECT url, number, state FROM task_prs WHERE task_id = ?').get(id) || null;
 import { bin } from '../bin-path.js';
 
@@ -175,8 +176,9 @@ async function fullTask(t) {
   const events = db.prepare('SELECT e.status, e.created_at, m.kind AS typed FROM task_events e LEFT JOIN typed_moves m ON m.event_id = e.id WHERE e.task_id = ? ORDER BY e.id').all(t.id);
   const moves = db.prepare(`SELECT (mp.prefix || '-' || mv.task_no) AS key, mv.moved_at FROM task_moves mv JOIN projects mp ON mp.id = mv.project_id
     WHERE mv.task_id = ? ORDER BY mv.moved_at, mv.rowid`).all(t.id);
-  return { ...t, labels: JSON.parse(t.labels || '[]'), events, moves, links: taskLinks(t.id), attachments: taskAttachments(t.id), checklist: taskChecklist(t.id), commit_url: await commitUrlFor(t), sessions: await taskSessions(t.id), usage: await taskUsage(t.id), terminal: await taskTerminal(t.id), worktree: worktreeOf(t.id), pr: knownPr(t.id), profile: db.prepare('SELECT profile_id FROM task_profiles WHERE task_id = ?').get(t.id)?.profile_id ?? null };
+  return { ...t, labels: JSON.parse(t.labels || '[]'), events, moves, links: taskLinks(t.id), attachments: taskAttachments(t.id), checklist: taskChecklist(t.id), commit_url: await commitUrlFor(t), sessions: await taskSessions(t.id), usage: await taskUsage(t.id), terminal: await taskTerminal(t.id), worktree: worktreeOf(t.id), pr: knownPr(t.id), profile: db.prepare('SELECT profile_id FROM task_profiles WHERE task_id = ?').get(t.id)?.profile_id ?? null, profile_name: profileNameOf(t) };
 }
+const profileNameOf = (t) => profileFor([t], db.prepare('SELECT profile_id FROM projects WHERE id = ?').get(t.project_id))?.name ?? null;
 
 function planPatch(t, b, sid = null, { undone = false } = {}) {
   const updates = [];
@@ -505,7 +507,10 @@ export const IMAGE_MAX_BYTES = 6 * 1024 * 1024;
 const LIST_QUIET = new Set(['task.work', 'task.live', 'task.checklist', 'session.chat', 'sync.status', 'limits.updated',
   'ask.created', 'ask.removed', 'share.updated', 'automation.updated']);
 const LIST_TTL_MS = 60_000;
+export const LIST_KEEP = 16;
 export const NEWEST_MAX = 100;
+let shownCache = null; // the store of the last board made — tests read its size
+export const listCacheSize = () => shownCache?.size ?? 0;
 
 /** A stored list, compressed the way the browser takes it — once per encoding (compressAnswer then leaves it be). */
 async function sendList(req, reply, entry) {
@@ -527,6 +532,7 @@ async function sendList(req, reply, entry) {
 
 export default async function taskRoutes(app) {
   const listCache = new Map(); // `${project} ${status} ${all} ${newest}` → {at, json, packed: Map(enc → Promise<Buffer>)}
+  shownCache = listCache;
   bus.on('event', (ev) => { if (!LIST_QUIET.has(ev?.type)) listCache.clear(); });
   app.addContentTypeParser(/^image\//, { parseAs: 'buffer', bodyLimit: IMAGE_MAX_BYTES }, (req, body, done) => done(null, body));
 
@@ -552,7 +558,10 @@ export default async function taskRoutes(app) {
     else if (!all && newest === null) where += " AND t.status NOT IN ('done','cancelled','backlog')";
     const key = q ? null : `${p ? p.id : '*'} ${status || ''} ${all ? 1 : 0} ${newest ?? ''}`;
     const kept = key && listCache.get(key);
-    if (kept && Date.now() - kept.at < LIST_TTL_MS) return sendList(req, reply, kept);
+    if (kept) {
+      listCache.delete(key); // asked again — the most recent now; too old — gone
+      if (Date.now() - kept.at < LIST_TTL_MS) { listCache.set(key, kept); return sendList(req, reply, kept); }
+    }
     if (q) {
       // changed first (as the search window orders them) — a common word sent the whole board, 1.7 MB a request
       const found = searchIds(where, args, q).slice(0, cap === Infinity ? undefined : Math.min(cap, SEARCH_MAX));
@@ -566,8 +575,9 @@ export default async function taskRoutes(app) {
         t.gh_issue_number, t.gh_issue_url, t.updated_at, t.labels,
         p.slug AS project, (p.prefix || '-' || t.task_no) AS key,
         (SELECT COUNT(*) FROM task_comments c WHERE c.task_id = t.id) AS comments_n,
-        (SELECT COUNT(*) FROM task_attachments a WHERE a.task_id = t.id AND a.file != '') AS attachments_n
-      FROM tasks t JOIN projects p ON p.id = t.project_id WHERE 1=1${where}
+        (SELECT COUNT(*) FROM task_attachments a WHERE a.task_id = t.id AND a.file != '') AS attachments_n,
+        r.number AS pr_number, r.state AS pr_state, r.url AS pr_url
+      FROM tasks t JOIN projects p ON p.id = t.project_id LEFT JOIN task_prs r ON r.task_id = t.id WHERE 1=1${where}
       ${newest === null ? 'ORDER BY t.status, t.priority DESC, t.position, t.id' : `ORDER BY t.id DESC LIMIT ${newest}`}`;
     const list = db.prepare(sql).all(...args).map(listShape);
     const linkMap = {};
@@ -585,6 +595,7 @@ export default async function taskRoutes(app) {
     // built and stored in one go, with no await in between: an event that comes later clears what is stored
     const entry = { at: Date.now(), json: JSON.stringify(list), packed: new Map() };
     listCache.set(key, entry);
+    while (listCache.size > LIST_KEEP) listCache.delete(listCache.keys().next().value);
     return sendList(req, reply, entry);
   });
 

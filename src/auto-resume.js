@@ -1,11 +1,9 @@
 
-import { realpath, stat } from 'node:fs/promises';
-import { worktreeOf } from './worktrees.js';
+import { sessionFolder, knownFolder } from './attempts.js';
 import { db, kvGet, kvSet, logError, uiLang } from './db.js';
 import { PORT } from './config.js';
 import { emit } from './bus.js';
 import { ADOPT_TOKEN, findTranscript } from './claude-sessions.js';
-import { tailLines } from './own-wait.js';
 import { nowRuns } from './claude-now.js';
 import { transcriptChat } from './chat-feed.js';
 import { fieldEmpty } from './phantom.js';
@@ -67,19 +65,6 @@ export function howItStopped(turn, board) {
   if (!board && last?.kind === 'text') return 'over';
   return 'cut';
 }
-
-/** The folder a session worked in, by its transcript; null when it does not say. Claude Code finds a conversation by the
-    folder: a session of a worktree or a subfolder cannot be brought back from the project's. */
-async function sessionFolder(sid) {
-  const path = await findTranscript(sid);
-  const size = path ? await stat(path).then((s) => s.size, () => 0) : 0;
-  const lines = size ? await tailLines(path, size, 64 * 1024).catch(() => []) : [];
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    try { const d = JSON.parse(lines[i]); if (typeof d?.cwd === 'string') return d.cwd; } catch { /* a cut line */ }
-  }
-  return null;
-}
-const sameFolder = async (a, b) => { try { return (await realpath(a)) === (await realpath(b)); } catch { return false; } };
 
 const parseLabels = (v) => { try { return Array.isArray(v) ? v : JSON.parse(v || '[]'); } catch { return []; } };
 
@@ -211,8 +196,7 @@ export async function tickResume(app, now, { waiting = new Set(), limited = fals
     const project = db.prepare('SELECT slug, path FROM projects WHERE id = ?').get(tasks[0].project_id);
     if (!r.board) {
       const folder = await deps.folder(r.session);
-      const copy = tasks.map((t) => worktreeOf(t.id)?.path).find(Boolean);
-      if (!folder || !project?.path || !((await sameFolder(folder, project.path)) || (copy && (await sameFolder(folder, copy))))) continue;
+      if (!folder || !project?.path || !(await knownFolder(folder, project, tasks))) continue;
     }
     noted(map, r.session, now); // a start refused counts as a try: it must not be asked for every minute for good
     // `claude --resume` stands at its prompt with the conversation back: only words set it to work, and only then has the

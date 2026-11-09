@@ -85,7 +85,19 @@ test('the copy of the task on its own branch, with the files outside git; ▶ th
   assert.ok(!existsSync(join(copy, 'missing.txt')), 'a file the project does not have is skipped');
   assert.equal(git(repo, 'status', '--porcelain'), '', 'the copies show in the main checkout\'s git status');
   assert.match(readFileSync(join(repo, '.git', 'info', 'exclude'), 'utf8'), /^\/\.claude\/worktrees\/$/m);
-  assert.deepEqual((await app.inject('/api/tasks/WT-1')).json().worktree, { path: copy, branch: 'claude/WT-1' });
+  // `git add -A` in it commits a link to the main checkout and «Stands» never sees the copy free
+  assert.equal(git(copy, 'status', '--porcelain'), '', 'the link of node_modules shows in the copy\'s git status');
+  // … and a file the main checkout shows (untracked, not ignored) keeps showing there: info/exclude is shared
+  writeFileSync(join(repo, 'local.cfg'), 'mine');
+  db.prepare("UPDATE projects SET worktree_files = worktree_files || '\nlink local.cfg' WHERE slug = 'wt'").run();
+  await W.taskFolder(proj('wt'), [taskOf('wt', 1)]);
+  assert.ok(lstatSync(join(copy, 'local.cfg')).isSymbolicLink());
+  assert.equal(git(repo, 'status', '--porcelain'), '?? local.cfg', 'a link of the copies hid the owner\'s own file from git status');
+  assert.doesNotMatch(readFileSync(join(repo, '.git', 'info', 'exclude'), 'utf8'), /local\.cfg/);
+  rmSync(join(repo, 'local.cfg'));
+  rmSync(join(copy, 'local.cfg'));
+  db.prepare("UPDATE projects SET worktree_files = 'copy .env\nlink node_modules\ncopy missing.txt' WHERE slug = 'wt'").run();
+  assert.deepEqual((await app.inject('/api/tasks/WT-1')).json().worktree, { path: copy, branch: 'claude/WT-1', base: 'main' });
   assert.equal((await launch({ project: 'wt', keys: ['WT-1'] })).json().folder, copy);
 });
 

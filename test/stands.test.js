@@ -82,6 +82,9 @@ before(async () => {
   writeFileSync(join(repo, 'data', 'seed.json'), '[1]\n');
   mkdirSync(join(cache, 'data'));
   writeFileSync(join(cache, 'data', 'seed.json'), '[1]\n');
+  // which `git worktree remove` takes only the link of: no reason to keep the stand
+  writeFileSync(join(repo, 'data', 'linked.db'), 'the owner\'s rows\n');
+  symlinkSync(join(repo, 'data', 'linked.db'), join(cache, 'data', 'linked.db'));
   // a Claude session works in the folder
   stand('sessioned', 'claude/sessioned');
   // an empty commit merges to main's tree like work that landed: it proves nothing

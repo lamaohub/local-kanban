@@ -430,6 +430,26 @@ test('a model the price table does not know: its tokens are counted, the money o
   assert.equal(u.context.window, 1_000_000, 'the last answer is a known model');
 });
 
+test('a session on another provider: its tokens are counted, the money is not, and the card names the provider', async () => {
+  const sid = '80000000-0000-4000-8000-00000000000a';
+  const task = newTask('Another provider');
+  const pid = Number(db.prepare("INSERT INTO launch_profiles (name, env) VALUES ('Elsewhere', ?)").run(JSON.stringify({ ANTHROPIC_BASE_URL: 'https://example.invalid' })).lastInsertRowid);
+  (await import('../src/profiles.js')).markSessionProfile(sid, { id: pid, env: JSON.stringify({ ANTHROPIC_BASE_URL: 'https://example.invalid' }) });
+  const t0 = Date.now() - 1_000_000;
+  writeFileSync(file(sid), lines([say(t0, `Do ${task.key}`)]));
+  await move(task, 'doing', t0 + 2000, sid);
+  appendFileSync(file(sid), lines([reply(t0 + 4000, 'p1', U(10, 20, 30))]));
+  const u = await usageOf(task);
+  assert.equal(u.total, 60);
+  assert.equal(u.unpriced, 60, 'the answers of another provider were priced as Anthropic\'s');
+  assert.equal(u.cost, null);
+  assert.deepEqual(u.unpriced_models, [`claude-opus-5-5 ${usage.THIRD_PARTY}`]);
+  const { THIRD_PARTY } = await import('../public/js/usage-rules.js');
+  assert.equal(THIRD_PARTY, usage.THIRD_PARTY, 'the page reads another mark than the server writes');
+  const ru = { tr: (x) => (x === THIRD_PARTY ? '(another provider, translated)' : x), num: (n) => String(n), date: (d) => d, plural: (n, a, b) => (n === 1 ? a : b), gap: '' };
+  assert.match(usageNotes(u, ru).join('\n'), /claude-opus-5-5 \(another provider, translated\)/, 'the mark of the provider is not said in the board\'s language');
+});
+
 test('two requests for the same task at once count its session once', async () => {
   const sid = '90000000-0000-4000-8000-000000000009';
   const task = newTask('Together');

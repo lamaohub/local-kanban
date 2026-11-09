@@ -137,16 +137,17 @@ CREATE TABLE IF NOT EXISTS task_worktrees (
   task_id     INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
   path        TEXT NOT NULL,
   branch      TEXT NOT NULL,
-  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  base        TEXT
 );
 CREATE TABLE IF NOT EXISTS task_prs (
   task_id     INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
   url         TEXT NOT NULL,
   number      INTEGER,
   state       TEXT NOT NULL DEFAULT 'OPEN',
-  checked_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  checked_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  head        TEXT
 );
-
 -- launch profile; «Take this one» makes its copy the task's (task_worktrees). Attempt 1 is the task's first copy.
 CREATE TABLE IF NOT EXISTS task_attempts (
   task_id     INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -155,6 +156,7 @@ CREATE TABLE IF NOT EXISTS task_attempts (
   branch      TEXT NOT NULL,
   profile_id  INTEGER,
   created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  base        TEXT,
   PRIMARY KEY (task_id, n)
 );
 -- the values never go to a page or a command line (src/profiles.js). A task may have its own; a session remembers its own.

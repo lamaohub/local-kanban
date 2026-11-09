@@ -16,6 +16,7 @@ import { paintAttention } from './attention.js';
 import { refusalLine, refusalText } from './unsaved.js';
 import { localStore } from './store.js';
 import { SHIP_TITLES, SHIP_WORDS, notOnMain, shipAsker, showsShip } from './shipped-rules.js';
+import { prMark } from './branch-rules.js';
 import { boardColumns } from './ready-rules.js';
 
 function matchesSearch(t) {
@@ -843,6 +844,8 @@ function cardParts(t) {
   const pri = PRI_ICON[t.priority];
   const ship = showsShip(t.status) ? state.shipped[t.key] : null;
   const linkedKeys = (t.linked_ids || []).map((id) => state.tasks.find((x) => x.id === id)?.key).filter(Boolean);
+  const pr = prMark(t);
+  const prNo = pr?.number ? ` #${pr.number}` : '';
   const html = `
     ${t.pinned ? `<span class="card-pin" title="${esc(tr('needs attention'))}">${ic('pin', 12)}</span>` : ''}
     <div class="card-key">${t.key}${state.slug === ALL ? ` <span class="card-proj">· ${esc(t.project)}</span>` : ''}</div>
@@ -854,6 +857,7 @@ function cardParts(t) {
       ${liveBadge(t)}
       ${workTimer(t)}
       ${ship ? `<span class="card-ship ship-${ship}" title="${esc(tr(SHIP_TITLES[ship]))}">${tr(SHIP_WORDS[ship])}</span>` : ''}
+      ${pr ? `<span class="card-pr pr-${pr.state}" title="${esc(tr('Pull request'))}${prNo}: ${esc(tr(pr.state))}">PR${prNo}${pr.state === 'open' ? '' : ` · ${esc(tr(pr.state))}`}</span>` : ''}
       ${stale ? `<span class="chip-stale" title="${tr('no movement — the chat is probably closed')}">${tr('stuck')} ${stale}${tr('h')}</span>` : ''}
       ${pri ? `<span class="pri ${pri[1]}" title="${esc(tr('priority:'))} ${pri[2]}">${pri[0]}</span>` : ''}
       ${t.labels.map(labelChip).join('')}

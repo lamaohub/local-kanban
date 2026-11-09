@@ -19,6 +19,7 @@ import { localStore } from './store.js';
 import { EDITORS, editorLink, previewUrl } from './editor-rules.js';
 import { renderChanges } from './changes.js';
 import { buildProfileSelect, profiles } from './profiles.js';
+import { WORDS_SAID, prButtonShown, prStateWord, sendWords } from './branch-rules.js';
 import { paintPick } from './pick.js';
 
 /* ── Drawer ── */
@@ -243,9 +244,8 @@ export async function renderBranchRow(t) {
   if (my !== branchAsk || state.drawerKey !== key) return; // another card meanwhile
   if (!b?.branch) { row.classList.add('hidden'); row.innerHTML = ''; return; }
   const ahead = b.ahead === null ? '' : b.ahead ? ` · ${tr('ahead of {base}: {n}').replace('{base}', b.base).replace('{n}', b.ahead)}` : ` · ${tr('nothing new against {base}').replace('{base}', b.base)}`;
-  const prState = { OPEN: 'open', MERGED: 'merged', CLOSED: 'closed' }[b.pr?.state] || 'open';
-  const pr = b.pr ? `<a class="issue-link" href="${esc(b.pr.url)}" target="_blank" rel="noopener noreferrer">PR${b.pr.number ? ` #${esc(b.pr.number)}` : ''} · ${esc(tr(prState))} ↗</a>`
-    : b.ahead ? `<button type="button" class="link-chip link-add" id="d-pr-open">${esc(tr('Open a pull request'))}</button>` : '';
+  const pr = (b.pr ? `<a class="issue-link" href="${esc(b.pr.url)}" target="_blank" rel="noopener noreferrer">PR${b.pr.number ? ` #${esc(b.pr.number)}` : ''} · ${esc(tr(prStateWord(b.pr)))} ↗</a>` : '')
+    + (prButtonShown(b) ? `<button type="button" class="link-chip link-add" id="d-pr-open">${esc(tr('Open a pull request'))}</button>` : '');
   const files = b.conflict?.files || [];
   const conflict = files.length ? `<div class="branch-conflict">${ic('warn', 13)}<span>${esc(tr('Conflicts with {base}').replace('{base}', b.base))}: ${esc(files.slice(0, 6).join(', '))}${files.length > 6 ? ` +${files.length - 6}` : ''}</span>`
     + `<button type="button" class="link-chip link-add" id="d-conflict-fix">${esc(tr('Let Claude resolve it'))}</button></div>` : '';
@@ -264,18 +264,17 @@ export async function renderBranchRow(t) {
     fix.disabled = true;
     const text = tr('The branch {branch} of {key} conflicts with {base} in: {files}. Merge {base} into the branch, resolve every conflict keeping what both sides meant, run the tests, commit, and tell me what you chose in each file.')
       .replaceAll('{branch}', b.branch).replaceAll('{key}', key).replaceAll('{base}', b.base).replace('{files}', files.join(', '));
-    const how = await wordsToClaude(t, text, fix);
-    note(how === 'chat' ? tr('Sent to Claude of the task.') : tr('Claude is started with these words.'));
+    const r = await wordsToClaude(t, text, fix);
+    if (r.how === 'refused') { fix.disabled = false; note(refusalLine(tr('Not sent'), r.error, tr)); return; }
+    note(tr(WORDS_SAID[r.how]));
   };
 }
 
-/** Words for the task's Claude: its own Claude of the board gets them in its chat (queued while it works); none — a start
-    of its own with these words. 'chat' or 'launch'. */
-export async function wordsToClaude(t, text, btn) {
-  try { await api('POST', `/api/tasks/${seg(t.key)}/chat`, { text }, { quiet: true }); return 'chat'; } catch {
-    launchInClaude({ text, project: t.project, keys: [t.key], btn });
-    return 'launch';
-  }
+export function wordsToClaude(t, text, btn) {
+  return sendWords(text, {
+    post: (words) => api('POST', `/api/tasks/${seg(t.key)}/chat`, { text: words }, { quiet: true }),
+    launch: () => launchInClaude({ text, project: t.project, keys: [t.key], btn }),
+  });
 }
 
 async function deleteLink(otherId) {

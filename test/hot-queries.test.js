@@ -53,6 +53,8 @@ test('the launches waiting for a session start from the tasks in prep, and answe
   assert.ok(Math.abs(got.get(waiting) - 0.5) < 0.05, `age ${got.get(waiting)}`);
   const [p] = plansOf(() => waitingLaunches(), () => []);
   assert.doesNotMatch(p, /SCAN (e|l|task_events|task_launches)\b/, p);
+  assert.doesNotMatch(p, /idx_events_session/, p);
+  assert.match(p.split(' | ')[0], /\b(t|tasks)\b/, `the plan does not start from the tasks: ${p}`);
   assert.deepEqual(sessionEvents(SID).map((e) => e.task_id), [taken, left]);
 });
 
@@ -82,4 +84,15 @@ test('a session\'s moves are kept between writes and read again after any write'
   assert.deepEqual(sessionEvents(sid).map((e) => e.status), ['prep', 'doing'], 'a new move was not seen');
   db.prepare('UPDATE task_events SET session_id = NULL WHERE id = ?').run(first); // undoTyped takes the signature off
   assert.deepEqual(sessionEvents(sid).map((e) => e.status), ['doing'], 'a move whose signature was taken off is still the session\'s');
+});
+
+// of every tick read the signed events (0.003 → 1.4 ms), and the moves a board session borrows read all unsigned ones
+test('the fresh launches go by the time of the events, the borrowed moves by the task', async () => {
+  const { freshLaunchSessions } = await import('../src/claude-sessions.js');
+  for (const p of plansOf(() => freshLaunchSessions(), () => ['-120 seconds'])) assert.doesNotMatch(p, /idx_events_session/, p);
+  const sid = '33333333-2222-4333-8444-555555555555';
+  db.prepare('INSERT OR IGNORE INTO board_sessions (session_id) VALUES (?)').run(sid);
+  const plans = plansOf(() => sessionEvents(sid), (sql) => Array(nParams(sql)).fill(sid));
+  const borrowed = plans.find((p) => /task_sessions|\bs\b/.test(p) && /idx_events_task/.test(p));
+  assert.ok(borrowed, `the borrowed moves do not go through idx_events_task:\n${plans.join('\n')}`);
 });

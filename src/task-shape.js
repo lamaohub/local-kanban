@@ -24,6 +24,7 @@ export function listShape(t) {
     work_started_at: t.work_started_at || null,
     work_truncated: t.work_truncated || 0,
     updated_at: t.updated_at,
+    pr: t.pr_url ? { number: t.pr_number ?? null, state: t.pr_state, url: t.pr_url } : null,
   };
 }
 
@@ -39,8 +40,9 @@ export function taskEvent(id) {
   const row = db.prepare(`
     SELECT t.*, p.slug AS project, (p.prefix || '-' || t.task_no) AS key,
       (SELECT COUNT(*) FROM task_comments c WHERE c.task_id = t.id) AS comments_n,
-      (SELECT COUNT(*) FROM task_attachments a WHERE a.task_id = t.id AND a.file != '') AS attachments_n
-    FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ?
+      (SELECT COUNT(*) FROM task_attachments a WHERE a.task_id = t.id AND a.file != '') AS attachments_n,
+      r.number AS pr_number, r.state AS pr_state, r.url AS pr_url
+    FROM tasks t JOIN projects p ON p.id = t.project_id LEFT JOIN task_prs r ON r.task_id = t.id WHERE t.id = ?
   `).get(id);
   return row ? listShape(row) : null;
 }

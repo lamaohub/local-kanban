@@ -104,6 +104,13 @@ const MIGRATIONS = [
     const cols = db.prepare('PRAGMA table_info(projects)').all().map((c) => c.name);
     if (cols.length && !cols.includes('profile_id')) db.exec('ALTER TABLE projects ADD COLUMN profile_id INTEGER');
   } },
+  // changes, «ahead», conflict and pull request are measured against; and the head a pull request was opened with
+  { v: 18, name: 'copy-base', up: () => {
+    for (const [table, col] of [['task_worktrees', 'base'], ['task_attempts', 'base'], ['task_prs', 'head']]) {
+      const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+      if (cols.length && !cols.includes(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} TEXT`); // no table yet: schema.sql makes it
+    }
+  } },
 ];
 export const SCHEMA_VERSION = MIGRATIONS.at(-1).v;
 

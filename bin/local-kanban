@@ -260,6 +260,8 @@ if (cmd === 'import') {
   say(`\n  ${dry ? 'Would bring over' : 'Brought over'} ${r.created} task(s)${r.skipped ? `, ${r.skipped} already here skipped` : ''}, ${r.links} parent link(s), ${r.pictures} picture(s).`);
   for (const p of r.projects || []) say(`  ${p.created ? (dry ? '+ would create' : '+ created') : '· into'} project «${p.name}» (${p.slug})`);
   if (r.not_pictures) say(`  ${r.not_pictures} file(s) are not pictures — named under the task's description instead.`);
+  if (r.missing) say(`  ${r.missing} file(s) named in attachments.csv are not in the archive — named under the task's description.`);
+  if (r.too_many) say(`  ${r.too_many} picture(s) over the limit of one task — named under the task's description.`);
   if (r.unknown_status?.length) say(`  Statuses the board does not know went to Backlog: ${r.unknown_status.join(', ')}.`);
   process.exit(0);
 }

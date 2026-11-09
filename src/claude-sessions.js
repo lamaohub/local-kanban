@@ -101,7 +101,7 @@ export const WAIT_MAX_H = 2;
 
 /** Sessions ▶ started less than LAUNCH_GRACE_S ago (inside the board, in the Terminal). */
 export function freshLaunchSessions(now = Date.now()) {
-  const out = new Set(db.prepare(`SELECT DISTINCT e.session_id FROM task_launches l JOIN task_events e ON e.id = l.event_id
+  const out = new Set(db.prepare(`SELECT DISTINCT e.session_id FROM task_launches l JOIN task_events e INDEXED BY idx_events_created ON e.id = l.event_id
     WHERE e.session_id IS NOT NULL AND e.created_at >= datetime('now', ?)`).all(`-${LAUNCH_GRACE_S} seconds`).map((r) => r.session_id));
   for (const [sid, at] of resumed) { if (now - at < LAUNCH_GRACE_S * 1000) out.add(sid); else resumed.delete(sid); }
   return out;

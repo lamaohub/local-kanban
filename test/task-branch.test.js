@@ -101,6 +101,21 @@ test('a pull request: the branch goes to origin, gh is asked with the card\'s wo
   assert.match(shown, /^pr: https:\/\/github\.com\/me\/repo\/pull\/7 \(open\)$/m);
 });
 
+test('a file in conflict is named as it is — a space and Cyrillic, not git\'s «"dir x/\\321\\204…"»', async () => {
+  const name = `dir x/${'\u0444\u0430\u0439\u043b'}.txt`; // Cyrillic written so that the source stays Latin (the release audit)
+  const copy = W.worktreeOf(task(1).id).path;
+  mkdirSync(join(repo, 'dir x'), { recursive: true });
+  writeFileSync(join(repo, name), 'main\n');
+  git(repo, 'add', '.');
+  git(repo, 'commit', '-q', '-m', 'main odd name');
+  git(repo, 'push', '-q', 'origin', 'main');
+  mkdirSync(join(copy, 'dir x'), { recursive: true });
+  writeFileSync(join(copy, name), 'the task\'s\n');
+  git(copy, 'add', '.');
+  git(copy, 'commit', '-q', '-m', 'BR-1 odd name');
+  assert.deepEqual((await app.inject('/api/tasks/BR-1/branch')).json().conflict, { files: ['a.txt', name] });
+});
+
 test('a guest of the Wi-Fi gets neither the branch nor a pull request', async () => {
   const { ownerOnly } = await import('../src/share.js');
   assert.equal(ownerOnly('GET', '/api/tasks/:id/branch'), true);

@@ -6,7 +6,8 @@ import { chaosPending } from './chaos.js';
 import { $, ALL, AUTO, HEALTH, CALENDAR, CHAOS, DASH, DONE, HORIZON, NOW, REVIEW, SETTINGS, api, hasUnsaved, ic, liftCurtain, loadLabelPalette, seg, setDoorClosed, state, tr } from './core.js';
 import { addChecklistItem, applyCommentDraft, applyKeepDrawer, applyTitleLabelShortcut, closeDrawer, commentDrafts, deleteTask, doAutosave, dropUnsentByToken, initTerminal, kbMoveCard, kbMoveCursor, launchOpenTask, onDrawerPaste, openDrawer, uploadCommentImage, wirePicturePick, wireTaskPicture, openDrawerMenu, openDrawerNew, openOpenTaskSession, openReturnPop, showOwnComment, pendingAttachments, pullDrawerFresh, queueComment, commentArrived, commentKeys, unsentToken, sayRefused, scheduleAutosave, setKbCursor, wireCardBack, descTyped, descConflictPending } from './drawer.js';
 import { closeProjectSettings, fileEditorHasChanges, openProjectSettings, projectSettingsDirty } from './project.js';
-import { applyCompact, applyTheme, customBinding, getSetting, listenForInstall, matchKey, skillDirty, syncLangToServer } from './settings.js';
+import { applyCompact, applyTheme, customBinding, getSetting, listenForInstall, matchKey, skillDirty, syncLangToServer, templatesDirty } from './settings.js';
+import { profilesDirty } from './profiles.js';
 import { closeTopLayer, loadTasks, switchProject } from './sidebar.js';
 import { maybeOnboarding, wizardResumes } from './onboarding.js';
 import { autoGrow, connectSSE, ensureAudio, ensureSSE, refresh, refreshSync, streamOpened } from './sse.js';
@@ -239,7 +240,7 @@ export function hasUnsavedInput() {
   if (chaosPending.length || pendingAttachments.length) return true;
   if (commentDrafts.size) return true;
   if (hasUnsaved()) return true;
-  if (projectSettingsDirty() || fileEditorHasChanges() || skillDirty()) return true;
+  if (projectSettingsDirty() || fileEditorHasChanges() || skillDirty() || templatesDirty() || profilesDirty()) return true;
   if (columnsDirty()) return true;
   if (chatDirty()) return true;
   if (descConflictPending()) return true;

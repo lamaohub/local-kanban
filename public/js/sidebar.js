@@ -76,7 +76,8 @@ export async function loadTasks() {
   if (state.slug === REVIEW) { showView('review'); await renderReview(); return; }
   if (state.slug === DONE) { showView('done'); await renderDone(); return; }
   if (state.slug === AUTO) { showView('automations'); await renderAutomations(); return; }
-  if (state.slug === HEALTH) { showView('health'); await renderHealth(); return; }
+  // opened right on «Health», the page stood empty until the 8 s fallback, its bar drawn but hidden under the skeleton
+  if (state.slug === HEALTH) { showView('health'); renderHealth().catch(() => {}); return; }
   if (state.slug === HORIZON) { showView('horizon'); await renderHorizon(); return; }
   if (state.slug === CALENDAR) { showView('calendar'); await renderCalendar(); return; }
   if (state.slug === CHAOS) { const opening = showView('chaos'); await renderChaos(opening); return; }

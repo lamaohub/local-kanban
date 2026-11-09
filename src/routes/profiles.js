@@ -1,7 +1,7 @@
 import { db } from '../db.js';
 import { emit } from '../bus.js';
 import { resolveTask } from './tasks.js';
-import { PROFILES_MAX, listProfiles, profileById, profileInput, shown } from '../profiles.js';
+import { PROFILES_MAX, dropProfileFiles, listProfiles, profileById, profileInput, refreshProfileFiles, shown } from '../profiles.js';
 
 export default async function profileRoutes(app) {
   const changed = () => emit('profiles.updated', { profiles: listProfiles() });
@@ -20,6 +20,7 @@ export default async function profileRoutes(app) {
     const r = profileInput(req.body, was);
     if (r.error) return reply.code(400).send(r);
     db.prepare('UPDATE launch_profiles SET name = @name, model = @model, effort = @effort, env = @env WHERE id = @id').run({ ...r.row, id: was.id });
+    refreshProfileFiles(profileById(was.id));
     changed();
     return shown(profileById(was.id));
   });
@@ -30,6 +31,7 @@ export default async function profileRoutes(app) {
       db.prepare('UPDATE projects SET profile_id = NULL WHERE profile_id = ?').run(id);
       db.prepare('DELETE FROM launch_profiles WHERE id = ?').run(id); // a task's own goes with it (ON DELETE CASCADE)
     })();
+    dropProfileFiles(id);
     changed();
     return { ok: true };
   });

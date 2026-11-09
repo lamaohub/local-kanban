@@ -158,6 +158,8 @@ async function keptIgnored(dir, top, ignored) {
     if (st.isSymbolicLink()) {
       let same2 = false;
       try { same2 = (await readlink(a)) === (await readlink(b)); } catch { /* not in main */ }
+      // the same file, which `git worktree remove` takes only the link of; such a copy was never «can go»
+      if (!same2) { try { same2 = (await realpath(a)) === (await realpath(b)); } catch { /* not in main */ } }
       if (!same2) out.push(rel);
       return true;
     }

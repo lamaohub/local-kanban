@@ -11,6 +11,10 @@ const STREAM = /^text\/event-stream/i;
 /* Answers that are held open on purpose — not slow: the stream of events (its headers go by `raw.writeHead`, so the reply
    does not know its type) and the long poll of a hook waiting for the person's answer (up to POLL_HOLD_MS, 25 s). */
 export const HELD_OPEN = new Set(['GET /api/events', 'GET /api/asks/:id/wait']);
+export const WAITS = new Set(['GET /api/health', 'GET /api/health/stands', 'GET /api/update-check', 'GET /api/whats-new',
+  'POST /api/update', 'POST /api/launch', 'POST /api/tasks/:id/chat', 'POST /api/tasks/:id/chat/queue/:itemId/now',
+  // the branch of a task's copy asks GitHub of its pull request (gh, up to 20 s); a pull request pushes and asks gh
+  'GET /api/tasks/:id/branch', 'POST /api/tasks/:id/pr']);
 
 const ms = (ns) => Math.round(ns / 1e6);
 
@@ -40,6 +44,7 @@ export function createSlowWatch({ now = Date.now, log = logError, histogram = nu
   function tick() {
     const at = now();
     const top = [...routes].map(([route, r]) => ({ route, n: r.n, avg: Math.round(r.total / r.n), max: Math.round(r.max) }))
+      .map((r) => (WAITS.has(r.route) ? { ...r, waits: true } : r))
       .sort((a, b) => b.max - a.max).slice(0, ROUTES_SHOWN);
     const win = {
       at, seconds: Math.round((at - started) / 1000),
@@ -53,7 +58,7 @@ export function createSlowWatch({ now = Date.now, log = logError, histogram = nu
     windows.push(win);
     if (windows.length > WINDOWS_KEPT) windows.shift();
     const slowLoop = win.loop && win.loop.p95 > LOOP_P95_MS;
-    const slowRoutes = top.filter((r) => r.max > ROUTE_SLOW_MS);
+    const slowRoutes = top.filter((r) => r.max > ROUTE_SLOW_MS && !r.waits);
     if ((slowLoop || slowRoutes.length) && at - loggedAt >= LOG_EVERY_MS) {
       loggedAt = at;
       const what = [
@@ -72,14 +77,14 @@ export function createSlowWatch({ now = Date.now, log = logError, histogram = nu
     const byRoute = new Map();
     for (const w of windows) for (const r of w.routes) {
       const b = byRoute.get(r.route);
-      if (!b || r.max > b.max) byRoute.set(r.route, { route: r.route, max: r.max, at: w.at });
+      if (!b || r.max > b.max) byRoute.set(r.route, { route: r.route, max: r.max, at: w.at, ...(r.waits ? { waits: true } : {}) });
     }
     const slowest = [...byRoute.values()].sort((a, b) => b.max - a.max).slice(0, ROUTES_SHOWN);
     return {
       limits: { loop_p95_ms: LOOP_P95_MS, route_ms: ROUTE_SLOW_MS, window_s: WINDOW_MS / 1000 },
       minutes: windows.length,
       last, worst: worst ? { at: worst.at, loop: worst.loop } : null, slowest,
-      slow: Boolean(last && ((last.loop && last.loop.p95 > LOOP_P95_MS) || last.routes.some((r) => r.max > ROUTE_SLOW_MS))),
+      slow: Boolean(last && ((last.loop && last.loop.p95 > LOOP_P95_MS) || last.routes.some((r) => r.max > ROUTE_SLOW_MS && !r.waits))),
     };
   }
 

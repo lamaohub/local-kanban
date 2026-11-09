@@ -147,7 +147,7 @@ export function loadWords(v, { tr, fmtNum }) {
   if (v.worst?.loop && v.minutes > 1) text += `; ${tr('the worst minute of the hour — {ms}').replace('{ms}', msw(v.worst.loop.p95))}`;
   text += '.';
   if (v.slow) text += ` ${tr('That is slow — the error log has a record of it.')}`;
-  const slowest = (v.slowest || []).filter((r) => r.max >= SLOW_ANSWER_SHOWN_MS);
+  const slowest = (v.slowest || []).filter((r) => r.max >= SLOW_ANSWER_SHOWN_MS && !r.waits);
   const routes = slowest.length ? `${tr('Slowest answers this hour:')} ${slowest.map((r) => `${r.route} ${sec(r.max)}`).join(', ')}` : '';
   return { slow: Boolean(v.slow), text, routes };
 }

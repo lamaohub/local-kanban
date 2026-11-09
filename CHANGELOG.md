@@ -8,6 +8,25 @@ version it goes out as and opens an empty one again. Released sections are histo
 
 ## [Unreleased]
 
+## [2.0.0-beta.14]
+
+### Fixed
+
+- «Point for Claude» trusts only its own bookmark: the bookmark carries a mark of this board, an element without it is refused on the card (an old bookmark says it is out of date — take the new one), and the card shows, word for word, the message that goes to Claude, the page's HTML included. Before, any site could open the board with a made-up element whose hidden HTML went to Claude with the rest.
+- Importing a vibe-kanban archive no longer believes the archive: entries of its directory that overlap are a damaged archive, only the files the import needs are unpacked and never past their declared size, the pictures weighed before any is unpacked (256 MB in one import) — a 66 KB archive could make the board take 2 GB. A row repeated in one archive is one task instead of an error.
+- `kb-mcp` answers whole at the end of its input (answers over 64 KB were cut), `create_task` without a title is an error instead of a task called «undefined», and batches of requests are answered.
+- «Changes» of a card reads a diff as a stream within its limits: a line of 5 MB, a diff of 50 MB and more no longer hang the page or swell the board, a commit too large to read stays in the list marked so, and files Claude made but did not add to git show too. Paths in a project inside a bigger repository, and names with spaces, quotes or line breaks, are read whole.
+- The branch of a task's copy is measured against the branch the copy was made from (`dev`, say), not main: «ahead», the conflict, «Changes» and the pull request no longer take other tasks' commits of that branch. A conflict names its files as they are (Cyrillic included).
+- A pull request: a merged or closed one gives way to «Open pull request» again when the branch has new commits, a failing or hanging `gh` is asked at most once a minute instead of on every look at the card, and the board's cards show «PR #N» with its state.
+- Words for the task's Claude — «Let Claude resolve it», the remarks of «Changes», «Point for Claude» — are kept when the chat refuses them (a full queue, another board's terminal, words not typed): the refusal is said, and a second Claude is started only when the task has none.
+- «@» in a field inserts the template or file of the letters typed last, also when Enter comes right after them, and the Enter that ends an input method's composition no longer picks one.
+- Settings ask before leaving unsaved edits of description templates and launch profiles.
+- Deleting a launch profile removes the settings files that held its variables, and an edited profile rewrites them; ▶ inside the board and the Terminal write files of their own. A model starting with «-», and variables that load code into programs (LD_PRELOAD, DYLD_*, NODE_OPTIONS…) or that the board sets for its own Claude, are refused. `kb show` names the task's launch profile.
+- «Continue» brings a session of an attempt back in the attempt's copy (it went to the task's copy, where Claude Code has no such conversation), and a task's copy no longer shows its link of node_modules as a new file.
+- The stored answers of the task list are bounded (many different requests could hold 150 MB), and two queries every few seconds take the right index again.
+- The board no longer writes itself down as slow for answers long by design — the walk of «Health» over the projects' folders, the check of an update, the chat's wait for Claude Code.
+- «Health» opened right on itself (a reload, a new tab) shows its bar at once instead of an empty page for up to 8 seconds, and «Stands» no longer keeps a task's copy whose files are links to the main checkout's own.
+
 ## [2.0.0-beta.13]
 
 ### Added

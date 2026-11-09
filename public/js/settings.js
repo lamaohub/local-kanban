@@ -6,7 +6,7 @@ import { $, ALL, statusesFor, HEALTH, LANG, api, apiBlob, esc, fmtNum, ic, seg, 
 import { applyKeepDrawer, repaintProjectLinks, repaintWorkTabs } from './drawer.js';
 import { EDITORS } from './editor-rules.js';
 import { forgetTemplates, templateList } from './at-picker.js';
-import { renderProfiles } from './profiles.js';
+import { profilesDirty, renderProfiles } from './profiles.js';
 import { checkVersion, hasUnsavedInput, pendingReload } from './init.js';
 import { confirmDiscard, loadProjects, popLayer, pushLayer, renderSidebar, selectProject, setupPromptBlockHTML, styledAlert, styledConfirm, styledPrompt, wireSetupPrompt } from './sidebar.js';
 import { SHORT_MONTHS, SOUND_LIB, STATUS_LABELS, audioCtx, lastMissedAt, lastSseAt, loadLaunchOptions, missedSounds, pageLoadedAt, playNamedSound, refresh, relTime, repaintUsage, titleOr, updateSoundBadge } from './sse.js';
@@ -110,6 +110,14 @@ export function getSetting(k) {
   if (d !== undefined && (got === null || typeof got !== typeof d || Array.isArray(got) !== Array.isArray(d))) return d;
   return got;
 }
+let tplSnap = null;
+const readTemplates = (box) => [...box.querySelectorAll('.tpl-row')]
+  .map((r) => ({ name: r.querySelector('.tpl-name').value.trim().replace(/^@/, ''), text: r.querySelector('.tpl-text').value }))
+  .filter((t) => t.name || t.text.trim());
+export function templatesDirty() {
+  const box = $('tpl-box');
+  return Boolean(box && tplSnap !== null && box.querySelector('.tpl-list') && JSON.stringify(readTemplates(box)) !== tplSnap);
+}
 async function renderTemplates(box) {
   const list = await templateList();
   if (!box.isConnected) return; // the window was closed meanwhile
@@ -122,6 +130,7 @@ async function renderTemplates(box) {
     + `<button type="button" class="btn-ghost" id="tpl-reset">${tr("Back to the board's")}</button>`
     + `<button type="button" class="btn-ghost" id="tpl-save">${tr('Save')}</button><span class="tpl-said muted" id="tpl-said" role="status"></span></div>`;
   const listEl = box.querySelector('.tpl-list');
+  tplSnap = JSON.stringify(readTemplates(box));
   const said = (s) => { const el = box.querySelector('#tpl-said'); if (el) el.textContent = s; };
   listEl.onclick = (e) => { if (e.target.closest('.tpl-del')) e.target.closest('.tpl-row').remove(); };
   box.querySelector('#tpl-add').onclick = () => { listEl.insertAdjacentHTML('beforeend', row({ name: '', text: '' })); listEl.lastElementChild.querySelector('.tpl-name').focus(); };
@@ -129,12 +138,11 @@ async function renderTemplates(box) {
     try {
       await api('PUT', '/api/templates', { templates }, { quiet: true });
       forgetTemplates();
+      if (templates !== null) tplSnap = JSON.stringify(templates);
       if (box.isConnected) { if (templates === null) await renderTemplates(box); said(tr('Saved ✓')); }
     } catch (err) { said(refusalLine(tr('Not saved'), err, tr)); }
   };
-  box.querySelector('#tpl-save').onclick = () => put([...listEl.querySelectorAll('.tpl-row')]
-    .map((r) => ({ name: r.querySelector('.tpl-name').value.trim().replace(/^@/, ''), text: r.querySelector('.tpl-text').value }))
-    .filter((t) => t.name || t.text.trim()));
+  box.querySelector('#tpl-save').onclick = () => put(readTemplates(box));
   box.querySelector('#tpl-reset').onclick = () => put(null);
 }
 function wireVibeImport() {
@@ -159,7 +167,9 @@ function wireVibeImport() {
       if (!ok || !$('imp-up')) return;
       const r = await send(file, false);
       say(`<div class="bkr-head">${esc(tr('Brought over'))}: ${r.created} · ${esc(tr('links'))}: ${r.links} · ${esc(tr('pictures'))}: ${r.pictures}</div>`
-        + (r.not_pictures ? `<div class="bkr-sub muted">${esc(tr('Files that are not pictures are named under the task descriptions.'))}</div>` : ''));
+        + (r.not_pictures ? `<div class="bkr-sub muted">${esc(tr('Files that are not pictures are named under the task descriptions.'))}</div>` : '')
+        + (r.missing ? `<div class="bkr-sub muted">${esc(tr('Files the archive does not hold are named under the task descriptions.'))}</div>` : '')
+        + (r.too_many ? `<div class="bkr-sub muted">${esc(tr('Pictures over the limit of one task are named under its description.'))}</div>` : ''));
       refresh();
     } catch (err) {
       say(`<div class="bkr-head bkr-bad">${ic('warn', 13)} ${tr('Did not work out')}</div><div class="bkr-sub muted">${esc(err.body?.reason === 'not-vibe' ? tr('This is not the archive vibe-kanban\'s «Export data» gives, or it is damaged.') : tr(refusalText(err).reason))}</div>`);
@@ -253,13 +263,13 @@ function syncThemeColor() {
 }
 
 const SM_SECTIONS = [['general', tr('General')], ['appearance', tr('Appearance')], ['app', tr('As an app')], ['share', 'Wi-Fi'], ['cats', tr('Sections')], ['statuses', tr('Statuses')], ['claude', 'Claude Code'], ['skills', tr('Skills')], ['health', tr('Health')], ['archive', tr('Archived')], ['sync', tr('Sync')], ['errors', tr('Errors')], ['backups', tr('Backups')], ['keys', tr('Hotkeys')], ['about', tr('About')]];
-const leaveSkillEditor = async () => !skillDirty() || confirmDiscard();
+const leaveUnsavedEdits = async () => !(skillDirty() || templatesDirty() || profilesDirty()) || confirmDiscard();
 let settingsAsking = false;
 async function requestCloseSettings() {
   if (settingsAsking || !$('settings-overlay')) return;
   settingsAsking = true;
   let ok = false;
-  try { ok = await leaveSkillEditor(); } finally { settingsAsking = false; }
+  try { ok = await leaveUnsavedEdits(); } finally { settingsAsking = false; }
   if (!ok) { if ($('settings-overlay')) pushLayer('settings-overlay', requestCloseSettings); return; }
   closeSettingsModal();
 }
@@ -317,7 +327,7 @@ export function openSettingsModal(section) {
   overlay.onclick = (e) => { if (e.target === overlay) requestCloseSettings(); };
   overlay.querySelectorAll('.sm-nav-item').forEach((n) => {
     n.onclick = async () => {
-      if (!await leaveSkillEditor()) return;
+      if (!await leaveUnsavedEdits()) return;
       overlay.querySelectorAll('.sm-nav-item').forEach((x) => x.classList.toggle('active', x === n));
       renderSection(n.dataset.sec);
     };
@@ -1242,10 +1252,10 @@ async function renderSkillsSection(body) {
   $('sk-list').innerHTML = groups.filter(([, list]) => list.length)
     .map(([title, list]) => `<div class="sk-group-h">${esc(title)}</div>${list.map(row).join('')}`).join('');
   $('sk-list').querySelectorAll('.sk-row').forEach((row) => {
-    row.onclick = async () => { if (await leaveSkillEditor()) selectSkillRow(row.dataset.name); };
+    row.onclick = async () => { if (await leaveUnsavedEdits()) selectSkillRow(row.dataset.name); };
   });
   $('sk-new').onclick = async () => {
-    if (!await leaveSkillEditor()) return;
+    if (!await leaveUnsavedEdits()) return;
     styledPrompt(tr('New skill'), {
       placeholder: tr('name: latin letters, digits, hyphen'),
       okLabel: tr('Create'),
@@ -1295,7 +1305,7 @@ async function renderSkillsSection(body) {
 
   $('sk-take').onclick = async () => {
     if (!skillSel) return;
-    if (!await leaveSkillEditor()) return; // the editor's own unsaved text would be read over
+    if (!await leaveUnsavedEdits()) return; // the editor's own unsaved text would be read over
     const ok = await styledConfirm(`${tr('Replace this skill with the version this board ships?')} ${tr('The current file is kept among the board\'s backups.')}`,
       { okLabel: tr('Replace'), detail: skillSel.real_path });
     if (!ok) return;

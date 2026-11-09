@@ -397,6 +397,31 @@ test('v17: a board of v16 gets projects.profile_id, empty for its projects', (t)
   assert.equal(after.prepare("SELECT profile_id FROM projects WHERE slug = 'old'").get().profile_id, null);
 });
 
+// of a pull request
+test('v18: a board of v17 gets the base of copies and attempts and the head of a pull request, NULL for its rows', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'kb-mig-base-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  migrateDir(dir);
+  const db = new Database(join(dir, 'kanban.db'));
+  db.exec('ALTER TABLE task_worktrees DROP COLUMN base');
+  db.exec('ALTER TABLE task_attempts DROP COLUMN base');
+  db.exec('ALTER TABLE task_prs DROP COLUMN head');
+  const pid = db.prepare("INSERT INTO projects (slug, name, prefix) VALUES ('old', 'Old', 'OL')").run().lastInsertRowid;
+  const task = db.prepare("INSERT INTO tasks (project_id, task_no, title) VALUES (?, 1, 'T')").run(pid).lastInsertRowid;
+  db.prepare("INSERT INTO task_worktrees (task_id, path, branch) VALUES (?, '/x', 'claude/OL-1')").run(task);
+  db.prepare("INSERT INTO task_attempts (task_id, n, path, branch) VALUES (?, 2, '/y', 'claude/OL-1-a2')").run(task);
+  db.prepare("INSERT INTO task_prs (task_id, url, number) VALUES (?, 'https://x/pull/1', 1)").run(task);
+  db.pragma('user_version = 17');
+  db.close();
+  migrateDir(dir);
+  const after = new Database(join(dir, 'kanban.db'));
+  t.after(() => after.close());
+  assert.ok(after.pragma('user_version', { simple: true }) >= 18);
+  assert.equal(after.prepare('SELECT base FROM task_worktrees').get().base, null);
+  assert.equal(after.prepare('SELECT base FROM task_attempts').get().base, null);
+  assert.equal(after.prepare('SELECT head FROM task_prs').get().head, null);
+});
+
 // task_worktrees tied to its task
 test('v16: a board of v15 gets the columns of copies — 0 for its projects — and task_worktrees', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'kb-mig-wt-'));

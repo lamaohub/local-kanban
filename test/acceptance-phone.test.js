@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { prMark } from '../public/js/branch-rules.js';
 
 const read = (rel) => readFileSync(new URL(`../public/${rel}`, import.meta.url), 'utf8');
 const code = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
@@ -78,18 +79,23 @@ test('CK-848: all that a card shows is in its signature, and a kept node reads t
   const ctx = {
     state: { tasks: [], live: {}, slug: 'x' }, WORKING: new Set(), DRAG_LOCKED: new Set(), PRI_ICON: {}, ALL: '*',
     staleHours: (t) => t.stale || 0, atLimit: () => false, taskIsNoclaude: () => false, liveBadge: () => '', workTimer: () => '',
-    labelChip: (x) => x, ic: () => '', esc: (x) => x, tr: (x) => x, showsShip: () => true, SHIP_WORDS: { branch: 'only in a branch' }, SHIP_TITLES: {},
+    labelChip: (x) => x, ic: () => '', esc: (x) => x, tr: (x) => x, showsShip: () => true, SHIP_WORDS: { branch: 'only in a branch' }, SHIP_TITLES: {}, prMark,
   };
   ctx.state.shipped = {};
   vm.runInNewContext(`${src}; this.parts = cardParts;`, ctx);
   const t = { id: 1, key: 'A-1', status: 'todo', title: 'one', labels: [], preview: '', priority: 0 };
   assert.equal(ctx.parts(t).sig, ctx.parts({ ...t }).sig);
-  for (const change of [{ title: 'two' }, { comments_n: 1 }, { labels: ['bug'] }, { attachments_n: 2 }, { pinned: 1 }, { stale: 3 }]) {
+  for (const change of [{ title: 'two' }, { comments_n: 1 }, { labels: ['bug'] }, { attachments_n: 2 }, { pinned: 1 }, { stale: 3 }, { pr: { number: 7, state: 'OPEN', url: 'u' } }]) {
     assert.notEqual(ctx.parts({ ...t, ...change }).sig, ctx.parts(t).sig, `${Object.keys(change)} does not reach the screen by a render`);
   }
   const plain = ctx.parts(t).sig;
   ctx.state.shipped = { 'A-1': 'branch' };
   assert.notEqual(ctx.parts(t).sig, plain, 'CK-895: the mark does not reach the screen by a render');
+  ctx.state.shipped = {};
+  const open = ctx.parts({ ...t, status: 'review', pr: { number: 7, state: 'OPEN', url: 'u' } }).html;
+  assert.match(open, /class="card-pr pr-open"[^>]*>PR #7<\/span>/);
+  assert.match(ctx.parts({ ...t, status: 'review', pr: { number: 7, state: 'MERGED', url: 'u' } }).html, />PR #7 · merged<\/span>/);
+  assert.doesNotMatch(ctx.parts({ ...t, status: 'done', pr: { number: 7, state: 'MERGED', url: 'u' } }).html, /card-pr/);
   assert.match(fnOf(board, 'function cardEl('), /openDrawer\(now\(\)\.key\)/, 'a kept card opens the key it was drawn with');
 });
 

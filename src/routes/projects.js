@@ -73,13 +73,15 @@ const PATCHABLE = ['name', 'prefix', 'path', 'server_path', 'deploy_skill', 'ser
 
 const GUEST_GATE = { error: 'only the owner of the board says whether a project waits for the word', reason: 'guest' };
 const GUEST_COPIES = { error: 'only the owner of the board says whether tasks get copies of the repository', reason: 'guest' };
-const COPY_FIELDS = ['worktrees', 'worktree_files', 'worktree_setup', 'profile_id'];
+const COPY_FIELDS = ['worktrees', 'worktree_files', 'worktree_setup'];
+const GUEST_PROFILE = { error: 'only the owner of the board picks the launch profile of a project', reason: 'guest' };
 /** What a request asks of the copies of tasks that it may not: a guest changing them, or lines that are not copy/link. */
 function copiesRefusal(req, p) {
   const b = req.body || {};
   // the settings of a project send every field: only a change of these is refused
   const same = (k) => (k === 'worktrees' ? normField(k, b[k]) === (p?.worktrees || 0) : String(b[k] ?? '') === String(p?.[k] ?? ''));
   if (isGuest(req) && COPY_FIELDS.some((k) => b[k] !== undefined && !(p && same(k)))) return { code: 403, body: GUEST_COPIES };
+  if (isGuest(req) && b.profile_id !== undefined && !(p && same('profile_id'))) return { code: 403, body: GUEST_PROFILE };
   if (typeof b.worktree_files === 'string') { const e = filesProblem(b.worktree_files); if (e) return { code: 400, body: { error: e, field: 'worktree_files' } }; }
   return null;
 }

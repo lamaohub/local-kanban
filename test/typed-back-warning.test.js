@@ -175,6 +175,9 @@ test('a move that changes nothing and a note sent again still say the task is in
   assert.equal(again.status, 200, 'the note sent again was written twice');
   assert.equal(again.json.id, first.json.id);
   assert.ok(bodyWarned(again, key), `a note sent again did not carry the warning: ${JSON.stringify(again.json)}`);
+  // when the next test took a task in the same second as these notes (last_seen is compared by the second) — under the
+  // load of the whole suite it stayed, and two tests below named it
+  assert.equal((await kb(['review', key, 'Handed in again.'])).code, 0);
 });
 
 test('words that took a task from To do into prep say nothing of Review', async () => {

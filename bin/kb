@@ -193,6 +193,7 @@ function printIssue(t) {
   else if (t.gh_issue_url) console.log(`issue: ${t.gh_issue_url}`);
   if (t.worktree) console.log(`worktree: ${t.worktree.path} (branch ${t.worktree.branch}) — work and commit there, not in the main checkout`);
   if (t.pr) console.log(`pr: ${t.pr.url} (${String(t.pr.state || '').toLowerCase()})`);
+  if (t.profile_name) console.log(`profile: ${t.profile_name}${t.profile == null ? " (the project's)" : ''}`);
 }
 
 // sees cards in the column, and a bare "empty" made Claude report that there was nothing there.

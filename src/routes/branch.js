@@ -37,7 +37,7 @@ export default async function branchRoutes(app) {
   app.get('/api/tasks/:id/attempts', async (req, reply) => {
     const t = taskOr404(req, reply); if (!t) return reply;
     const list = attemptsOf(t);
-    for (const a of list) { const b = await baseOf(a.path); a.ahead = b ? await ahead(a.path, b.ref) : null; a.base = b?.name || null; }
+    for (const a of list) { const b = await baseOf(a.path, a.base); a.ahead = b ? await ahead(a.path, b.ref) : null; a.base = b?.name || null; }
     return { attempts: list };
   });
   app.post('/api/tasks/:id/attempts', async (req, reply) => {
@@ -62,7 +62,6 @@ export default async function branchRoutes(app) {
       if (['push', 'gh'].includes(r.reason)) logError('server', 'POST /api/tasks/:id/pr', r.error, t.key);
       return reply.code(409).send(r);
     }
-    emit('task.updated', taskEvent(t.id)); // the card of another tab shows the link
-    return r;
+    return r; // a new request goes out as task.updated from keepPr (task-branch.js): the cards and the list show it
   });
 }

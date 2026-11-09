@@ -36,6 +36,12 @@ const row = (p) => `<div class="pf-row" data-id="${p.id || ''}">`
   + `<textarea class="pf-env" rows="2" placeholder="ANTHROPIC_BASE_URL=https://…&#10;ANTHROPIC_AUTH_TOKEN=…">${esc((p.env || []).map((k) => `${k}=•••`).join('\n'))}</textarea>`
   + `<div class="pf-btns"><button type="button" class="btn-ghost pf-save">${esc(tr('Save'))}</button><span class="pf-said muted" role="status"></span></div></div>`;
 
+const rowValues = (el) => JSON.stringify([el.querySelector('.pf-name').value, el.querySelector('.pf-model').value, el.querySelector('.pf-effort').dataset.value || '', el.querySelector('.pf-env').value]);
+export function profilesDirty() {
+  const box = document.getElementById('pf-box');
+  return Boolean(box) && [...box.querySelectorAll('.pf-row')].some((el) => el.dataset.saved !== undefined && rowValues(el) !== el.dataset.saved);
+}
+
 /** Settings → Claude Code → Launch profiles. */
 export async function renderProfiles(box) {
   const list = await profiles(true);
@@ -48,12 +54,14 @@ export async function renderProfiles(box) {
     const effort = el.querySelector('.pf-effort');
     buildSelect(effort, { value: effort.dataset.value || '', options: [{ value: '', label: tr('As the page says') }, ...EFFORTS.map((v) => ({ value: v, label: tr(EFFORT_LABELS[v]) }))], onChange: (v) => { effort.dataset.value = v; } });
     const said = (s) => { el.querySelector('.pf-said').textContent = s; };
+    el.dataset.saved = rowValues(el);
     el.querySelector('.pf-save').onclick = async () => {
       const body = { name: el.querySelector('.pf-name').value, model: el.querySelector('.pf-model').value, effort: effort.dataset.value || '', env: envOf(el.querySelector('.pf-env').value) };
       try {
         const saved = el.dataset.id ? await api('PATCH', `/api/profiles/${seg(el.dataset.id)}`, body, { quiet: true }) : await api('POST', '/api/profiles', body, { quiet: true });
         el.dataset.id = saved.id;
         el.querySelector('.pf-env').value = saved.env.map((k) => `${k}=•••`).join('\n');
+        el.dataset.saved = rowValues(el);
         cache.at = 0;
         said(tr('Saved ✓'));
       } catch (e) { said(refusalLine(tr('Not saved'), e, tr)); }

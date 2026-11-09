@@ -36,6 +36,9 @@ export function memoryText(ctx, f) {
   return tokensText(ctx.tokens, f);
 }
 
+export const THIRD_PARTY = '(another provider)';
+export const modelShown = (m, f) => (String(m).endsWith(` ${THIRD_PARTY}`) ? `${String(m).slice(0, -THIRD_PARTY.length)}${f.tr(THIRD_PARTY)}` : String(m));
+
 /** The lines of the usage tooltip: what the tokens were, what the money means (with a subscription
     it is notional), what is not priced or not fully recorded, and the memory on the last answer. */
 export function usageNotes(u, f) {
@@ -48,7 +51,7 @@ export function usageNotes(u, f) {
       + f.tr('With a subscription the money is notional: the plan is paid, not the tokens.'));
   }
   if (u.unpriced > 0) {
-    out.push(`${f.tr('No price for')} ${u.unpriced_models.join(', ')}: ${tokensPhrase(u.unpriced, f)} ${f.tr('counted without money.')}`);
+    out.push(`${f.tr('No price for')} ${u.unpriced_models.map((m) => modelShown(m, f)).join(', ')}: ${tokensPhrase(u.unpriced, f)} ${f.tr('counted without money.')}`);
   }
   // the number goes after a colon: in Russian a verb after a number has to agree with it
   if (u.partial_answers > 0) {

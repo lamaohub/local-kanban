@@ -5,6 +5,8 @@
 // default) — the board keeps every rule (statuses, labels, who holds a task), the server only names its refusal.
 // Config of a client:  { "mcpServers": { "kanban": { "command": "kb-mcp" } } }   (KB_URL in "env" for another port)
 // The protocol: JSON-RPC 2.0, one message per line on stdin and stdout; stdout carries nothing else, notes go to stderr.
+// A batch (an array — 2025-03-26 has them, 2025-06-18 took them out) is answered as JSON-RPC 2.0 says: an array of the
+// answers, nothing when it held only notifications.
 
 const BASE = (process.env.KB_URL || 'http://127.0.0.1:3100').replace(/\/+$/, '');
 const VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
@@ -108,8 +110,10 @@ const TOOLS = [
       additionalProperties: false,
     },
     run: async (a) => {
+      // without it the task was «undefined» (String(undefined)); the board takes an empty title, a client means none
+      if (typeof a.title !== 'string' || !a.title.trim()) throw new ToolError('title: the words of the task');
       const t = await board('POST', '/api/tasks', {
-        project: decodeURIComponent(seg(a.project, 'project')), title: String(a.title), description: String(a.description || ''),
+        project: decodeURIComponent(seg(a.project, 'project')), title: a.title, description: String(a.description || ''),
         priority: PRIORITY[a.priority || 'none'] ?? 0, status: a.status || 'backlog',
       });
       return `${t.key} created in ${t.status}`;
@@ -165,38 +169,48 @@ const TOOLS = [
 ];
 
 const send = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
-const reply = (id, result) => send({ jsonrpc: '2.0', id, result });
-const fail = (id, code, message) => send({ jsonrpc: '2.0', id, error: { code, message } });
+const ok = (id, result) => ({ jsonrpc: '2.0', id, result });
+const fail = (id, code, message) => ({ jsonrpc: '2.0', id, error: { code, message } });
 
+/** One message → its answer, or null when nothing is answered (a notification). */
 async function handle(msg) {
-  if (!msg || msg.jsonrpc !== '2.0' || typeof msg.method !== 'string') {
-    if (msg && msg.id !== undefined && msg.id !== null) fail(msg.id, -32600, 'not a JSON-RPC 2.0 request');
-    return;
+  if (!msg || typeof msg !== 'object' || Array.isArray(msg) || msg.jsonrpc !== '2.0' || typeof msg.method !== 'string') {
+    return fail(msg && typeof msg === 'object' && (typeof msg.id === 'string' || typeof msg.id === 'number') ? msg.id : null, -32600, 'not a JSON-RPC 2.0 request');
   }
   const { id, method, params } = msg;
   const notification = id === undefined || id === null;
-  if (notification) return; // notifications/initialized, notifications/cancelled — nothing to answer
+  if (notification) return null; // notifications/initialized, notifications/cancelled — nothing to answer
   if (method === 'initialize') {
     const asked = params?.protocolVersion;
-    reply(id, {
+    return ok(id, {
       protocolVersion: VERSIONS.includes(asked) ? asked : VERSIONS[0],
       capabilities: { tools: { listChanged: false } },
       serverInfo: { name: 'local-kanban', version: '1' },
       instructions: 'The board of tasks of local-kanban. Tasks are addressed by key (ABC-12). Done and cancelled are the person\'s word.',
     });
-  } else if (method === 'ping') reply(id, {});
-  else if (method === 'tools/list') reply(id, { tools: TOOLS.map(({ run, ...t }) => t) });
-  else if (method === 'tools/call') {
+  }
+  if (method === 'ping') return ok(id, {});
+  if (method === 'tools/list') return ok(id, { tools: TOOLS.map(({ run, ...t }) => t) });
+  if (method === 'tools/call') {
     const tool = TOOLS.find((t) => t.name === params?.name);
-    if (!tool) { fail(id, -32602, `unknown tool: ${params?.name}`); return; }
+    if (!tool) return fail(id, -32602, `unknown tool: ${params?.name}`);
     try {
       const text = await tool.run(params.arguments || {});
-      reply(id, { content: [{ type: 'text', text }] });
+      return ok(id, { content: [{ type: 'text', text }] });
     } catch (e) {
       if (!(e instanceof ToolError)) process.stderr.write(`kb-mcp: ${e.stack || e}\n`);
-      reply(id, { content: [{ type: 'text', text: e instanceof ToolError ? e.message : `kb-mcp broke: ${e.message}` }], isError: true });
+      return ok(id, { content: [{ type: 'text', text: e instanceof ToolError ? e.message : `kb-mcp broke: ${e.message}` }], isError: true });
     }
-  } else fail(id, -32601, `method not found: ${method}`);
+  }
+  return fail(id, -32601, `method not found: ${method}`);
+}
+const broke = (e) => { process.stderr.write(`kb-mcp: ${e.stack || e}\n`); return null; };
+/** A line: one message, or a batch of them answered together. */
+async function answer(msg) {
+  if (!Array.isArray(msg)) { const r = await handle(msg).catch(broke); if (r) send(r); return; }
+  if (!msg.length) { send(fail(null, -32600, 'an empty batch')); return; }
+  const all = (await Promise.all(msg.map((m) => handle(m).catch(broke)))).filter(Boolean);
+  if (all.length) send(all);
 }
 
 let buf = '';
@@ -209,12 +223,14 @@ process.stdin.on('data', (chunk) => {
     buf = buf.slice(at + 1);
     if (!raw) continue;
     let msg;
-    try { msg = JSON.parse(raw); } catch { send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } }); continue; }
-    const p = handle(msg).catch((e) => process.stderr.write(`kb-mcp: ${e.stack || e}\n`));
+    try { msg = JSON.parse(raw); } catch { send(fail(null, -32700, 'parse error')); continue; }
+    const p = answer(msg);
     pending.add(p);
     p.finally(() => pending.delete(p));
   }
 });
-// the client closed its end: answer what is still in flight, then go
+// the client closed its end: answer what is still in flight, then go — once stdout has taken all of it. A pipe on macOS
 const pending = new Set();
-process.stdin.on('end', () => { Promise.allSettled([...pending]).then(() => process.exit(0)); });
+process.stdin.on('end', () => {
+  Promise.allSettled([...pending]).then(() => process.stdout.write('', () => process.exit(0)));
+});

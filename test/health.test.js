@@ -105,3 +105,18 @@ test('CK-984: the bar of a walk — empty before the count is known, never past 
   assert.match(walkBarHTML('L', 70, 62), /62 \/ 62.*width:100%/s, 'more done than all reads as all');
   assert.doesNotMatch(walkBarHTML('L', '<b>', '<i>'), /<b>|<i>/, 'what the server sends goes in as a number');
 });
+
+// fallback — the route awaited the whole walk, and the boot of the page (bootDone) waits for the route, the skeleton
+// hiding the bar meanwhile. The route draws the bar and goes on; the walk paints when it ends.
+test('the route of «Health» does not wait for the walk: the boot of the page shows its bar at once', async () => {
+  const { readFileSync } = await import('node:fs');
+  const side = readFileSync(new URL('../public/js/sidebar.js', import.meta.url), 'utf8');
+  const line = side.split('\n').find((l) => /state\.slug === HEALTH\)/.test(l) && /renderHealth\(/.test(l));
+  assert.ok(line, 'the route of «Health» is gone from sidebar.js');
+  assert.doesNotMatch(line, /await\s+renderHealth\(/, line);
+  // and the bar is drawn before the first await of renderHealth
+  const health = readFileSync(new URL('../public/js/health.js', import.meta.url), 'utf8');
+  const body = health.slice(health.indexOf('export async function renderHealth'));
+  const firstAwait = body.search(/\n[^\n]*await [^\n]*api\('GET', '\/api\/health'/);
+  assert.ok(firstAwait > 0 && body.slice(0, firstAwait).includes('walkBar()'), 'the bar is not drawn before the walk is awaited');
+});

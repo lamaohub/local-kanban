@@ -72,10 +72,32 @@ test('«Changes» of an attempt, then «Take this one»: its copy is the task\'s
   const ch = (await app.inject('/api/tasks/AT-1/changes?attempt=2')).json();
   assert.deepEqual(ch.commits.map((c) => c.subject), ['AT-1 second way']);
   assert.equal((await app.inject({ method: 'POST', url: '/api/tasks/AT-1/attempts/2/take', payload: {} })).statusCode, 200);
-  assert.deepEqual((await app.inject('/api/tasks/AT-1')).json().worktree, { path: a2, branch: 'claude/AT-1-a2' });
+  assert.deepEqual((await app.inject('/api/tasks/AT-1')).json().worktree, { path: a2, branch: 'claude/AT-1-a2', base: 'main' });
   const list = (await app.inject('/api/tasks/AT-1/attempts')).json().attempts;
   assert.deepEqual(list.map((a) => [a.n, a.chosen]), [[1, false], [2, true]]);
   assert.deepEqual((await app.inject('/api/tasks/AT-1/changes')).json().commits.map((c) => c.subject), ['AT-1 second way'], '«Changes» of the card follow the taken attempt');
+});
+
+// Claude, and after «Take this one» the task's first Claude, came back where Claude Code has no such conversation
+test('«Continue» starts a session again in the folder it ran in: an attempt\'s, the first copy\'s; never a stranger\'s', async () => {
+  const a1 = join(repo, '.claude', 'worktrees', 'AT-1');
+  const a2 = join(repo, '.claude', 'worktrees', 'AT-1-a2');
+  const t = task();
+  const tell = (sid, cwd) => {
+    mkdirSync(join(process.env.KB_CLAUDE_DIR, 'projects', 'x'), { recursive: true });
+    writeFileSync(join(process.env.KB_CLAUDE_DIR, 'projects', 'x', `${sid}.jsonl`), `${JSON.stringify({ type: 'user', cwd, sessionId: sid, message: { role: 'user', content: 'go' } })}\n`);
+    db.prepare('INSERT OR IGNORE INTO board_sessions (session_id) VALUES (?)').run(sid);
+    db.prepare('INSERT OR IGNORE INTO task_sessions (task_id, session_id) VALUES (?, ?)').run(t.id, sid);
+  };
+  const resume = async (sid) => (await app.inject({ method: 'POST', url: '/api/launch', payload: { mode: 'board', project: 'at', keys: ['AT-1'], resume: sid } })).json();
+  tell('aaaaaaaa-1111-4111-8111-111111111111', a1); // the task's first Claude: attempt 2 is the task's copy now
+  assert.equal((await resume('aaaaaaaa-1111-4111-8111-111111111111')).folder, a1);
+  db.prepare('UPDATE task_worktrees SET path = ?, branch = ? WHERE task_id = ?').run(a1, 'claude/AT-1', t.id);
+  tell('bbbbbbbb-2222-4222-8222-222222222222', a2); // an attempt's Claude while the first copy is the task's
+  assert.equal((await resume('bbbbbbbb-2222-4222-8222-222222222222')).folder, a2);
+  tell('cccccccc-3333-4333-8333-333333333333', tmp); // a folder that is none of the task's: the task's copy, as before
+  assert.equal((await resume('cccccccc-3333-4333-8333-333333333333')).folder, a1);
+  db.prepare('UPDATE task_worktrees SET path = ?, branch = ? WHERE task_id = ?').run(a2, 'claude/AT-1-a2', t.id);
 });
 
 test('attempts need copies; at most five; a guest neither makes nor takes one', async () => {

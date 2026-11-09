@@ -70,8 +70,8 @@ These are deliberate and predate most of the features. Changes that break them n
 | `src/launch.js` | starting Claude from the board: the app link, the terminal command, their quoting |
 | `src/profiles.js`, `src/routes/profiles.js` | launch profiles — a model, an effort and an environment a start of Claude gets: a project's by default, a task's own; the values of the environment go to Claude in a settings file of 0600 and never to a page or a command line |
 | `src/attempts.js` | several attempts at one task: each a copy of the repository of its own (`<KEY>-a<n>`) with its own Claude, maybe on another launch profile; «Take this one» makes the chosen copy the task's |
-| `src/task-changes.js` | «Changes» of a card: the commits of the task (its branch, or found by its key and issue) and what is not committed, read into files and numbered lines |
-| `src/task-branch.js`, `src/routes/branch.js` | the branch of a task's copy on its card: ahead of main, a conflict with it (`git merge-tree`, nothing written), a pull request (`git push` + `gh pr create`) and its state |
+| `src/task-changes.js` | «Changes» of a card: the commits of the task (its branch, or found by its key and issue) and what is not committed (new files too), read as a stream into files and numbered lines under one budget — long lines cut, large files named, not read |
+| `src/task-branch.js`, `src/routes/branch.js` | the branch of a task's copy on its card: ahead of its base (the branch the copy was made from), a conflict with it (`git merge-tree`, nothing written), a pull request (`git push` + `gh pr create`) and its state |
 | `src/worktrees.js` | a project's switch gives each task its own git worktree (`.claude/worktrees/<KEY>`, branch `claude/<KEY>`): made or taken again on ▶, the files outside git it names copied or linked, «Continue» in the same copy |
 | `src/phantom.js` | Claude inside the board: a background tmux session per launch, its screen, typing into it |
 | `src/routes/terminal.js` | the card's Terminal tab: the screen, answers and keys, stopping |
