@@ -10,6 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { lookPause, timed } from '../public/js/look-pace.js';
 import { intoField, leftoverWords } from '../public/js/ask-rules.js';
 import { otherBoardLine } from '../public/js/term-owner-rules.js';
 
@@ -57,6 +58,7 @@ function chatModule(api, extra = {}) {
   const src = readFileSync(new URL('../public/js/chat.js', import.meta.url), 'utf8')
     .replace(/^import [\s\S]*?;$/gm, '').replace(/^export /gm, '');
   const box = {
+    lookPause, timed,
     esc: (x) => String(x), tr: (x) => x, ic: () => '', plural: (n, a, b) => (n === 1 ? a : b), seg: (x) => x,
     refusalLine: () => '', wireTermImages: () => {}, chatText: (s) => String(s), questionAsk: () => null, askBlock: () => null, renderAsks: () => {}, SHORT_MONTHS: [], api, modelLabel: () => '', sameModel: () => false, MODELS: [], drawerIsFull: () => false, setDrawerFull: () => {}, openDrawerFull: () => {}, setClaudeView: () => {}, pushLayer: () => {}, popLayer: () => {}, styledConfirm: async () => false, copyText: async () => true, plainLabel: (x) => String(x).replace(/\s*\(recommended\)\s*$/i, ''),
     document: { hidden: false, addEventListener: () => {} }, setTimeout, clearTimeout, URLSearchParams, intoField, leftoverWords, otherBoardLine, ...extra,

@@ -11,10 +11,11 @@ import { execFile, execFileSync } from 'node:child_process';
 import { mkdtempSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { ownSocket } from './tmux-socket.js';
 
 const TMUX = ['/opt/homebrew/bin/tmux', '/usr/local/bin/tmux', '/usr/bin/tmux'].find((p) => existsSync(p));
 const skip = !TMUX && 'tmux is not installed';
-const SOCKET = `kb-test-adopt-${process.pid}`;
+const SOCKET = ownSocket('kb-test-adopt');
 // the sessions on the shared socket, all started before either board kept board_sessions
 const OURS_DONE = 'aaaaaaaa-0000-4000-8000-000000000001';   // this board's, its task accepted
 const OURS_WORK = 'aaaaaaaa-0000-4000-8000-000000000002';   // this board's, its task in work

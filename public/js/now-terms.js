@@ -1,5 +1,6 @@
 
 import { wholeAnswer } from './term-delta.js';
+import { lookPause, timed } from './look-pace.js';
 import { $, NOW, api, esc, ic, seg, state, tr } from './core.js';
 import { IMAGE_ACCEPT, TERM_ACTIVITY, TERM_KEYS, cardTermSession, endedWords, growTermInput, openTerminalOf, rolledBy, sayRefused, setTermHint, takeTermHint, wireTermImages } from './drawer.js';
 import { resumeOnBoard } from './sse.js';
@@ -504,13 +505,14 @@ async function tick(n) {
   timer = null;
   if (!shown() || !cols.size) { stop(); return; }
   ticking = true;
+  let took = 0;
   try {
-    if (!document.hidden) await Promise.all([...cols.values()].map(look));
+    if (!document.hidden) await timed(() => Promise.all([...cols.values()].map(look)), (ms) => { took = ms; });
   } finally { ticking = false; }
   if (!alive || timer) return;
   // stopped and started again while this round was on its way: its chain is over, a new one begins now
   if (n !== chain) { schedule(0, ++chain); return; }
-  schedule(hurry ? 0 : POLL_MS, n);
+  schedule(hurry ? 0 : lookPause(POLL_MS, took), n);
   hurry = false;
 }
 function start() {

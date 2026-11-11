@@ -7,11 +7,12 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { ownSocket } from './tmux-socket.js';
 
 let TMUX = null;
 for (const p of ['/opt/homebrew/bin/tmux', '/usr/local/bin/tmux', '/usr/bin/tmux']) if (existsSync(p)) { TMUX = p; break; }
 const skip = !TMUX && 'tmux is not installed';
-const SOCKET = `kb-deliver-${process.pid}`;
+const SOCKET = ownSocket('kb-deliver');
 // A stand-in for Claude Code's input field, drawn as Claude Code draws it (a rule, "❯ " and the words, a rule, a faint
 // status row; a faint placeholder when empty), taking what tmux types: a bracketed paste (a paste that is the path of a
 // picture becomes "[Image #N]", one of many lines "[Pasted text #N +M lines]", as Claude Code folds them), Ctrl+K, Ctrl+U

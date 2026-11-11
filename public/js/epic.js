@@ -51,12 +51,13 @@ function epicHTML(t) {
     return `<div class="epic-head"><span class="epic-plan-l">${esc(tr('Sub-tasks'))}: ${kids.length}</span>`
       + `<button type="button" class="link-chip link-add" data-act="split">${esc(tr('Lay out in batches'))}</button></div>`;
   }
-  const autoOff = e.auto_next && !automations().on;
+  const autoOff = (e.auto_next || e.through) && !automations().on;
   return `<div class="epic-head"><span class="epic-plan-l">${esc(tr('Batches'))}</span><span class="muted">${esc(epicBadge(e, tr))}</span>`
     + `<span class="epic-set"><span class="muted">${esc(tr('Portion'))}</span>`
     + `<button type="button" class="btn-icon" data-act="portion-" aria-label="${esc(tr('Fewer tasks a start'))}">−</button><span class="epic-portion">${e.portion}</span>`
     + `<button type="button" class="btn-icon" data-act="portion+" aria-label="${esc(tr('More tasks a start'))}">+</button>`
-    + `<label class="epic-auto"><input type="checkbox" data-act="auto"${e.auto_next ? ' checked' : ''}> ${esc(tr('next batch by itself after acceptance'))}</label></span></div>`
+    + `<label class="epic-auto"><input type="checkbox" data-act="auto"${e.auto_next ? ' checked' : ''}> ${esc(tr('next batch by itself after acceptance'))}</label>`
+    + `<label class="epic-auto" title="${esc(tr('The next batch starts once this one is in Ready to ship or Review, without your acceptance; the tasks of the epic commit one after another into one branch, and the epic ships once, when you say so'))}"><input type="checkbox" data-act="through"${e.through ? ' checked' : ''}> ${esc(tr('straight through, without acceptance between batches'))}</label></span></div>`
     + (autoOff ? `<div class="eb-run muted">${esc(tr('Automations are off in the settings — the next batch waits for you'))}</div>` : '')
     + `<div class="epic-batches">${e.batches.map((b) => batchHTML(b, e)).join('')}</div>`
     + `<div class="epic-foot"><button type="button" class="link-chip link-add" data-act="add">${esc(tr('+ batch'))}</button>`
@@ -104,6 +105,7 @@ function runWordsForPage() {
     run: tr('Run the kanban skill'),
     epic: tr('This is batch {n}{title} of the epic {key}: kb show {key} prints its batches, kb plan {key} its plan.'),
     doTask: tr('Do the tasks:'),
+    through: tr('The epic {key} runs straight through: its next batch starts once this one is handed in, before anything is shipped, and builds on its commits — leave them where they are and do not ship to main; the epic ships once, when the owner says so.'),
   };
 }
 async function startBatch(key, b, force = false) {
@@ -129,6 +131,7 @@ function wireEpic(row, key) {
   row.querySelectorAll('[data-act]').forEach((el) => {
     const a = el.dataset.act;
     if (a === 'auto') { el.onchange = () => act(key, 'PATCH', '/epic', { auto_next: el.checked }, 'Not saved'); return; }
+    if (a === 'through') { el.onchange = () => act(key, 'PATCH', '/epic', { through: el.checked }, 'Not saved'); return; }
     el.onclick = async (ev) => {
       ev.stopPropagation();
       const b = batchOf(el);

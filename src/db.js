@@ -111,6 +111,10 @@ const MIGRATIONS = [
       if (cols.length && !cols.includes(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} TEXT`); // no table yet: schema.sql makes it
     }
   } },
+  { v: 19, name: 'epic-through', up: () => {
+    const cols = db.prepare('PRAGMA table_info(epics)').all().map((c) => c.name);
+    if (cols.length && !cols.includes('through')) db.exec('ALTER TABLE epics ADD COLUMN through INTEGER NOT NULL DEFAULT 0');
+  } },
 ];
 export const SCHEMA_VERSION = MIGRATIONS.at(-1).v;
 

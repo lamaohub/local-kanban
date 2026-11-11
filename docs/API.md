@@ -185,18 +185,20 @@ versions are kept. The card (`GET /api/tasks/:id`) carries `plan: {version, at, 
 Wi-Fi door reads the plan and does not write it.
 
 **An epic's batches.** An epic is a task whose sub-tasks are laid out in batches, started batch by batch. `GET
-/api/tasks/:id/epic` is `{key, batches, loose, portion, auto_next, run}`: a batch is `{id, n, title, tasks, counts, closed}`
+/api/tasks/:id/epic` is `{key, batches, loose, portion, auto_next, through, run}`: a batch is `{id, n, title, tasks, counts, closed}`
 — `n` its place from 1, `tasks` `[{id, key, project, title, status, blocked, priority, labels}]` in order, `counts` `{todo,
 working, ready, review, done, cancelled, total}`, `closed` — every task done or cancelled; `loose` — sub-tasks in no batch;
 `run` — `{<batch id>: {state, keys, project, at, error}}`, `state` one of `starting`, `running`, `accepting` (nothing left to
-start, the person's acceptance awaited), `done`, `stopped`, `failed`. `PATCH` takes `portion` (1–10, how many tasks one start
-takes, default 3) and `auto_next` (the next batch starts by itself once every task of the last one is accepted, while
-Automations are on). `POST /api/tasks/:id/batches` `{title}` adds one at the end, `PUT …/batches/order` `{batches: [ids]}`
+start, the person's acceptance awaited), `passed` (handed in while the epic runs straight through: the next batch runs, this one waits for acceptance unled), `done`, `stopped`, `failed`. `PATCH` takes `portion` (1–10, how many tasks one start
+takes, default 3), `auto_next` (the next batch starts by itself once every task of the last one is accepted, while
+Automations are on) and `through` (straight through: the next batch starts once every task of the last one is in Ready to
+ship, Review or accepted, without the acceptance; in a project that gives each task its own copy of the repository the
+tasks of the epic share one, on the branch `claude/<epic key>`). `POST /api/tasks/:id/batches` `{title}` adds one at the end, `PUT …/batches/order` `{batches: [ids]}`
 orders all of them, `PATCH|DELETE …/batches/:batchId` renames or deletes one (its tasks stay sub-tasks, in no batch).
 `POST /api/tasks/:id/epic/place` `{key, batch, before}` puts a task into a batch (`batch: null` — out of the batches;
 `batch_name` instead — a number or a title, a title not there makes the batch) before the task `before`, or at the end; the
 task becomes a sub-task of the epic. Every one answers with the epic's view. `POST …/batches/:batchId/run` `{words: {run,
-doTask, epic}, launch: {permission, effort}, force}` starts the batch's next portion inside the board and the following ones
+doTask, epic, through}, launch: {permission, effort}, force}` (`through` — said to Claude while the epic runs straight through) starts the batch's next portion inside the board and the following ones
 as each goes out of work; with another batch of the epic running it is refused with 409 `reason: 'batch-running'` and that
 batch's `batch`, unless `force`; nothing to start — 409 `nothing`. `POST …/batches/:batchId/stop` starts no next portion.
 Starting and stopping are the owner's only. The list and `task.updated` carry `epic: {batches_n, tasks_n, closed_n, current}`

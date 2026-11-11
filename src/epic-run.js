@@ -11,6 +11,9 @@ export const RUN_TICK_MS = 5000;
 export const RUN_LIMIT_PCT = 80;
 const WORD_MAX = 2000;
 const IN_PLAY = new Set(['prep', 'doing', 'deploy']);
+/** A batch every task of which is out of work: handed in (ready, review) or accepted. Pure. */
+export const handedIn = (batch) => batch.tasks.length > 0 && batch.tasks.every((t) => HANDED.has(t.status));
+const HANDED = new Set(['ready', 'review', 'done', 'cancelled']);
 /** The states of a batch's run the board still leads. */
 export const LEADING = new Set(['starting', 'running', 'accepting']);
 /** The starts awaited in this process (`<epic>:<batch>`): a `starting` run not among them is one the board went down in
@@ -61,14 +64,13 @@ export function runProblem(b) {
   const w = b?.words;
   if (!w || typeof w !== 'object' || Array.isArray(w)) return { error: 'words: {run, doTask, epic} in the page\'s language', field: 'words' };
   for (const k of ['run', 'doTask', 'epic']) if (typeof w[k] !== 'string' || !w[k].trim() || w[k].length > WORD_MAX) return { error: `words.${k}: text`, field: 'words' };
+  if (w.through !== undefined && (typeof w.through !== 'string' || !w.through.trim() || w.through.length > WORD_MAX)) return { error: 'words.through: text', field: 'words' };
   if (b.force !== undefined && typeof b.force !== 'boolean') return { error: 'force: true or false', field: 'force' };
   return null;
 }
-/** The words a portion's Claude gets: the skill, the batch's place in the epic (and where its plan is), the keys. `{title}`
-    becomes « «<title>»» — nothing for a batch without one. Pure. */
-export function portionText(words, epicKey, batch, keys) {
+export function portionText(words, epicKey, batch, keys, through = false) {
   const fill = (s) => String(s).replaceAll('{key}', epicKey).replaceAll('{n}', String(batch.n)).replaceAll('{title}', batch.title ? ` «${batch.title}»` : '');
-  return [words.run, fill(words.epic), `${words.doTask} ${keys.join(', ')}`].join('\n');
+  return [words.run, fill(words.epic), ...(through && words.through ? [fill(words.through)] : []), `${words.doTask} ${keys.join(', ')}`].join('\n');
 }
 
 const announce = (epicId) => {
@@ -88,8 +90,8 @@ export function runningBatch(epicId, exceptId) {
 
 /* One start of Claude through the board's own route (`launchOnBoard` of the Automations — `POST /api/launch` inside the
    board, a task a live Claude still holds left out), with the person's permission and effort. */
-async function launch(app, epicKey, batch, project, keys, saved) {
-  const { res, keys: started } = await launchOnBoard(app, (k) => ({ mode: 'board', project, keys: k, text: portionText(saved.words, epicKey, batch, k),
+async function launch(app, epicKey, batch, project, keys, saved, through) {
+  const { res, keys: started } = await launchOnBoard(app, (k) => ({ mode: 'board', project, keys: k, text: portionText(saved.words, epicKey, batch, k, through),
     ...(saved.permission ? { permission: saved.permission } : {}), ...(saved.effort ? { effort: saved.effort } : {}) }), keys);
   const body = (() => { try { return res.json(); } catch { return {}; } })();
   return res.statusCode < 300 ? { ok: true, keys: started } : { ok: false, code: res.statusCode, body };
@@ -103,7 +105,7 @@ async function startPortion(app, epic, batch, portion) {
   const flight = flightKey(epic.id, batch.id);
   inFlight.add(flight);
   let r;
-  try { r = await launch(app, epic.key, batch, portion.project, portion.keys, s.launch); }
+  try { r = await launch(app, epic.key, batch, portion.project, portion.keys, s.launch, s.through); }
   catch (e) { r = { ok: false, code: 500, body: { error: e.message } }; }
   finally { inFlight.delete(flight); }
   const now = epicSettings(epic.id).run;
@@ -132,7 +134,7 @@ export async function runBatch(app, epic, batchId, b) {
   }
   const other = runningBatch(epic.id, batch.id);
   if (other && !b.force) return { code: 409, reason: 'batch-running', error: `batch ${other.n} of ${epic.key} is still running — start batch ${batch.n} next to it?`, batch: other.n };
-  saveLaunch(epic.id, { words: { run: b.words.run, doTask: b.words.doTask, epic: b.words.epic }, ...(b.launch?.permission ? { permission: b.launch.permission } : {}), ...(b.launch?.effort ? { effort: b.launch.effort } : {}) });
+  saveLaunch(epic.id, { words: { run: b.words.run, doTask: b.words.doTask, epic: b.words.epic, ...(b.words.through ? { through: b.words.through } : {}) }, ...(b.launch?.permission ? { permission: b.launch.permission } : {}), ...(b.launch?.effort ? { effort: b.launch.effort } : {}) });
   const r = await startPortion(app, epic, batch, portion);
   if (!r.ok) return { code: r.code, ...r.body };
   return { code: 200, started: r.keys };
@@ -172,7 +174,13 @@ export async function tickEpics(app, now = Date.now()) {
       if (!batch) { save(null); continue; }
       const j = batchJudge(batch, r, s.portion);
       if (j.phase === 'working') continue;
-      if (j.phase === 'accepting') { if (r.state !== 'accepting' || r.hold) save({ ...r, state: 'accepting', hold: undefined }); continue; }
+      if (j.phase === 'accepting') {
+        const next = s.through && handedIn(batch) && automationsOn() && !runningBatch(epic.id, id) ? nextBatch(batches, id, s.portion, s.run) : null;
+        if (next && limitHigh(now)) { if (r.hold !== 'limit-high') save({ ...r, hold: 'limit-high' }); continue; }
+        if (next) { save({ ...r, state: 'passed', hold: undefined, at: now }); await startPortion(app, epic, next, nextPortion(next, s.portion)); continue; }
+        if (r.state !== 'accepting' || r.hold) save({ ...r, state: 'accepting', hold: undefined });
+        continue;
+      }
       if (j.phase === 'next') {
         if (limitHigh(now)) { if (r.hold !== 'limit-high') save({ ...r, hold: 'limit-high' }); continue; }
         await startPortion(app, epic, batch, j);
@@ -180,7 +188,7 @@ export async function tickEpics(app, now = Date.now()) {
       }
       // closed: the person accepted every task of it. The next batch, if it is owed and the limit holds it, keeps this one
       // waiting (`hold`) — marked done, the start would be forgotten
-      const next = s.auto_next && automationsOn() && !runningBatch(epic.id, id) ? nextBatch(batches, id, s.portion, s.run) : null;
+      const next = (s.auto_next || s.through) && automationsOn() && !runningBatch(epic.id, id) ? nextBatch(batches, id, s.portion, s.run) : null;
       if (next && limitHigh(now)) { if (r.hold !== 'limit-high') save({ ...r, hold: 'limit-high' }); continue; }
       save({ ...r, state: 'done', hold: undefined, at: now });
       if (next) await startPortion(app, epic, next, nextPortion(next, s.portion));

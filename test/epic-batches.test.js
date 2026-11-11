@@ -261,6 +261,64 @@ test('a run: portion after portion as the last goes out of work, the next batch 
   assert.equal(epics.epicSettings(epic.id).run[two].state, 'stopped');
 });
 
+// one is handed in — Ready to ship or Review — without the acceptance in between, and its Claude is told the epic ships once
+test('straight through: the next batch starts once this one is handed in, the one it leaves waits for the person', async () => {
+  const G = await add('Third epic');
+  const k = [];
+  for (const [title, batch] of [['a', 'One'], ['b', 'One'], ['c', 'Two'], ['d', 'Three']]) {
+    k.push((await kb(['add', 'demo', title, '-s', 'todo', '--epic', G, '--batch', batch])).stdout.split(' ')[0]);
+  }
+  let r = await req('PATCH', `/api/tasks/${G}/epic`, { portion: 3, through: true });
+  assert.deepEqual([r.json().through, r.json().auto_next], [true, false], 'through is a switch of its own, off auto_next');
+  assert.equal((await req('PATCH', `/api/tasks/${G}/epic`, { through: 'yes' })).statusCode, 400);
+  kvSet('automations.on', '1');
+  const calls = [];
+  const fake = { inject: async ({ payload }) => { calls.push(payload); for (const key of payload.keys) await status(key, 'prep'); return { statusCode: 200, json: () => ({ ok: true }) }; } };
+  const epic = { id: (await card(G)).id, key: G };
+  const [one, two, three] = (await view(G)).batches.map((b) => b.id);
+  const words = { run: 'Run the kanban skill', doTask: 'Do the tasks', epic: 'Batch {n} of {key}', through: 'The epic {key} runs straight through: it ships once.' };
+  r = await run.runBatch(fake, epic, one, { words });
+  assert.equal(r.code, 200);
+  assert.match(calls.at(-1).text, new RegExp(`The epic ${G} runs straight through: it ships once\\.`), 'its Claude was not told how the epic ships');
+  await status(k[0], 'doing'); await status(k[0], 'ready');
+  await run.tickEpics(fake);
+  assert.equal(calls.length, 1, 'the next batch started with a task of this one still in work');
+  await status(k[1], 'doing'); await status(k[1], 'review');
+  await run.tickEpics(fake);
+  assert.deepEqual(calls.at(-1)?.keys, [k[2]], 'handed in, the next batch waited for acceptance');
+  let runs = epics.epicSettings(epic.id).run;
+  assert.equal(runs[one].state, 'passed');
+  assert.equal(runs[two].state, 'running');
+  // a task sent back with a question (To do, ask) is not handed in: the batch waits for the person
+  await status(k[2], 'doing'); await status(k[2], 'todo');
+  await req('PATCH', `/api/tasks/${k[2]}`, { labels: ['ask'] });
+  await run.tickEpics(fake);
+  assert.equal(calls.length, 2, 'a batch with a question in To do counted as handed in');
+  assert.equal(epics.epicSettings(epic.id).run[two].state, 'accepting');
+  await req('PATCH', `/api/tasks/${k[2]}`, { labels: [] });
+  await status(k[2], 'doing'); await status(k[2], 'review');
+  // Automations off — the next batch waits as it does for auto_next
+  kvSet('automations.on', '0');
+  await run.tickEpics(fake);
+  assert.equal(calls.length, 2);
+  kvSet('automations.on', '1');
+  await run.tickEpics(fake);
+  assert.deepEqual(calls.at(-1).keys, [k[3]]);
+  runs = epics.epicSettings(epic.id).run;
+  assert.deepEqual([runs[two].state, runs[three].state], ['passed', 'running']);
+  const shown = await kb(['show', G]);
+  assert.match(shown.stdout, /straight through: the next batch starts once the last is handed in/, 'kb show does not tell Claude the epic runs straight through');
+  // without the switch the old rule holds: handed in is not accepted
+  assert.equal(run.handedIn({ tasks: [{ status: 'review' }, { status: 'ready' }, { status: 'done' }] }), true);
+  assert.equal(run.handedIn({ tasks: [{ status: 'review' }, { status: 'doing' }] }), false);
+  assert.equal(run.handedIn({ tasks: [] }), false);
+  assert.equal(run.portionText(words, 'DM-1', { n: 1, title: '' }, ['DM-2']).includes('straight'), false, 'an epic not through was told it is');
+  assert.equal(run.runProblem({ words: { ...words, through: 5 } })?.field, 'words');
+  assert.equal(epics.throughEpicKey([(await card(k[0])).id]), G);
+  await req('PATCH', `/api/tasks/${G}/epic`, { through: false });
+  assert.equal(epics.throughEpicKey([(await card(k[0])).id]), null);
+});
+
 test('a start refused is said on the batch and not repeated every tick; nothing to start is a refusal of its own', async () => {
   const G = await add('Third epic');
   const x = (await kb(['add', 'demo', 'x', '-s', 'todo', '--epic', G, '--batch', '1st'])).stdout.split(' ')[0];
@@ -310,7 +368,7 @@ test('the words of a batch on the page: progress, the epic\'s badge, the run —
   assert.equal(batchProgress({ total: 0 }, tr), '[empty]');
   assert.equal(epicBadge({ batches_n: 7, tasks_n: 37, closed_n: 14, current: 2 }, tr), '[batch] 2/7 · 14/37');
   assert.equal(epicBadge({ batches_n: 2, tasks_n: 4, closed_n: 4, current: null }, tr), '[batches accepted] · 4/4');
-  for (const r of [{ state: 'starting', keys: ['A'] }, { state: 'running', keys: ['A', 'B'] }, { state: 'running', hold: 'limit-high' }, { state: 'accepting' }, { state: 'done' }, { state: 'stopped' }, { state: 'failed', error: 'x' }]) {
+  for (const r of [{ state: 'starting', keys: ['A'] }, { state: 'running', keys: ['A', 'B'] }, { state: 'running', hold: 'limit-high' }, { state: 'accepting' }, { state: 'done' }, { state: 'passed' }, { state: 'stopped' }, { state: 'failed', error: 'x' }]) {
     assert.ok(runWords(r, tr).includes('['), JSON.stringify(r));
   }
   const { readFileSync } = await import('node:fs');

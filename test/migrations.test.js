@@ -397,6 +397,24 @@ test('v17: a board of v16 gets projects.profile_id, empty for its projects', (t)
   assert.equal(after.prepare("SELECT profile_id FROM projects WHERE slug = 'old'").get().profile_id, null);
 });
 
+test('v19: a board of v18 gets epics.through, off for its epics', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'kb-mig-thru-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  migrateDir(dir);
+  const db = new Database(join(dir, 'kanban.db'));
+  db.exec('ALTER TABLE epics DROP COLUMN through');
+  db.prepare("INSERT INTO projects (slug, name, prefix) VALUES ('old', 'Old', 'OL')").run();
+  const task = db.prepare("INSERT INTO tasks (project_id, task_no, title) VALUES ((SELECT id FROM projects WHERE slug = 'old'), 1, 'Epic')").run().lastInsertRowid;
+  db.prepare('INSERT INTO epics (task_id, auto_next) VALUES (?, 1)').run(task);
+  db.pragma('user_version = 18');
+  db.close();
+  migrateDir(dir);
+  const after = new Database(join(dir, 'kanban.db'));
+  t.after(() => after.close());
+  assert.ok(after.pragma('user_version', { simple: true }) >= 19);
+  assert.deepEqual(after.prepare('SELECT auto_next, through FROM epics WHERE task_id = ?').get(task), { auto_next: 1, through: 0 });
+});
+
 // of a pull request
 test('v18: a board of v17 gets the base of copies and attempts and the head of a pull request, NULL for its rows', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'kb-mig-base-'));

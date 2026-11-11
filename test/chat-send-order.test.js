@@ -10,10 +10,11 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
+import { ownSocket } from './tmux-socket.js';
 
 const TMUX = ['/opt/homebrew/bin/tmux', '/usr/local/bin/tmux', '/usr/bin/tmux'].find((p) => existsSync(p));
 const skip = !TMUX && 'tmux is not installed';
-const SOCKET = `kb-chat-send-${process.pid}`;
+const SOCKET = ownSocket('kb-chat-send');
 const SID = 'cafecafe-8888-4888-8888-cafecafecafe';
 let app, tmp, claude, queue, screenFile, typedFile, panePid;
 

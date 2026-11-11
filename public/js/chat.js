@@ -1,5 +1,6 @@
 
 import { api, esc, ic, seg, tr } from './core.js';
+import { lookPause, timed } from './look-pace.js';
 import { attachAtPicker, chatItems } from './at-picker.js';
 import { SHORT_MONTHS, copyText, resumeOnBoard, usageFmt } from './sse.js';
 import { matchKey, plural, setClaudeView } from './settings.js';
@@ -65,7 +66,7 @@ export function chatAsksChanged() {
 
 /** The stream said a session's chat changed: the chats on screen that show it read it again. */
 export function chatEvent(session) {
-  for (const c of mounted) if (c.session === session) c.refresh();
+  for (const c of mounted) if (c.session === session) c.refreshLive();
 }
 
 export function dur(ms) {
@@ -959,7 +960,9 @@ export function mountChat(box, { key = null, session = null, scroller = null, fu
     const key = c.key;
     const asked = c.asked;
     let r;
-    try { r = await api('GET', `/api/tasks/${seg(key)}/chat?${q}`, undefined, { quiet: true }); } catch (e) {
+    try {
+      r = await timed(() => api('GET', `/api/tasks/${seg(key)}/chat?${q}`, undefined, { quiet: true }), (ms) => { c.restUntil = Date.now() + lookPause(0, ms); });
+    } catch (e) {
       if (key === c.key && mounted.has(c) && c.data && asked === c.asked && asked !== c.shownAsked) {
         c.asked = c.shownAsked;
         c.refused = refusalLine('Could not load the chat', e, tr);
@@ -994,11 +997,17 @@ export function mountChat(box, { key = null, session = null, scroller = null, fu
     if (c.flight) { c.again = true; return c.flight; }
     c.flight = load().finally(() => {
       c.flight = null;
-      if (c.again) { c.again = false; refresh(); }
+      if (c.again) { c.again = false; c.liveAfter = false; refresh(); } else if (c.liveAfter) { c.liveAfter = false; c.refreshLive(); }
     });
     return c.flight;
   }
   c.refresh = refresh;
+  c.refreshLive = () => {
+    if (c.flight) { c.liveAfter = true; return; } // after this answer, and after its rest if it was slow
+    const wait = (c.restUntil || 0) - Date.now();
+    if (wait <= 0) { refresh(); return; }
+    if (!c.restTimer) c.restTimer = setTimeout(() => { c.restTimer = null; refresh(); }, wait);
+  };
   c.paintAsk = paintAsk;
 
   const images = () => draftImages.get(c.key) || [];
@@ -1438,7 +1447,7 @@ export function mountChat(box, { key = null, session = null, scroller = null, fu
     if (on && (c.stale || !c.data)) refresh();
     if (was !== on && c.askId) renderAsks();
   };
-  c.destroy = () => { closeMenu(true); document.removeEventListener?.(FULL_EVENT, onFull); mounted.delete(c); sizes?.disconnect(); sc.removeEventListener('scroll', onScroll); document.removeEventListener?.('scroll', onSectionScroll, true); askWatch?.disconnect(); if (c.askId) { c.askId = null; renderAsks(); } clearTimeout(c.awayTimer); clearTimeout(c.helperTimer); clearTimeout(c.leftTimer); clearTimeout(c.sentTimer); box.innerHTML = ''; };
+  c.destroy = () => { closeMenu(true); document.removeEventListener?.(FULL_EVENT, onFull); mounted.delete(c); sizes?.disconnect(); sc.removeEventListener('scroll', onScroll); document.removeEventListener?.('scroll', onSectionScroll, true); askWatch?.disconnect(); if (c.askId) { c.askId = null; renderAsks(); } clearTimeout(c.awayTimer); clearTimeout(c.helperTimer); clearTimeout(c.leftTimer); clearTimeout(c.sentTimer); clearTimeout(c.restTimer); box.innerHTML = ''; };
   mounted.add(c);
   input.value = drafts.get(key) || '';
   paint();

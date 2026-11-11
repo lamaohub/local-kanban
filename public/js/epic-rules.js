@@ -23,6 +23,7 @@ export function runWords(r, tr) {
   if (r.state === 'starting') return `${tr('Starting Claude on')} ${keys}…`;
   if (r.state === 'running') return r.hold === 'limit-high' ? tr('Waits: the subscription limit is past 80%') : `${tr('In work')}: ${keys}`;
   if (r.state === 'accepting') return tr('Everything started — waits for your acceptance');
+  if (r.state === 'passed') return tr('Handed in — the next batch runs; waits for your acceptance');
   if (r.state === 'done') return tr('Accepted');
   if (r.state === 'stopped') return tr('Stopped — no next portion starts');
   // a refusal of the start in the words the Automations use (`failWord`: «<reason>: <the server's English>»)

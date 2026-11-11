@@ -1,5 +1,6 @@
 
 import { wholeAnswer } from './term-delta.js';
+import { lookPause, timed } from './look-pace.js';
 import { WORKING, buildSelect, canMoveTo, clearSelection, closeOpenSelect, colSort, labelChip, moveBlocked, revealCard, scheduleDrawLinks, selVal, selectTasks, selectedIds, setScrollToNewCardId, taskIsNoclaude } from './board.js';
 import { $, ALL, statusesFor, LABEL_COLORS, LABEL_SELECTABLE, PRI_LEVELS, TITLE_LABEL_WORDS, api, apiBlob, dropUnsaved, esc, ghSyncOn, ic, noteUnsaved, retryUnsaved, seg, state, tr } from './core.js';
 import { columnComparator, DEFAULT_SORT } from './order.js';
@@ -670,8 +671,9 @@ export function openTerminalOf(key, { session, trusted } = {}) {
 
 function termSchedule(ms, chain) { termTimer = setTimeout(() => termTick(chain), ms); }
 async function termTick(chain) {
-  await pollTerminal();
-  if (chain === termChain) termSchedule(TERM_POLL_MS, chain);
+  let took = 0;
+  await timed(pollTerminal, (ms) => { took = ms; });
+  if (chain === termChain) termSchedule(lookPause(TERM_POLL_MS, took), chain);
 }
 function startTermPoll() {
   if (termTimer) return;

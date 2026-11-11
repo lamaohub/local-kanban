@@ -3,7 +3,7 @@ import { commentToken } from './unsaved.js';
 import { attachAtPicker, templateItems } from './at-picker.js';
 import { clearSelection, closeOpenSelect, initMarquee, multiAction, renderBoard, scheduleDrawLinks, selectedIds } from './board.js';
 import { chaosPending } from './chaos.js';
-import { $, ALL, AUTO, HEALTH, CALENDAR, CHAOS, DASH, DONE, HORIZON, NOW, REVIEW, SETTINGS, api, hasUnsaved, ic, liftCurtain, loadLabelPalette, seg, setDoorClosed, state, tr } from './core.js';
+import { $, ALL, AUTO, HEALTH, CALENDAR, CHAOS, DASH, DONE, HORIZON, LANG, NOW, REVIEW, SETTINGS, api, hasUnsaved, ic, liftCurtain, loadLabelPalette, seg, setDoorClosed, state, tr } from './core.js';
 import { addChecklistItem, applyCommentDraft, applyKeepDrawer, applyTitleLabelShortcut, closeDrawer, commentDrafts, deleteTask, doAutosave, dropUnsentByToken, initTerminal, kbMoveCard, kbMoveCursor, launchOpenTask, onDrawerPaste, openDrawer, uploadCommentImage, wirePicturePick, wireTaskPicture, openDrawerMenu, openDrawerNew, openOpenTaskSession, openReturnPop, showOwnComment, pendingAttachments, pullDrawerFresh, queueComment, commentArrived, commentKeys, unsentToken, sayRefused, scheduleAutosave, setKbCursor, wireCardBack, descTyped, descConflictPending } from './drawer.js';
 import { closeProjectSettings, fileEditorHasChanges, openProjectSettings, projectSettingsDirty } from './project.js';
 import { applyCompact, applyTheme, customBinding, getSetting, listenForInstall, matchKey, skillDirty, syncLangToServer, templatesDirty } from './settings.js';
@@ -281,7 +281,7 @@ Promise.all([loadLabelPalette().catch(() => {}), streamOrLate]).then(() => loadU
   takePick();
   maybeOnboarding();
 });
-syncLangToServer();
+syncLangToServer(LANG, { start: true });
 initMarquee();
 connectSSE();
 ensureAudio();

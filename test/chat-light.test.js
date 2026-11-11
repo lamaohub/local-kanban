@@ -8,6 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { lookPause, timed } from '../public/js/look-pace.js';
 import { intoField, leftoverWords } from '../public/js/ask-rules.js';
 import { otherBoardLine } from '../public/js/term-owner-rules.js';
 
@@ -59,17 +60,19 @@ function el(page, cls) {
   return n;
 }
 
-function chatOn(answer) {
+function chatOn(answer, extra = {}) {
   const page = { parts: new Map(), timers: [], asked: 0 };
   page.root = el(page, 'root');
   const source = readFileSync(new URL('../public/js/chat.js', import.meta.url), 'utf8')
     .replace(/^import [\s\S]*?;$/gm, '').replace(/^export /gm, '');
   const ctx = {
+    lookPause, timed,
     api: async () => { page.asked++; return answer(page.asked); },
     esc: (s) => String(s).replace(/</g, '&lt;'), tr: (s) => s, ic: () => '', seg: (s) => s, plural: (n, a, b) => (n === 1 ? a : b),
     refusalLine: () => '', wireTermImages: () => {}, chatText: (s) => String(s), questionAsk: () => null, askBlock: () => null, renderAsks: () => {}, SHORT_MONTHS: [], matchKey: () => false, modelLabel: () => '', sameModel: () => false, MODELS: [], drawerIsFull: () => false, setDrawerFull: () => {}, openDrawerFull: () => {}, setClaudeView: () => {}, pushLayer: () => {}, popLayer: () => {}, styledConfirm: async () => false, copyText: async () => true, plainLabel: (x) => String(x).replace(/\s*\(recommended\)\s*$/i, ''),
     document: { addEventListener() {}, hidden: false }, URLSearchParams, intoField, leftoverWords, otherBoardLine,
     setTimeout: (fn, ms) => { page.timers.push({ fn, ms }); return page.timers.length; }, clearTimeout: () => {},
+    ...extra,
   };
   vm.runInNewContext(`${source}\nthis.mountChat = mountChat;`, ctx);
   const chat = ctx.mountChat(page.root, { key: 'H-1' });
@@ -147,4 +150,37 @@ test('read at its end, the chat ends at the bottom edge of its list once the not
     assert.ok(shown, 'neither the note nor the field is under the chat');
     assert.equal(log.scrollHeight - log.scrollTop - log.clientHeight, 0, `the end of the chat (send: ${send}) is under the note or the field`);
   }
+});
+
+// write a look again. After a slow answer the stream waits out twice its time; what the person does asks at once
+test('after a slow answer the stream of events asks the chat again only after a rest', async () => {
+  let took = 3000;
+  let clock = 1_000_000;
+  class Clock extends Date { static now() { return clock; } }
+  const timed = async (f, done) => { try { return await f(); } finally { done(took); } };
+  const { page, chat } = chatOn((n) => answer({ turns: turns(3), working: true, send: true, state: 'busy', v: `v${n}` }), { Date: Clock, timed });
+  await settle();
+  assert.equal(page.asked, 1);
+  page.timers.length = 0;
+  chat.refreshLive();
+  chat.refreshLive();
+  await settle();
+  assert.equal(page.asked, 1, 'an event right after a 3 s answer asked the chat at once');
+  const rest = page.timers.filter((t) => t.ms === 6000);
+  assert.equal(rest.length, 1, 'two events made two looks after the rest');
+  clock += 6000;
+  took = 100;
+  rest[0].fn();
+  await settle();
+  assert.equal(page.asked, 2);
+  chat.refreshLive();
+  await settle();
+  assert.equal(page.asked, 3, 'after a quick answer an event did not ask at once');
+  took = 3000;
+  chat.refresh();
+  await settle();
+  assert.equal(page.asked, 4);
+  chat.refresh();
+  await settle();
+  assert.equal(page.asked, 5, 'what the person does waited out the rest');
 });

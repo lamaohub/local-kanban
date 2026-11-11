@@ -188,8 +188,10 @@ export function pickedSetting(k) {
 }
 export function setSetting(k, v) { localStore.setItem('kb.set.' + k, JSON.stringify(v)); }
 
-export function syncLangToServer(lang = LANG) {
-  return api('POST', '/api/lang', { lang }).catch(() => {});
+// so a stranger's browser (a headless check in en-US) does not switch the board. A choice in Settings or the wizard
+// is sent without it.
+export function syncLangToServer(lang = LANG, { start = false } = {}) {
+  return api('POST', '/api/lang', start ? { lang, start: true } : { lang }).catch(() => {});
 }
 
 const MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent || '');

@@ -9,10 +9,11 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
+import { ownSocket } from './tmux-socket.js';
 
 const TMUX = ['/opt/homebrew/bin/tmux', '/usr/local/bin/tmux', '/usr/bin/tmux'].find((p) => existsSync(p));
 const skip = !TMUX && 'tmux is not installed';
-const SOCKET = `kb-chat-test-${process.pid}`;
+const SOCKET = ownSocket('kb-chat-test');
 const NEW = 'eeeeeeee-5555-4555-8555-eeeeeeeeeeee'; // the board's terminal of the task
 const OLD = 'ffffffff-6666-4666-8666-ffffffffffff'; // an earlier session of the same task, not the board's
 let app, tmp, claude, queue, screenFile, typedFile;

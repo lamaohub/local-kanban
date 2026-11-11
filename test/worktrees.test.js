@@ -158,3 +158,31 @@ test('a path that is not «copy/link» inside the project is refused; kb show na
   assert.match(info.stdout, /^worktree setup: run in a fresh copy before work — npm install$/m);
   assert.doesNotMatch((await kb(['info', 'plain'])).stdout, /worktree/);
 });
+
+// before this one is shipped and must see its code; off the switch, each task keeps a copy of its own
+test('tasks of an epic that runs straight through work in the copy of the epic, whatever copy they had', async () => {
+  const add = db.prepare("INSERT INTO tasks (project_id, task_no, title, status) VALUES ((SELECT id FROM projects WHERE slug = 'wt'), ?, ?, 'todo')");
+  const epic = add.run(10, 'the epic').lastInsertRowid;
+  const one = add.run(11, 'stage one').lastInsertRowid;
+  const two = add.run(12, 'stage two').lastInsertRowid;
+  const b1 = db.prepare("INSERT INTO epic_batches (epic_id, title, position) VALUES (?, 'One', 1)").run(epic).lastInsertRowid;
+  const b2 = db.prepare("INSERT INTO epic_batches (epic_id, title, position) VALUES (?, 'Two', 2)").run(epic).lastInsertRowid;
+  db.prepare('INSERT INTO batch_tasks (task_id, batch_id, position) VALUES (?, ?, 1)').run(one, b1);
+  db.prepare('INSERT INTO batch_tasks (task_id, batch_id, position) VALUES (?, ?, 1)').run(two, b2);
+  db.prepare('INSERT INTO epics (task_id, through) VALUES (?, 0)').run(epic);
+  const own = await W.taskFolder(proj('wt'), [taskOf('wt', 11)]);
+  assert.equal(own.branch, 'claude/WT-11', 'an epic not through gave its task the copy of the epic');
+  db.prepare('UPDATE epics SET through = 1 WHERE task_id = ?').run(epic);
+  const dry = await W.taskFolder(proj('wt'), [taskOf('wt', 11)], { dry: true });
+  assert.equal(dry.branch, 'claude/WT-10');
+  const first = await W.taskFolder(proj('wt'), [taskOf('wt', 11)]);
+  assert.deepEqual([first.branch, first.path], ['claude/WT-10', join(repo, '.claude', 'worktrees', 'WT-10')]);
+  writeFileSync(join(first.path, 'stage-one.txt'), 'done');
+  git(first.path, 'add', '.');
+  git(first.path, 'commit', '-q', '-m', 'WT-11 stage one');
+  const next = await W.taskFolder(proj('wt'), [taskOf('wt', 12)]);
+  assert.equal(next.path, first.path, 'the next batch of the epic got a copy of its own');
+  assert.equal(readFileSync(join(next.path, 'stage-one.txt'), 'utf8'), 'done', 'the next batch does not see the code of the one before');
+  assert.equal(W.worktreeOf(one).branch, 'claude/WT-10', 'a task with a copy of its own stayed in it');
+  assert.equal(W.worktreeOf(two).branch, 'claude/WT-10');
+});

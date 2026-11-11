@@ -312,6 +312,7 @@ CREATE TABLE IF NOT EXISTS epics (
   task_id      INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
   portion      INTEGER NOT NULL DEFAULT 3,
   auto_next    INTEGER NOT NULL DEFAULT 0,
+  through      INTEGER NOT NULL DEFAULT 0,
   moved_event  INTEGER,
   run          TEXT NOT NULL DEFAULT '{}',
   launch       TEXT NOT NULL DEFAULT '{}'

@@ -2,7 +2,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
@@ -382,8 +382,11 @@ test('an answer lives a while: two looks are one', async () => {
   const { shippedOf } = await import('../src/shipped.js');
   forgetShipped();
   const p = { id: pid, path: repo };
-  assert.equal(shippedOf(p, 1000), shippedOf(p, 2000));
-  assert.notEqual(shippedOf(p, 1000), shippedOf(p, 40000));
+  const one = shippedOf(p, 1000);
+  assert.equal(one, shippedOf(p, 2000));
+  const later = shippedOf(p, 40000);
+  assert.notEqual(one, later);
+  await Promise.all([one, later]);
   forgetShipped();
 });
 
@@ -424,4 +427,84 @@ test('what the card and the filter go by', () => {
   assert.equal(notOnMain({ key: 'A-1' }, { 'A-1': 'none' }), true);
   assert.equal(notOnMain({ key: 'A-1' }, {}), true, 'not looked at yet is not known to be there');
   assert.deepEqual(Object.keys(SHIP_WORDS).sort(), ['branch', 'main', 'none']);
+});
+
+// branch was a `git cherry` again on every look, 30 s apart
+const traced = async (url, keep = {}) => {
+  const dir = mkdtempSync(join(tmpdir(), 'kb-git-'));
+  const calls = join(dir, 'calls');
+  writeFileSync(calls, '');
+  forgetShipped(keep);
+  process.env.GIT_TRACE = calls;
+  try {
+    const tasks = (await app.inject({ method: 'GET', url })).json().tasks;
+    const run = readFileSync(calls, 'utf8').split('\n').filter((l) => l.includes('trace: built-in: git '));
+    return { tasks, count: (what) => run.filter((l) => l.includes(`built-in: git ${what}`)).length };
+  } finally { delete process.env.GIT_TRACE; rmSync(dir, { recursive: true, force: true }); }
+};
+
+test('projects in one repository read its history once, and every one of them is answered', async () => {
+  mkdirSync(join(repo, 'two'), { recursive: true });
+  const two = db.prepare("INSERT INTO projects (slug, prefix, name, next_task_no, path) VALUES ('two','TW','two',100,?)").run(join(repo, 'two')).lastInsertRowid;
+  db.prepare("INSERT INTO tasks (project_id, task_no, title, status, labels) VALUES (?, 7, 'T', 'review', '[]')").run(two);
+  commit('TW-7 a task of the folder');
+  task(31);
+  commit('DM-31 a task of the root');
+  const { tasks, count } = await traced('/api/shipped');
+  assert.equal(tasks['TW-7'], 'main');
+  assert.equal(tasks['DM-31'], 'main');
+  assert.equal(count('log'), 2, 'the history of the repository was read for each of its projects');
+});
+
+test('a task branch is asked again only when main or the branch moved', async () => {
+  task(40);
+  git('checkout', '-q', '-b', 'claude/DM-40');
+  commit('DM-40 work on its branch');
+  git('checkout', '-q', 'main');
+  const first = await traced('/api/shipped?project=demo');
+  assert.equal(first.tasks['DM-40'], 'branch');
+  assert.ok(first.count('cherry') >= 1);
+  const again = await traced('/api/shipped?project=demo', { lines: false });
+  assert.equal(again.tasks['DM-40'], 'branch');
+  assert.equal(again.count('cherry'), 0, 'a branch was compared with main again, though neither moved');
+  git('checkout', '-q', 'claude/DM-40');
+  commit('DM-40 more work');
+  git('checkout', '-q', 'main');
+  git('cherry-pick', 'claude/DM-40~1', 'claude/DM-40');
+  const moved = await traced('/api/shipped?project=demo', { lines: false });
+  assert.equal(moved.tasks['DM-40'], 'main', 'an answer kept from before main moved');
+  assert.ok(moved.count('cherry') >= 1);
+  git('branch', '-D', 'claude/DM-40');
+});
+
+test('a branch with no commit of its own is answered without git cherry', async () => {
+  task(41);
+  git('branch', 'claude/DM-41');
+  const tip = git('rev-parse', 'claude/DM-41');
+  const { tasks, count } = await traced('/api/shipped?project=demo');
+  assert.equal(tasks['DM-41'], 'none');
+  assert.equal(count(`cherry ${tip} ${tip}`), 0, 'a branch with nothing of its own went through git cherry');
+  assert.equal(count(`rev-list --count ${tip}..${tip}`), 1);
+  git('branch', '-D', 'claude/DM-41');
+});
+
+test('a branch git did not answer for is asked again on the next look, not kept', async () => {
+  task(42);
+  git('checkout', '-q', '-b', 'claude/DM-42');
+  const tip = commit('DM-42 work on its branch', 'dm-42-file');
+  git('checkout', '-q', 'main');
+  // the tree of the tip gone for one look: rev-list walks commits and answers, git cherry reads the patch and fails
+  const blob = git('rev-parse', `${tip}^{tree}`);
+  const file = join(repo, '.git', 'objects', blob.slice(0, 2), blob.slice(2));
+  const aside = `${file}.aside`;
+  renameSync(file, aside);
+  let first;
+  try { first = await traced('/api/shipped?project=demo'); } finally { renameSync(aside, file); }
+  assert.equal(first.tasks['DM-42'], 'branch');
+  assert.ok(first.count(`cherry`) >= 1);
+  const again = await traced('/api/shipped?project=demo', { lines: false });
+  assert.ok(again.count(`cherry `) >= 1 && again.tasks['DM-42'] === 'branch', 'a line git failed to answer was kept as answered');
+  const kept = await traced('/api/shipped?project=demo', { lines: false });
+  assert.equal(kept.count(`cherry `), 0, 'an answered line is kept');
+  git('branch', '-D', 'claude/DM-42');
 });

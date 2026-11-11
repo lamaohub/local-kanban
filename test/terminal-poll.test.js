@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { lookPause, timed } from '../public/js/look-pace.js';
 import { wholeAnswer } from '../public/js/term-delta.js';
 import { holdUntil, reprinted } from '../public/js/term-reprint.js';
 import { createScreens } from '../src/term-screens.js';
@@ -12,15 +13,16 @@ const to = src.indexOf('\n}\n', src.indexOf('function termSoon(')) + 3;
 const code = src.slice(from, to);
 
 /** The chain with fake timers and a look that answers when the test says so. */
-function chain() {
+function chain(extra = {}) {
   const timers = new Map();
   let next = 1;
   const looks = []; // the looks out now: call one to answer it
   const box = {
-    TERM_POLL_MS: 1000,
+    TERM_POLL_MS: 1000, lookPause, timed,
     setTimeout: (fn, ms) => { const id = next++; timers.set(id, { fn, ms }); return id; },
     clearTimeout: (id) => { timers.delete(id); },
     pollTerminal: () => new Promise((answer) => { looks.push(answer); }),
+    ...extra,
   };
   vm.runInNewContext(`let termTimer = null; let termChain = 0;\n${code}\nout = { startTermPoll, stopTermPoll, termSoon };`, box);
   return { ...box.out, timers, looks, due: () => [...timers.values()].map((t) => t.ms) };
@@ -84,7 +86,7 @@ function terminalCard(term) {
   const box = {
     term, tamper: null, drawn: null,
     state: { drawerKey: 'CK-1' }, document: { hidden: false }, URLSearchParams, Date, seg: String,
-    wholeAnswer, holdUntil, reprinted, termCols: () => null, stopTermPoll: () => {},
+    wholeAnswer, holdUntil, reprinted, lookPause, timed, termCols: () => null, stopTermPoll: () => {},
     renderTerminal: (r) => { box.drawn = r; },
     note: { dataset: {}, innerHTML: '', hidden: true, classList: { contains: () => box.note.hidden, remove: () => { box.note.hidden = false; } }, querySelector: () => ({}) },
     $: (id) => (id === 'term-note' ? box.note : null), esc: String, tr: (t) => `«${t}»`, openSettingsModal: () => {},
@@ -172,4 +174,21 @@ test('a look tmux refuses for good keeps the screen and says what to do above it
   quiet.box.tamper = () => ({ session: 's', unknown: true, reason: 'tmux-slow' });
   await quiet.look();
   assert.equal(quiet.box.note.hidden, true, 'a tmux slow this once got the words of one broken for good');
+});
+
+test('after a slow answer the card rests twice its time before the next look, after a quick one a second', async () => {
+  let took = 3000;
+  const c = chain({ timed: async (f, done) => { try { return await f(); } finally { done(took); } } });
+  c.startTermPoll();
+  await fire(c);
+  await answer(c);
+  assert.deepEqual(c.due(), [6000], 'a 3 s answer was followed by a look a second later');
+  took = 40_000;
+  await fire(c);
+  await answer(c);
+  assert.deepEqual(c.due(), [10_000], 'the rest has no bound');
+  took = 150;
+  await fire(c);
+  await answer(c);
+  assert.deepEqual(c.due(), [1000]);
 });

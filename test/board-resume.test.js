@@ -8,10 +8,11 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
+import { ownSocket } from './tmux-socket.js';
 
 const TMUX = ['/opt/homebrew/bin/tmux', '/usr/local/bin/tmux', '/usr/bin/tmux'].find((p) => existsSync(p));
 const skip = !TMUX && 'tmux is not installed';
-const SOCKET = `kb-resume-${process.pid}`;
+const SOCKET = ownSocket('kb-resume');
 let app, tmp, folder, fakeLog, phantom, db, sessions, now;
 
 before(async () => {

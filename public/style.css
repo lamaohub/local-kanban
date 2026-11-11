@@ -2892,6 +2892,7 @@ a.hl-name:hover { color: var(--accent); }
 .epic-set .btn-icon { width: 22px; height: 22px; }
 .epic-portion { min-width: 1.2em; text-align: center; font-variant-numeric: tabular-nums; }
 .epic-auto { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); cursor: pointer; }
+.epic-auto input { accent-color: var(--accent); }
 .epic-batches { display: flex; flex-direction: column; gap: 8px; }
 .eb { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); overflow: hidden; }
 .eb.eb-closed { opacity: .72; }

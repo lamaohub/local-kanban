@@ -7,9 +7,10 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, wr
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
+import { ownSocket } from './tmux-socket.js';
 
 const TMUX = ['/opt/homebrew/bin/tmux', '/usr/local/bin/tmux', '/usr/bin/tmux'].find((p) => existsSync(p));
-const SOCKET = `kb-accept-t-${process.pid}`;
+const SOCKET = ownSocket('kb-accept-t');
 let app, tmp, folder, db, auto, phantom;
 const CHECK = 'dddddddd-1000-4000-8000-dddddddddddd';
 const inject = (method, url, payload, headers = {}) => app.inject({ method, url, payload, headers: { host: '127.0.0.1:3100', ...headers } });

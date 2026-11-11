@@ -1,5 +1,5 @@
 import { scalarQuery } from '../query-params.js';
-import { shippedOf } from '../shipped.js';
+import { shippedAll } from '../shipped.js';
 import { gateOf, gateOfBoard } from '../ready-gate.js';
 import { isGuest } from '../share.js';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
@@ -206,9 +206,7 @@ export default async function projectRoutes(app) {
     if (q.error) return reply.code(400).send({ error: q.error });
     const list = db.prepare(`SELECT DISTINCT p.id, p.slug, p.path FROM projects p JOIN tasks t ON t.project_id = p.id
       WHERE p.archived = 0 AND t.status IN ('ready', 'review')`).all().filter((p) => q.values.project === undefined || p.slug === q.values.project);
-    const tasks = {};
-    for (const p of list) Object.assign(tasks, await shippedOf(p));
-    return { tasks };
+    return { tasks: await shippedAll(list) };
   });
 
   app.get('/api/projects/archived', () => db.prepare(`

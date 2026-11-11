@@ -744,6 +744,9 @@ export default async function systemRoutes(app) {
     // (what the server writes: answers to Claude's questions in comments, GitHub columns of new projects). A guest's
     // language stays in the guest's browser; the answer is the board's, and no refusal — the page sends it on every start.
     if (isGuest(req)) return { lang: uiLang(), guest: true };
+    // opened on the owner's board switched it to English on every load; the language changes only by a choice
+    // made in Settings or in the wizard, which send no `start`.
+    if (req.body?.start === true && kvGet('ui.lang')) return { lang: uiLang(), kept: true };
     if (!langOverride()) kvSet('ui.lang', req.body?.lang === 'en' ? 'en' : 'ru');
     return { lang: uiLang() };
   });

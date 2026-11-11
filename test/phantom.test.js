@@ -10,10 +10,11 @@ import { join } from 'node:path';
 import Fastify from 'fastify';
 import { screenCopy } from '../public/js/term-copy.js';
 import { bin } from '../src/bin-path.js';
+import { ownSocket } from './tmux-socket.js';
 
 const TMUX = ['/opt/homebrew/bin/tmux', '/usr/local/bin/tmux', '/usr/bin/tmux'].find((p) => existsSync(p));
 const skip = !TMUX && 'tmux is not installed';
-const SOCKET = `kb-test-${process.pid}`;
+const SOCKET = ownSocket('kb-test');
 // the sign-in address /login prints is far longer than the 80 columns of the screen
 const SIGN_IN = `https://claude.ai/oauth/authorize?code=true&client_id=${'9'.repeat(36)}&response_type=code&redirect_uri=${'x'.repeat(120)}&state=abc`;
 let app, tmp, folder, plain, other, claudeDir, fakeLog, phantom, db;
@@ -1282,7 +1283,7 @@ test('the Terminal tab looks again only once its last look came back, and gets t
   // 19–29 KB each, the same screen 9 times out of 9
   const drawer = readFileSync(new URL('../public/js/drawer.js', import.meta.url), 'utf8');
   assert.doesNotMatch(drawer, /setInterval\(pollTerminal/, 'a look goes out before the last one came back');
-  assert.match(drawer, /async function termTick\(chain\) \{\n  await pollTerminal\(\);\n  if \(chain === termChain\) termSchedule\(TERM_POLL_MS, chain\);/,
+  assert.match(drawer, /async function termTick\(chain\) \{\n  let took = 0;\n  await timed\(pollTerminal, \(ms\) => \{ took = ms; \}\);\n  if \(chain === termChain\) termSchedule\(lookPause\(TERM_POLL_MS, took\), chain\);/,
     'the next look is not timed from the answer to the last one');
   assert.match(drawer, /if \(termSeen\) \{ q\.set\('seen', termSeen\); q\.set\('delta', '1'\); \}/, 'the card does not say which screen it has');
   assert.match(drawer, /if \(r\.same\) return;\n  termSeen = r\.v \|\| null;\n  renderTerminal\(r\);/);

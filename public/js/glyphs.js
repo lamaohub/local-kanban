@@ -22,8 +22,33 @@ export const IDLE_MS = 60000;
 export const NARROW_PX = 760;
 export const NARROW_FRAME_MS = 50;
 export const NARROW_REPAINT_MS = 500;
-export function frameWait(narrow) {
+export function frameWait(narrow, strained = false) {
+  if (strained) return STRAIN_FRAME_MS;
   return narrow ? NARROW_FRAME_MS : 0;
+}
+
+export const STRAIN_LATE = 1; // a frame a whole frame late on average: frames at half the rate of the display
+export const STRAIN_FRAME_MS = 125; // ~8 frames a second
+export const STRAIN_REPAINT_MS = 500;
+export const STRAIN_HOLD_MS = 10_000;
+const STRAIN_EASE = 0.1;
+const LATE_CAP = 4;
+export const UNSTRAINED = Object.freeze({ late: 0, strained: false, since: -Infinity, frameMs: 1000 / 60 });
+/** The next state after a frame `gap` ms after the last one, asked `wait` ms apart, at `now`. Pure. */
+export function strainStep(s, gap, wait, now) {
+  const frameMs = !wait && gap >= 4 ? Math.min(s.frameMs, gap) : s.frameMs; // under 4 ms — two callbacks of one frame
+  const late = Math.min(LATE_CAP, Math.max(0, (gap - wait - (wait ? 2 : 1) * frameMs) / frameMs) || 0); // one long hitch counts as a few
+  const avg = s.late + STRAIN_EASE * (late - s.late);
+  if (s.strained) {
+    const strained = now - s.since < STRAIN_HOLD_MS || avg > STRAIN_LATE / 3;
+    return { late: avg, strained, since: s.since, frameMs };
+  }
+  const strained = avg > STRAIN_LATE;
+  return { late: avg, strained, since: strained ? now : s.since, frameMs };
+}
+/** How often the symbols of the layers are worked out anew (the frame between only moves them). Pure. */
+export function repaintEvery(narrow, strained = false) {
+  return strained ? STRAIN_REPAINT_MS : narrow ? NARROW_REPAINT_MS : REPAINT_MS;
 }
 
 export function sceneClock() {
@@ -123,8 +148,10 @@ export const RESIZE_QUIET_MS = 150;
 let canvas = null, ctx = null, cols = 0, rows = 0, cellW = 7.4, dpr = 1, sized = false, resizing = 0;
 let layers = []; // { canvas, ctx, base, T, h: Float32Array, lit: Float32Array, w }
 let pings = [], frame = 0, timer = 0, paintedAt = -Infinity, narrow = false, activeAt = 0;
+let strain = UNSTRAINED, frameAt = null, askedWait = 0;
 function next() {
-  const wait = frameWait(narrow);
+  const wait = frameWait(narrow, strain.strained);
+  askedWait = wait;
   if (!wait) { frame = requestAnimationFrame(draw); return; }
   frame = -1;
   timer = setTimeout(() => { timer = 0; frame = requestAnimationFrame(draw); }, wait);
@@ -133,6 +160,7 @@ function cancel() {
   if (timer) clearTimeout(timer);
   if (frame > 0) cancelAnimationFrame(frame);
   timer = 0; frame = 0;
+  frameAt = null;
 }
 const clock = sceneClock();
 const colors = { blue: '#4a8fca', grey: '#6f6f6f' };
@@ -265,9 +293,11 @@ function paintLayers(t) {
 function draw(now) {
   frame = 0;
   if (!running()) { halt(); return; }
+  if (frameAt !== null) strain = strainStep(strain, now - frameAt, askedWait, now);
+  frameAt = now;
   next();
   const T = clock.at(now);
-  if (T - paintedAt >= (narrow ? NARROW_REPAINT_MS : REPAINT_MS)) { repaint(T); paintedAt = T; }
+  if (T - paintedAt >= repaintEvery(narrow, strain.strained)) { repaint(T); paintedAt = T; }
   pings = livePings(pings, now);
   const t = T / 1000;
   paintLayers(t);

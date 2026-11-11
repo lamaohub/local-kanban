@@ -8,6 +8,22 @@ version it goes out as and opens an empty one again. Released sections are histo
 
 ## [Unreleased]
 
+## [2.0.0-beta.17]
+
+### Added
+
+- An epic can run straight through: with «straight through, without acceptance between batches» on, its next batch starts once every task of the last one is in Ready to ship or Review, without waiting for acceptance. In a project that gives each task its own copy of the repository, the tasks of such an epic share one — the branch `claude/<epic key>` — so each batch builds on the code of the one before, and the epic ships once.
+
+### Changed
+
+- The background of symbols gives way to a busy computer: when frames start coming late it draws a few frames a second, and goes back to every frame once they are on time again.
+
+### Fixed
+
+- The terminal and the chat of a card, and the columns of «Claude now», ask the board less often after a slow answer: on a busy computer they waited twice as long as the answer took (up to 10 s) instead of asking every second on top of it.
+- The «on main» mark of the «All projects» view comes several times faster: projects of one repository read its history once, a few projects are looked at together, and a task branch is compared with main again only when one of them moved.
+- Opening the board in a browser of another language no longer switches the board's language: a page only fills it in on a new board, and the language changes only by a choice in Settings or in the setup wizard.
+
 ## [2.0.0-beta.16]
 
 ### Changed

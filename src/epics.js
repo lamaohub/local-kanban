@@ -82,17 +82,23 @@ export function epicMove(status, subs, boardMoved) {
 }
 
 export const isEpic = (taskId) => Boolean(db.prepare('SELECT 1 FROM epic_batches WHERE epic_id = ? LIMIT 1').get(taskId));
+export function throughEpicKey(taskIds) {
+  if (!taskIds.length) return null;
+  return db.prepare(`SELECT (p.prefix || '-' || e.task_no) AS key FROM batch_tasks bt JOIN epic_batches b ON b.id = bt.batch_id
+    JOIN epics x ON x.task_id = b.epic_id AND x.through = 1 JOIN tasks e ON e.id = b.epic_id JOIN projects p ON p.id = e.project_id
+    WHERE bt.task_id IN (SELECT value FROM json_each(?)) ORDER BY bt.task_id LIMIT 1`).get(JSON.stringify(taskIds))?.key ?? null;
+}
 /** The epic a task lies in a batch of, or null. */
 export const epicOf = (taskId) => db.prepare('SELECT b.epic_id FROM batch_tasks bt JOIN epic_batches b ON b.id = bt.batch_id WHERE bt.task_id = ?').get(taskId)?.epic_id ?? null;
 
 /** The epic's settings, its defaults where nothing was set. */
 export function epicSettings(epicId) {
-  const r = db.prepare('SELECT portion, auto_next, moved_event, run, launch FROM epics WHERE task_id = ?').get(epicId);
+  const r = db.prepare('SELECT portion, auto_next, through, moved_event, run, launch FROM epics WHERE task_id = ?').get(epicId);
   let run = {};
   let launch = {};
   try { run = JSON.parse(r?.run || '{}') || {}; } catch { /* none */ }
   try { launch = JSON.parse(r?.launch || '{}') || {}; } catch { /* none */ }
-  return { portion: r?.portion ?? PORTION_DEFAULT, auto_next: Boolean(r?.auto_next), moved_event: r?.moved_event ?? null, run, launch };
+  return { portion: r?.portion ?? PORTION_DEFAULT, auto_next: Boolean(r?.auto_next), through: Boolean(r?.through), moved_event: r?.moved_event ?? null, run, launch };
 }
 const ensureEpicRow = (epicId) => db.prepare('INSERT OR IGNORE INTO epics (task_id) VALUES (?)').run(epicId);
 
@@ -100,12 +106,14 @@ const ensureEpicRow = (epicId) => db.prepare('INSERT OR IGNORE INTO epics (task_
 export function settingsProblem(b) {
   if (b?.portion !== undefined && !(Number.isInteger(b.portion) && b.portion >= PORTION_MIN && b.portion <= PORTION_MAX)) return { error: `portion: a whole number from ${PORTION_MIN} to ${PORTION_MAX}`, field: 'portion' };
   if (b?.auto_next !== undefined && typeof b.auto_next !== 'boolean') return { error: 'auto_next: true or false', field: 'auto_next' };
+  if (b?.through !== undefined && typeof b.through !== 'boolean') return { error: 'through: true or false', field: 'through' };
   return null;
 }
 export function saveSettings(epicId, b) {
   ensureEpicRow(epicId);
   if (b.portion !== undefined) db.prepare('UPDATE epics SET portion = ? WHERE task_id = ?').run(b.portion, epicId);
   if (b.auto_next !== undefined) db.prepare('UPDATE epics SET auto_next = ? WHERE task_id = ?').run(b.auto_next ? 1 : 0, epicId);
+  if (b.through !== undefined) db.prepare('UPDATE epics SET through = ? WHERE task_id = ?').run(b.through ? 1 : 0, epicId);
 }
 export function saveRun(epicId, run) {
   ensureEpicRow(epicId);
@@ -150,7 +158,7 @@ export function epicView(epicId) {
     FROM task_links l JOIN tasks t ON t.id = l.linked_task_id JOIN projects p ON p.id = t.project_id
     WHERE l.kind = 'parent' AND l.task_id = ? ORDER BY t.id`).all(epicId).filter((t) => !placed.has(t.id));
   const s = epicSettings(epicId);
-  return { batches, loose, portion: s.portion, auto_next: s.auto_next, run: s.run };
+  return { batches, loose, portion: s.portion, auto_next: s.auto_next, through: s.through, run: s.run };
 }
 
 /** What the board's card of an epic shows: {batches_n, tasks_n, closed_n, current} — `current`, the number of the first

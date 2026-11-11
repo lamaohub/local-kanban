@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, appendFileSync, symlinkSync, lstat
 import { cp } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { db } from './db.js';
+import { throughEpicKey } from './epics.js';
 import { bin } from './bin-path.js';
 
 export const WORKTREES_DIR = join('.claude', 'worktrees');
@@ -115,11 +116,13 @@ export async function ensureWorktree(project, key, tasks = []) {
   return { path: folder, branch, top, created, base };
 }
 
-/** The folder a start of these tasks of `project` runs in: the project's, or — when the project gives each task its own
-    copy — the copy the first task already has, else a new one of it, which the tasks without a copy of their own join.
-    `dry` — where it would be, nothing made (a dry run starts nothing). */
 export async function taskFolder(project, tasks, { dry = false } = {}) {
   if (!project.worktrees || !tasks.length) return { path: project.path };
+  const epic = throughEpicKey(tasks.map((t) => t.id));
+  if (epic) {
+    if (dry) return { ...(await planWorktree(project, epic)), dry: true };
+    return ensureWorktree(project, epic, tasks);
+  }
   const own = tasks.map((t) => ({ t, w: worktreeOf(t.id) })).find((x) => x.w);
   const key = own ? own.w.branch.replace(/^claude\//, '') : tasks[0].key;
   if (dry) return own ? { ...own.w, dry: true } : { ...(await planWorktree(project, key)), dry: true };

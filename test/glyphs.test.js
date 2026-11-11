@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  glyphsOn, frameWait, IDLE_MS, sceneClock, makePing, reveal, livePings, addPing, terrain, shade, depthShade, glyphAt, isBackground, BACKGROUND, LAYERS, MAX_PINGS, FORM_AT, FORM_PX,
+  glyphsOn, frameWait, strainStep, repaintEvery, UNSTRAINED, STRAIN_FRAME_MS, STRAIN_REPAINT_MS, STRAIN_HOLD_MS, REPAINT_MS, NARROW_REPAINT_MS, IDLE_MS, sceneClock, makePing, reveal, livePings, addPing, terrain, shade, depthShade, glyphAt, isBackground, BACKGROUND, LAYERS, MAX_PINGS, FORM_AT, FORM_PX,
 } from '../public/js/glyphs.js';
 
 const mid = () => 0.5;
@@ -179,4 +179,37 @@ test('CK-679: the loop runs on the scene clock — paused on hide, resumed when 
   assert.match(body('freeze'), /clock\.pause\(now\)/, 'a hidden tab keeps the scene going');
   assert.match(body('wake'), /clock\.resume\(performance\.now\(\)\)[\s\S]*next\(\)/, 'back on the tab, the scene never moves again');
   assert.match(body('draw'), /const T = clock\.at\(now\);[\s\S]*repaint\(T\)[\s\S]*paintLayers\(t\)/, 'the scene runs on the real time and jumps by the time the tab was hidden');
+});
+
+// the mouse, 3–5% without it. Late frames say the Mac is busy: the background then draws a few frames a second
+test('the background draws rarely while frames come late, and back at every frame once they are on time', () => {
+  const run = (s, gap, wait, from, n) => { let x = s; for (let i = 0; i < n; i++) x = strainStep(x, gap, wait, from + i * (gap || 1)); return x; };
+  let s = run(UNSTRAINED, 8.3, 0, 0, 30); // a 120 Hz display
+  assert.equal(s.strained, false, 'frames at the rate of the display slowed the background down');
+  assert.ok(Math.abs(s.frameMs - 8.3) < 0.01, 'the frame of the display is the shortest gap seen');
+  assert.equal(strainStep(s, 300, 0, 300).strained, false, 'one hitch of the collector slowed the background down');
+  let n = 0;
+  while (!s.strained && n < 100) { s = strainStep(s, 20, 0, 1000 + n * 20); n += 1; }
+  assert.ok(s.strained && n <= 20, `frames at 50 a second on a 120 Hz display did not slow it down in ${n}`);
+  const since = s.since;
+  assert.equal(frameWait(false, true), STRAIN_FRAME_MS);
+  assert.equal(frameWait(true, true), STRAIN_FRAME_MS);
+  assert.equal(frameWait(false, false), 0, 'a Mac with time to spare lost frames');
+  assert.equal(repaintEvery(false, true), STRAIN_REPAINT_MS);
+  assert.equal(repaintEvery(false, false), REPAINT_MS);
+  assert.equal(repaintEvery(true, false), NARROW_REPAINT_MS);
+  // frames on time again — the rest it gave the Mac: it holds STRAIN_HOLD_MS, a frame after a timer waits one frame more
+  s = run(s, STRAIN_FRAME_MS + 8.3, STRAIN_FRAME_MS, since + 125, 40);
+  assert.equal(s.strained, true, 'the background went back to every frame before STRAIN_HOLD_MS');
+  s = strainStep(s, STRAIN_FRAME_MS + 8.3, STRAIN_FRAME_MS, since + STRAIN_HOLD_MS + 1);
+  assert.equal(s.strained, false, 'frames on time after STRAIN_HOLD_MS did not bring every frame back');
+  // a frame of the display never seen shorter than 16.7 ms: a 60 Hz display at its rate is not late
+  assert.equal(run(UNSTRAINED, 16.7, 0, 0, 50).strained, false);
+  assert.equal(strainStep(UNSTRAINED, 2, 0, 0).frameMs, UNSTRAINED.frameMs, 'two callbacks of one frame read as a 500 Hz display');
+  assert.ok(STRAIN_HOLD_MS >= 5000);
+  const src = readFileSync(new URL('../public/js/glyphs.js', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
+  const body = (name) => { const at = src.indexOf(`function ${name}(`); return src.slice(at, src.indexOf('\n}\n', at)); };
+  assert.match(body('draw'), /strain = strainStep\(strain, now - frameAt, askedWait, now\)/);
+  assert.match(body('next'), /frameWait\(narrow, strain\.strained\)/);
+  assert.match(body('cancel'), /frameAt = null/, 'the time the background stood counted as a late frame');
 });

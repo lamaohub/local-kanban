@@ -207,7 +207,7 @@ function printEpic(t) {
   const e = t.epic;
   if (!e || !Array.isArray(e.batches)) return;
   const now = e.current ? `batch ${e.current} of ${e.batches_n}` : `all ${e.batches_n} batches through`;
-  console.log(`epic: ${now}, ${e.closed_n} of ${e.tasks_n} tasks closed, portions of ${e.portion}${e.auto_next ? ', the next batch starts by itself once the last is accepted' : ''}`);
+  console.log(`epic: ${now}, ${e.closed_n} of ${e.tasks_n} tasks closed, portions of ${e.portion}${e.auto_next ? ', the next batch starts by itself once the last is accepted' : ''}${e.through ? ', straight through: the next batch starts once the last is handed in, without acceptance, on its commits; the epic ships once, on the word' : ''}`);
   for (const b of e.batches) {
     const closed = b.counts.done + b.counts.cancelled;
     console.log(`${batchName(b)} (${closed}/${b.counts.total} closed): ${b.tasks.map((x) => `${x.key} ${x.status}`).join(', ') || '—'}`);

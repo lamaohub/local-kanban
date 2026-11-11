@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { lookPause, timed } from '../public/js/look-pace.js';
 import { REPRINT_HOLD_MS, holdUntil, reprinted } from '../public/js/term-reprint.js';
 import { ASK_FRESH_MS, widthFor } from '../src/phantom.js';
 import * as owner from '../public/js/term-owner-rules.js';
@@ -11,7 +12,7 @@ const strip = (file) => readFileSync(new URL(`../public/js/${file}`, import.meta
   .replace(/^import [\s\S]*?;$/gm, '').replace(/^export /gm, '');
 
 function terms() {
-  const box = { setTimeout, clearTimeout, state: {}, document: {} };
+  const box = { lookPause, timed, setTimeout, clearTimeout, state: {}, document: {} };
   vm.runInNewContext(`${strip('now-terms.js')}\nthis.termTaskOf = termTaskOf;\nthis.askCols = askCols;\nthis.placeColumn = placeColumn;`, box);
   return box;
 }
@@ -79,6 +80,7 @@ test('of the viewers of one terminal the narrowest width wins while it keeps loo
 function nowWith(saved) {
   const store = new Map(saved ? [['kb.ui.nowView', saved]] : []);
   const box = {
+    lookPause, timed,
     tr: (s) => s, esc: (s) => String(s), ic: () => '', state: {}, NOW: '#now', STATUS_LABELS: {}, SHORT_MONTHS: [],
     localStore: { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, v) }, setInterval() {}, document: { hidden: true }, onPhone: () => false, PHONE_NOW_VIEW: 'terms',
   };
@@ -96,6 +98,7 @@ test('the section remembers the view: the list by default, the terminals once pi
 test('the broken terminals are their own view: out of «Terminals», each with its count on the switch', () => {
   const store = new Map();
   const box = {
+    lookPause, timed,
     tr: (s) => s, esc: (s) => String(s), ic: () => '', state: {}, NOW: '#now', STATUS_LABELS: {}, SHORT_MONTHS: [],
     localStore: { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, v) }, setInterval() {}, document: { hidden: true }, onPhone: () => false, PHONE_NOW_VIEW: 'terms',
   };
@@ -126,6 +129,7 @@ test('a look asked for after typing waits for the look on its way instead of run
   const timers = [];
   const pending = [];
   const box = {
+    lookPause, timed,
     state: { slug: '#now', drawerKey: null }, NOW: '#now', document: { hidden: false },
     $: () => ({ classList: { contains: () => false } }),
     setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimeout: (id) => { if (timers[id - 1]) timers[id - 1].fn = null; },
@@ -155,6 +159,7 @@ test('while the card shows a terminal, the columns still look — without a widt
   const asked = [];
   let termTab = true;
   const box = {
+    lookPause, timed,
     state: { slug: '#now', drawerKey: 'D-1' }, NOW: '#now', document: { hidden: false },
     $: (id) => ({ classList: { contains: (c) => (id === 'term-block' && c === 'hidden' ? !termTab : false) } }),
     setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimeout: (id) => { if (timers[id - 1]) timers[id - 1].fn = null; },
@@ -182,7 +187,7 @@ test('while the card shows a terminal, the columns still look — without a widt
 // its terminal (the DELETE of the card's "Stop"), and the column goes at once: the answer of /api/now still has the run
 // for a few seconds, until the server looks at the terminals again.
 test('a column closed by its ✕ stays gone while /api/now still has the run, and comes back with a new run', () => {
-  const box = { setTimeout, clearTimeout, state: {}, document: {} };
+  const box = { lookPause, timed, setTimeout, clearTimeout, state: {}, document: {} };
   vm.runInNewContext(`${strip('now-terms.js')}\nthis.openRuns = openRuns; this.closed = closed;`, box);
   const runs = [{ session: 's1', tasks: [] }, { session: 's2', tasks: [] }, { session: null, tasks: [] }];
   box.closed.set('s1', 1000);
@@ -205,6 +210,7 @@ test('the ✕ of a column asks before it stops a live Claude, and closes an ende
   const calls = [];
   let answer = false;
   const box = {
+    lookPause, timed,
     setTimeout, clearTimeout, state: {}, document: {}, tr: (s) => s, seg: (s) => s,
     styledConfirm: async (msg) => { asked.push(msg); return answer; },
     api: async (method, path) => { calls.push(`${method} ${path}`); },
@@ -296,7 +302,7 @@ test('a column of another board\'s terminal shows its line in place of the field
     } };
     return { c, parts };
   };
-  const box = { setTimeout, clearTimeout, state: {}, document: {}, tr: (x) => `«${x}»`, endedWords: () => 'ended', TERM_ACTIVITY: {}, setTermHint() {}, ...owner };
+  const box = { lookPause, timed, setTimeout, clearTimeout, state: {}, document: {}, tr: (x) => `«${x}»`, endedWords: () => 'ended', TERM_ACTIVITY: {}, setTermHint() {}, ...owner };
   vm.runInNewContext(`${strip('now-terms.js')}\nthis.paintTerm = paintTerm;`, box);
   const shut = (p) => ['.now-col-close', '.term-keys', '.term-form'].filter((x) => p[x].classList.contains('hidden'));
   for (const dead of [false, true]) {

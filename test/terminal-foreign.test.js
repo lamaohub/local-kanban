@@ -9,10 +9,11 @@ import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
+import { ownSocket } from './tmux-socket.js';
 
 const TMUX = ['/opt/homebrew/bin/tmux', '/usr/local/bin/tmux', '/usr/bin/tmux'].find((p) => existsSync(p));
 const skip = !TMUX && 'tmux is not installed';
-const SOCKET = `kb-test-foreign-${process.pid}`;
+const SOCKET = ownSocket('kb-test-foreign');
 const OUR_PORT = '39671';
 const THEIR_PORT = '39672';
 const THEIRS_LIVE = 'bbbbbbbb-0000-4000-8000-0000000000a1';
