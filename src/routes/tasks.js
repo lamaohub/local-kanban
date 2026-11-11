@@ -310,6 +310,11 @@ function afterPatch(t, b, fresh, { sid = null, undo = false } = {}) {
   if (statusChanged) followEpic(epicOf(t.id));
 }
 
+/** The move the board makes of this PATCH (`b`) of task `t`: {status: 'done'} for a check handing in its report, else b. */
+function checkMove(t, b) {
+  return b.status === 'review' && OPEN_CHECK.includes(t.status) && isCheck(t) ? { ...b, status: 'done' } : b;
+}
+
 /** The epics whose batches lost a task (a link taken off) — each told once, and only if it really lost one. */
 function followEpics(before) {
   for (const id of new Set(before.filter(Boolean))) followEpic(id);
@@ -761,12 +766,21 @@ export default async function taskRoutes(app) {
     if (conflict) delete b.description;
     const flag = conflict ? { description_conflict: true } : {};
     const sid = requestSession(req);
+    // Done and leave it in Review for good; Claude's report is in, so the move is nothing. The person's move (no session)
+    // puts it back to Review as before
+    if (sid && b.status === 'review' && t.status === 'done' && isCheck(t)) delete b.status;
     const plan = planPatch(t, b, sid);
     if (plan.error) { const { code, ...body } = plan; return reply.code(code).send(body); }
     const host = requestHostSession(req);
     if (!plan.updates.length) { bindSession(t.id, t.status, sid, host, { claim: b.status !== undefined }); return { ...t, labels: JSON.parse(t.labels || '[]'), ...typedWarned(t, sid), ...flag }; }
-    const fresh = db.transaction(() => commitPatch(t, b, plan, sid, host))();
-    afterPatch(t, b, fresh, { sid });
+    const moved = checkMove(t, b);
+    const fresh = db.transaction(() => {
+      const f = commitPatch(t, b, plan, sid, host);
+      if (moved === b) return f;
+      const close = planPatch(f, { status: 'done' }, null);
+      return close.error ? f : commitPatch(f, { status: 'done' }, close, null, null); // the board's move: signed by nobody
+    })();
+    afterPatch(t, fresh.status === 'done' ? moved : b, fresh, { sid });
     const warning = secondCheck(t, fresh) || typedBackWarning(fresh, sid);
     return { ...fresh, labels: JSON.parse(fresh.labels || '[]'), ...(warning ? { warning } : {}), ...flag };
   });

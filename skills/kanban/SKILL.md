@@ -264,7 +264,8 @@ One line of summary at the end.
      permission check of Claude Code, which may refuse it. The tool shows the return code of each. What fails stays in `review`: fix it and check again, or leave a `kb note`
      on it when the fix is not yours to make.
   5. The report goes on the check task, `kb review <check-key> "…"`: what you checked in each task and
-     what you found, in full — not "all good". The check task itself stays in review for the user.
+     what you found, in full — not "all good". The board then moves the check task itself to done:
+     `kb review` answers `<check-key> done 📝`.
 - A "check whether the service is alive" task → `kb svc <proj>` (one line per service, no ssh).
 - Work time is measured for you: doing/deploy runs the timer, review/done stops it.
 - Verifying the result: text and config changes — curl/grep (cheap). Compiled projects — **a build**

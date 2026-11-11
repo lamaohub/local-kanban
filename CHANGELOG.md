@@ -8,6 +8,17 @@ version it goes out as and opens an empty one again. Released sections are histo
 
 ## [Unreleased]
 
+## [2.0.0-beta.16]
+
+### Changed
+
+- A check task (the `check` label) goes on to Done by itself once its Claude leaves the report: the tasks it accepted are in Done already, and the check no longer waits in Review to be moved by hand.
+
+### Fixed
+
+- Tasks in Ready to ship no longer drop out of «Claude now» once their session is cut off: the run stays there with «Continue» until the tasks are shipped.
+- A Claude waiting for the report of a helper no longer reads as waiting for you: neither when the helper waits on background work of its own, nor when it was started long before the latest turns.
+
 ## [2.0.0-beta.15]
 
 ### Added

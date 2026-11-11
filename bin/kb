@@ -526,11 +526,11 @@ const commands = {
     // The move first, the note only after it: a refused move (todo → review) used to leave the note on the card
     // anyway, and the retry added a second one. Moving a task already in review again changes nothing.
     const t = await api('PATCH', `/api/tasks/${key(id)}`, { status: 'review' }, TASK);
-    const unsaved = (code) => { if (code) process.stderr.write(`kb: ${t.key} is in review, but the note did not save — kb note ${t.key} "…"\n`); };
+    const unsaved = (code) => { if (code) process.stderr.write(`kb: ${t.key} is in ${t.status === 'done' ? 'done' : 'review'}, but the note did not save — kb note ${t.key} "…"\n`); };
     process.on('exit', unsaved);
     await postNote(id, note);
     process.off('exit', unsaved);
-    console.log(`${t.key} review 📝`);
+    console.log(`${t.key} ${t.status === 'done' ? 'done' : 'review'} 📝`);
   },
 
   // A batch is read in one go, so every key is printed, cards apart by a line of ---. A wrong key stops the

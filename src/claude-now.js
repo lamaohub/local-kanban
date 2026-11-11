@@ -10,6 +10,7 @@ import { waitsOwnWork } from './own-wait.js';
 export const STAGE_PERCENT = { todo: 0, prep: 25, doing: 50, ready: 65, deploy: 75, review: 100, done: 100 };
 const SUBMITTED = new Set(['ready', 'review', 'done']);
 const WORKING = new Set(['prep', 'doing', 'deploy']);
+const HOLDS = new Set([...WORKING, 'ready']);
 const STALE_H = 2; // no movement for two hours: the card's "stuck" badge and the dashboard say the same
 // A task's place in its run, top to bottom: what is handed in, what Claude is on, what waits its turn.
 const RANK = { review: 0, done: 0, ready: 0, focus: 1, deploy: 2, doing: 2, prep: 3, todo: 4 };
@@ -26,7 +27,7 @@ const ROWS = `
   WITH held AS (
     SELECT DISTINCT (SELECT s.session_id FROM task_sessions s WHERE s.task_id = t.id ORDER BY s.last_seen DESC, s.session_id LIMIT 1) AS session_id
     FROM tasks t JOIN projects p ON p.id = t.project_id AND p.archived = 0
-    WHERE t.status IN ('prep','doing','deploy') AND ${noclaudeFilter('t.')}
+    WHERE t.status IN ('prep','doing','deploy','ready') AND ${noclaudeFilter('t.')}
   ), sess AS (
     SELECT session_id FROM held WHERE session_id IS NOT NULL UNION SELECT value FROM json_each(?)
   ), cand AS (
@@ -110,7 +111,7 @@ export async function nowRuns(isAlive, paneOf = undefined, ownWork = waitsOwnWor
   const active = await activeBoardSessions(isAlive, registryOf);
   const rows = db.prepare(ROWS).all(JSON.stringify([...active.keys()]));
   const working = rows.filter((r) => WORKING.has(r.status)).length;
-  if (!working && !active.size) return { runs: [], tasks_n: 0 };
+  if (!rows.some((r) => HOLDS.has(r.status)) && !active.size) return { runs: [], tasks_n: 0 };
   const waiting = waitingLaunches();
   const bySession = new Map(); // session → its rows
   const loose = new Map();     // `${project} ${stale}` → rows in work that no session is tied to; `… start` — ▶'s
@@ -126,12 +127,12 @@ export async function nowRuns(isAlive, paneOf = undefined, ownWork = waitsOwnWor
   const fresh = bySession.size ? freshLaunchSessions() : new Set();
   const runs = [];
   for (const [sid, list] of bySession) {
-    if (!list.some((r) => WORKING.has(r.status)) && !active.has(sid)) continue;
+    if (!list.some((r) => HOLDS.has(r.status)) && !active.has(sid)) continue;
     const entry = registry.get(sid);
     // turn over on the screen
     let claude = screenState(entry, { bg: currentBackground().has(sid), over: currentOver().has(sid) });
     let bg = false;
-    if (claude === 'background' && list.some((r) => WORKING.has(r.status)) && !(await ownWork(sid))) { claude = 'idle'; bg = true; }
+    if (claude === 'background' && list.some((r) => HOLDS.has(r.status)) && !(await ownWork(sid))) { claude = 'idle'; bg = true; }
     const hit = claude !== 'gone' ? currentLimited().get(sid) : undefined;
     if (hit) { claude = 'limit'; bg = false; }
     if (claude === 'gone' && fresh.has(sid) && !(await boardPaneGone(sid, paneOf))) claude = 'starting';
@@ -161,7 +162,7 @@ const DONE_ROWS = `
   WITH busy AS (
     SELECT DISTINCT (SELECT s.session_id FROM task_sessions s WHERE s.task_id = t.id ORDER BY s.last_seen DESC, s.session_id LIMIT 1) AS session_id
     FROM tasks t JOIN projects p ON p.id = t.project_id AND p.archived = 0
-    WHERE t.status IN ('prep','doing','deploy') AND ${noclaudeFilter('t.')}
+    WHERE t.status IN ('prep','doing','deploy','ready') AND ${noclaudeFilter('t.')}
   ), recent AS (
     SELECT DISTINCT task_id FROM task_events WHERE created_at >= @since AND status IN ('review','done')
   ), handed AS (

@@ -41,6 +41,19 @@ const ASYNC_AGENT = /^Async agent launched successfully\.(?:[^\n]*\nagentId: (\w
 const WORKFLOW = /^Workflow launched in background\. Task ID: (\w+)/;
 const RESUMED = /^\{"success":true,"message":"Resuming agent [^"\n]*","resumedAgentId":"(\w+)"/;
 const isObj = (x) => Boolean(x) && typeof x === 'object' && !Array.isArray(x);
+const NOTE_BLOCK = /<task-notification>[\s\S]*?<\/task-notification>/g;
+const INTERIM = /is waiting on its own background work|with background work of its own still running|the result below may be interim/;
+/** Whether the raw transcript line `raw` tells of the end of the work started by step `id` (its task `task`). */
+export function endsIn(raw, id, task) {
+  if (!raw.includes('<task-notification>') && !raw.includes('[Subagent hand-back]')) return false;
+  for (const [block] of String(raw).matchAll(NOTE_BLOCK)) {
+    const named = block.includes(`<tool-use-id>${id}</tool-use-id>`) || (task && block.includes(`<task-id>${task}</task-id>`));
+    if (named && !INTERIM.test(block)) return true;
+  }
+  // the raw line is JSON: the quotes of the tag come escaped
+  return Boolean(task) && raw.includes('[Subagent hand-back]')
+    && (raw.includes(`<agent-message from=\\"${task}\\"`) || raw.includes(`<agent-message from="${task}"`));
+}
 /** Whether the answer `b` (a tool_result of the transcript line `d`) says its step runs on in the background: the id of
     that work ('' when the answer names none), or null. What Claude Code writes after a step is read only when the line
     holds this one answer — with several, it is nobody's — and then it alone decides. */
@@ -64,7 +77,7 @@ export function wentBackground(d, b) {
 }
 const TURN_LINES = new Set(['assistant', 'user', 'system']);
 
-export function ownWaitIn(lines) {
+export function ownWaitIn(lines, { whole = true } = {}) {
   const parsed = [];
   for (const raw of lines) {
     let d;
@@ -116,9 +129,14 @@ export function ownWaitIn(lines) {
   // its notification (or the one Claude Code queued while the turn went on) names the work that ended — by the step, or
   // it stopped, not for one started after it
   const running = [...launched].filter(([id, { at, task }]) => !(task && stopped.get(task) > at)
-    && !parsed.slice(at + 1).some((p) => p.raw.includes(`<tool-use-id>${id}</tool-use-id>`) || (task && p.raw.includes(`<task-id>${task}</task-id>`))));
-  if (!running.length) return { own: false };
+    && !parsed.slice(at + 1).some((p) => endsIn(p.raw, id, task)));
+  if (!running.length) return deeper && !whole && !reachesBack(parsed) ? null : { own: false };
   return { own: true, at: turnEnd(Math.max(...running.map(([, l]) => l.at))) };
+}
+
+function reachesBack(parsed) {
+  const times = parsed.map((p) => Date.parse(p.d?.timestamp)).filter(Number.isFinite);
+  return times.length > 0 && times.at(-1) - times[0] >= OWN_WAIT_MAX_MS;
 }
 
 const paths = new Map(); // sid → transcript path
@@ -154,7 +172,7 @@ export async function waitsOwnWork(sid, now = Date.now(), known = null) {
     let result = { own: false };
     try {
       for (const bytes of TAIL_STEPS) {
-        const r = ownWaitIn(await tailLines(path, st.size, bytes));
+        const r = ownWaitIn(await tailLines(path, st.size, bytes), { whole: bytes >= st.size || bytes === TAIL_STEPS.at(-1) });
         if (r) { result = r; break; }
         if (bytes >= st.size) break;
       }

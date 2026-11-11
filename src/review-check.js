@@ -3,8 +3,9 @@ import { db } from './db.js';
 
 export const CHECK_LABEL = 'check';
 /** The statuses of a check that is still open: made and not started yet, or worked on. The section of the page
-    holds the same list (public/js/review-rules.js); a test keeps the two equal. A check in Review is the report
-    of an earlier check, for the person to read. */
+    holds the same list (public/js/review-rules.js); a test keeps the two equal. A check that leaves its report goes on
+    to Done by itself (checkMove in src/routes/tasks.js); one still in Review — an older report, or one the person put
+    back there — is for the person to read. */
 export const OPEN_CHECK = ['todo', 'prep', 'doing', 'ready', 'deploy'];
 
 function labelsOf(t) {

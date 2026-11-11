@@ -11,6 +11,7 @@ import { db, logError } from './db.js';
 import { claudeConfigFile, DATA_DIR, PORT, tmuxSocket } from './config.js';
 import { readRegistry, stateOf, screenState } from './claude-live.js';
 import { waitsOwnWork } from './own-wait.js';
+import { isCheck } from './review-check.js';
 import { clearKeys, inField, promptBox, tallBox, undim } from './prompt-box.js';
 import { HOOK_TIMEOUT_S, hookCommand, isOurs } from './claude-hooks.js';
 import { boardKb, readSettings } from './claude-settings.js';
@@ -647,12 +648,14 @@ async function sweepOnce() {
   const ours = new Set(db.prepare('SELECT session_id FROM board_sessions').all().map((r) => r.session_id));
   if (!ours.size || !tmuxBin()) return [];
   const taskless = tasklessNow();
-  const ties = db.prepare('SELECT t.status FROM task_sessions s JOIN tasks t ON t.id = s.task_id WHERE s.session_id = ?');
+  const ties = db.prepare('SELECT t.status, t.labels FROM task_sessions s JOIN tasks t ON t.id = s.task_id WHERE s.session_id = ?');
   const seen = new Map(); // sid → {play, work}: the statuses of its tasks, read once a sweep
   const tasksOf = (sid) => {
     if (!seen.has(sid)) {
-      const st = ties.all(sid).map((r) => r.status);
-      seen.set(sid, { play: st.some((x) => !OUT_OF_PLAY.has(x)), work: st.some((x) => AT_WORK.has(x)) });
+      const rows = ties.all(sid);
+      const st = rows.map((r) => r.status);
+      const report = rows.some((r) => r.status === 'done' && isCheck(r));
+      seen.set(sid, { play: report || st.some((x) => !OUT_OF_PLAY.has(x)), work: st.some((x) => AT_WORK.has(x)) });
     }
     return seen.get(sid);
   };

@@ -1006,7 +1006,7 @@ test('a word to the terminal of a check report makes no second open check', { sk
   const pidp = db.prepare("INSERT INTO projects (slug, prefix, name, next_task_no, path) VALUES ('rep', 'REP', 'Report', 3, ?)").run(plain).lastInsertRowid;
   db.prepare(`INSERT INTO tasks (project_id, task_no, title, status, labels) VALUES (?, 1, 'Check', 'todo', '["check"]')`).run(pidp);
   const s = await launchOn('rep', ['REP-1']);
-  await inject('PATCH', '/api/tasks/REP-1', { status: 'review' });
+  db.prepare("UPDATE tasks SET status = 'review' WHERE project_id = ? AND task_no = 1").run(pidp);
   db.prepare(`INSERT INTO tasks (project_id, task_no, title, status, labels) VALUES (?, 2, 'Check again', 'todo', '["check"]')`).run(pidp);
   const status = () => db.prepare('SELECT status FROM tasks WHERE project_id = ? AND task_no = 1').get(pidp).status;
   assert.deepEqual((await inject('POST', '/api/tasks/REP-1/terminal', { text: 'and this', key: 'Enter' })).json(), { ok: true, prep: [], doing: [] });
@@ -1055,6 +1055,17 @@ test('a board terminal closes itself once none of its tasks is in play: Review k
   await move('SWP-2', 'cancelled');
   await until(() => !hasSession(s), 'the terminal to close when the last task of its batch left play');
   assert.equal(await alive('SWP-1'), false);
+});
+
+test('a check the board closed on its report keeps its terminal resting', { skip }, async () => {
+  const pid = db.prepare("INSERT INTO projects (slug, prefix, name, next_task_no, path) VALUES ('chkrest', 'CKR', 'Check rest', 2, ?)").run(plain).lastInsertRowid;
+  db.prepare(`INSERT INTO tasks (project_id, task_no, title, status, labels) VALUES (?, 1, 'Check', 'todo', '["check"]')`).run(pid);
+  const s = await launchOn('chkrest', ['CKR-1']);
+  await inject('PATCH', '/api/tasks/CKR-1', { status: 'review' });
+  assert.equal(db.prepare('SELECT status FROM tasks WHERE project_id = ? AND task_no = 1').get(pid).status, 'done');
+  assert.deepEqual(await phantom.closeFinishedTerminals(), [], 'the terminal of the check closed on its report');
+  assert.ok(hasSession(s));
+  assert.equal((await inject('DELETE', '/api/tasks/CKR-1/terminal')).statusCode, 200);
 });
 
 test('a terminal whose tasks wait in Review closes once its Claude has been idle for hours, unless it asks or works in the background', { skip }, async () => {

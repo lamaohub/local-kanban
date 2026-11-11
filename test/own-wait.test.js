@@ -134,3 +134,47 @@ test('a helper that ended does not end the wait for the other one still running'
     result('toolu_H4', 'Async agent launched successfully.'), says('Running.'), human(agentNote('toolu_H4')), says('Pay by the link, I will see it.')];
   assert.equal(ownWaitIn(cmd)?.own, false, 'an older command past a woken turn read as Claude\'s own wait');
 });
+
+const interim = (id, task) => `<task-notification>\n<task-id>${task}</task-id>\n<tool-use-id>${id}</tool-use-id>\n<status>completed</status>\n`
+  + '<summary>Agent "Acceptance: afisha" is waiting on its own background work</summary>\n<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>\n'
+  + '<result>This agent has not reported yet.</result>\n</task-notification>';
+const finished = (task) => `<task-notification>\n<task-id>${task}</task-id>\n<status>completed</status>\n<summary>Agent "Acceptance: afisha" finished</summary>\n</task-notification>`;
+const handBack = (task) => `Another Claude session sent a message:\n<agent-message from="${task}">\n[Subagent hand-back] The text below is the final report of a subagent this session delegated to.\n</agent-message>`;
+const helper = (id, task) => [bg(id, 'accept the afisha', 'Agent'), result(id, `Async agent launched successfully.\nagentId: ${task} (internal ID)`)];
+
+test('a helper waiting on work of its own is not over: its interim notification ends no wait (TIC-126)', () => {
+  const lines = [human('accept the batch'), ...helper('toolu_V', 'ae1da76b'), says('The helper accepts the afisha.'), system(),
+    human(interim('toolu_V', 'ae1da76b')), says('The afisha check is not over: the helper waits for its run. Waiting for its report.'), system()];
+  assert.equal(ownWaitIn(lines)?.own, true, 'a Claude waiting for its helper\'s report is said to wait for you');
+  // a question of the person meanwhile does not end it either
+  assert.equal(ownWaitIn([...lines, human('are you on it?'), says('Yes, 4 of 5 are back.')])?.own, true);
+  // the report handed back is the end …
+  assert.equal(ownWaitIn([...lines, human(handBack('ae1da76b')), says('The last report is in.')])?.own, false, 'the report handed back did not end the helper');
+  // … and so is the notification that it finished
+  assert.equal(ownWaitIn([...lines, human(finished('ae1da76b')), says('Here is the summary.')])?.own, false, 'the helper that finished still holds Claude «at work»');
+  // the hand-back as the transcript writes it, quotes escaped in the JSON of the line
+  const raw = JSON.stringify({ type: 'queue-operation', operation: 'enqueue', timestamp: at(), content: handBack('ae1da76b') });
+  assert.equal(ownWaitIn([...lines, raw, says('The last report is in.')])?.own, false, 'the escaped quotes of the line hid the hand-back');
+});
+
+test('a helper started long before the end that was read still counts: the board reads further back (TIC-126)', async () => {
+  const sid = '22222222-2222-4333-8444-555555555555';
+  const dir = join(process.env.KB_CLAUDE_DIR, 'projects', '-Users-me-tickets');
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, `${sid}.jsonl`);
+  // the helper is started, then 300 KB of the turns of the other helpers — past the first tail the board reads
+  const padding = Array.from({ length: 60 }, (_, i) => [tool(`toolu_P${i}`, 'cat big.log'), result(`toolu_P${i}`, 'y'.repeat(5 * 1024))]).flat();
+  writeFileSync(file, `${[human('accept the batch'), ...helper('toolu_V2', 'ae1da76c'), says('Five helpers are at it.'), system(),
+    human('and?'), ...padding, says('Two of five are back.'), system(),
+    human(interim('toolu_V2', 'ae1da76c')), says('Waiting for the afisha report.'), system()].join('\n')}\n`);
+  const end = T0 + n * 1000;
+  assert.equal(await waitsOwnWork(sid, end + 60_000), true, 'a helper started before the tail read was forgotten');
+  // what the tail alone says: read further
+  const tail = (await import('../src/own-wait.js')).tailLines;
+  const { size } = (await import('node:fs')).statSync(file);
+  assert.equal(ownWaitIn(await tail(file, size, 256 * 1024), { whole: false }), null, 'a tail without the helper answered instead of reading further');
+  // a tail that already reaches two hours back answers as it is
+  const old = [JSON.stringify({ type: 'system', subtype: 'turn_duration', timestamp: new Date(T0 - OWN_WAIT_MAX_MS - 1000).toISOString() }),
+    human('go'), says('Started.'), human(note('toolu_none')), says('Done.')];
+  assert.equal(ownWaitIn(old, { whole: false })?.own, false);
+});
