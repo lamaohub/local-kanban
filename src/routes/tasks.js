@@ -351,7 +351,8 @@ export function moveTyped(t, sid) {
   if (isCheck(t) && openCheck(t.project_id, t.id)) return { prep: [], doing: [] };
   const before = resolveTask(String(t.id));
   const prep = moveFrom([t], ['backlog', 'todo'], 'prep', sid, null, 'typed');
-  const doing = moveFrom([t], ['review'], 'doing', sid, null, 'typed');
+  // again, as words to a report in Review were: left in Done, Claude worked unseen and its next report was a silent retry
+  const doing = moveFrom([t], isCheck(t) ? ['review', 'done'] : ['review'], 'doing', sid, null, 'typed');
   if (doing.length && sid) {
     const print = treePrint(worktreeOf(t.id)?.path || db.prepare('SELECT path FROM projects WHERE id = ?').get(t.project_id)?.path);
     holdTyped(t.id, { sid, event: lastEvent(t.id).id, at: Date.now(), seconds: before.work_seconds, truncated: before.work_truncated, print });
@@ -364,12 +365,13 @@ const pad2 = (n) => String(n).padStart(2, '0');
     is still there, or null. The way back follows the project's gate: with «ships on the word» doing → review is refused. */
 export function typedBackWarning(t, sid) {
   if (!sid || t?.status !== 'doing') return null;
-  const e = db.prepare('SELECT e.created_at, e.session_id, m.kind FROM task_events e LEFT JOIN typed_moves m ON m.event_id = e.id WHERE e.task_id = ? ORDER BY e.id DESC LIMIT 1').get(t.id);
+  const e = db.prepare('SELECT e.id, e.created_at, e.session_id, m.kind FROM task_events e LEFT JOIN typed_moves m ON m.event_id = e.id WHERE e.task_id = ? ORDER BY e.id DESC LIMIT 1').get(t.id);
   if (e?.kind !== 'typed' || e.session_id !== sid) return null;
   const at = new Date(String(e.created_at).replace(' ', 'T') + 'Z');
   const when = Number.isNaN(at.getTime()) ? '' : ` at ${pad2(at.getHours())}:${pad2(at.getMinutes())}`;
-  const again = gateOfProject(t.project_id) ? `kb mv ${t.key} ready` : `kb review ${t.key} "…"`;
-  return { key: t.key, text: `${t.key} is in doing — the person's words moved it back from review${when}; when the work on them is done, hand it in again: ${again}` };
+  const again = gateOfProject(t.project_id) && !isCheck(t) ? `kb mv ${t.key} ready` : `kb review ${t.key} "…"`;
+  const from = typedFrom(t.id, e.id) === 'done' ? 'done' : 'review';
+  return { key: t.key, text: `${t.key} is in doing — the person's words moved it back from ${from}${when}; when the work on them is done, hand it in again: ${again}` };
 }
 const typedWarned = (t, sid) => { const w = typedBackWarning(t, sid); return w ? { warning: w } : {}; };
 
@@ -414,6 +416,7 @@ let SETTLE_MS = 5 * 60 * 1000;
 /** Tests: how long typed words wait for the session's next task. */
 export function setSettleMs(ms) { SETTLE_MS = ms; }
 const lastEvent = (taskId) => db.prepare('SELECT id, created_at FROM task_events WHERE task_id = ? ORDER BY id DESC LIMIT 1').get(taskId);
+const typedFrom = (taskId, eventId) => db.prepare('SELECT status FROM task_events WHERE task_id = ? AND id < ? ORDER BY id DESC LIMIT 1').get(taskId, eventId)?.status;
 
 /** Whether task `id` is as move `e` of the words left it: no move since, and no comment, checklist or edit of session
     `sid` after it (task_sessions.last_seen, bindSession). */
@@ -477,7 +480,6 @@ bus.on('event', (ev) => { if (ev?.type === 'task.live') settleTurns(ev.data?.tas
 /** Send the tasks typed words moved back to Review: each with the time it had, unsigned (see above). */
 function undoTyped(back) {
   if (!back.length) return [];
-  const b = { status: 'review' };
   const moved = db.transaction(() => {
     const out = [];
     for (const m of back) {
@@ -485,6 +487,7 @@ function undoTyped(back) {
       if (!t || t.status !== 'doing') continue;
       const e = db.prepare('SELECT id, created_at FROM task_events WHERE id = ?').get(m.event);
       if (!e || !untouched(t.id, m.sid, e)) continue; // read again: an await may have let a move in
+      const b = { status: typedFrom(t.id, m.event) === 'done' ? 'done' : 'review' };
       const plan = planPatch(t, b, m.sid, { undone: true });
       if (plan.error) continue;
       commitPatch(t, b, plan, m.sid, null, null, 'settled');
@@ -494,11 +497,11 @@ function undoTyped(back) {
       // review: and so was the session's attention — signed, the words and their undoing held the focus on this task, and
       // the other one, taken to prep meanwhile as a batch, never got it: no «working» on its card or in Claude now
       db.prepare('UPDATE task_events SET session_id = NULL WHERE task_id = ? AND id >= ?').run(t.id, m.event);
-      out.push({ t, fresh: resolveTask(String(t.id)) });
+      out.push({ t, b, fresh: resolveTask(String(t.id)) });
     }
     return out;
   })();
-  for (const m of moved) afterPatch(m.t, b, m.fresh, { undo: true });
+  for (const m of moved) afterPatch(m.t, m.b, m.fresh, { undo: true });
   return moved.map((m) => m.t.key);
 }
 

@@ -8,6 +8,12 @@ version it goes out as and opens an empty one again. Released sections are histo
 
 ## [Unreleased]
 
+## [2.0.0-beta.19]
+
+### Changed
+
+- Words typed to the terminal of a check that its report already moved to Done take it back to In progress, as words to a task in Review do; its next report closes it again. Before, Claude worked on them unseen and the card stayed in Done.
+
 ## [2.0.0-beta.18]
 
 ### Fixed

@@ -129,3 +129,34 @@ test('kb review prints where the task is: done for a check the board closed', as
     assert.equal((await run()).stdout.trim(), 'SH-9 review 📝');
   } finally { server.close(); }
 });
+
+// it are work again — back to doing, as words to a report in Review were — and its next report closes it again. Left in
+// Done, Claude worked unseen and its report was a silent retry.
+test('words typed to a check closed on its report take it back to work; its next report closes it; words about another task leave it in Done', async () => {
+  const { moveTyped, typedBackWarning } = await import('../src/routes/tasks.js');
+  db.prepare("INSERT INTO projects (slug, prefix, name, next_task_no, path) VALUES ('lab','LB','Lab',1,?)").run(folder);
+  const S2 = 'bbbbbbbb-2222-4222-8222-222222222222';
+  const mk = async (title, labels = []) => (await inject('POST', '/api/tasks', { project: 'lab', title, status: 'todo', labels })).json();
+  const c = await mk('Check the lab', ['check']);
+  for (const s of ['prep', 'doing', 'review']) assert.equal((await patch(c.key, { status: s }, S2)).statusCode, 200);
+  const status = () => db.prepare('SELECT status FROM tasks WHERE id = ?').get(c.id).status;
+  assert.equal(status(), 'done');
+  assert.deepEqual(moveTyped({ ...c, labels: JSON.stringify(['check']) }, S2).doing, [c.key], 'words to a check in Done left it there');
+  assert.equal(status(), 'doing');
+  const w = typedBackWarning(db.prepare("SELECT t.*, p.prefix || '-' || t.task_no AS key FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ?").get(c.id), S2);
+  assert.match(w?.text || '', /moved it back from done/);
+  assert.match(w.text, new RegExp(`kb review ${c.key}`));
+  // its next report closes it again, as the first one did
+  const r = await patch(c.key, { status: 'review' }, S2);
+  assert.equal(r.json().status, 'done', 'the report after the words left the check in Review');
+  // words that were about another task: the session takes that one into work, and the check goes back to Done, not Review
+  assert.deepEqual(moveTyped({ ...c, labels: JSON.stringify(['check']) }, S2).doing, [c.key]);
+  const other = await mk('Another task');
+  assert.equal((await patch(other.key, { status: 'prep' }, S2)).statusCode, 200);
+  assert.equal(status(), 'done', 'undone words put the check into Review instead of back into Done');
+  // a task with no check label in Done is accepted work: words to its old terminal do not reopen it
+  const plain = await mk('Plain');
+  for (const s of ['prep', 'doing', 'review', 'done']) await patch(plain.key, { status: s }, s === 'done' ? null : S2);
+  assert.deepEqual(moveTyped({ ...plain, labels: '[]' }, S2).doing, []);
+  assert.equal(db.prepare('SELECT status FROM tasks WHERE id = ?').get(plain.id).status, 'done');
+});
