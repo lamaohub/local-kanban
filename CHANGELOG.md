@@ -8,6 +8,12 @@ version it goes out as and opens an empty one again. Released sections are histo
 
 ## [Unreleased]
 
+## [2.0.0-beta.20]
+
+### Changed
+
+- What comes into a chat of Claude now moves in smoothly instead of standing there at once: new words and steps rise into place, a step line or the line over the field that changes its words fades them in, the chat glides up instead of jumping, and the line of what Claude does comes and goes by its height. The head and task rows of a column in «Claude now → Terminals» fade a changed status in too. Nothing moves for one who asked for less motion.
+
 ## [2.0.0-beta.19]
 
 ### Changed

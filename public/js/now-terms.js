@@ -36,10 +36,30 @@ function setTasksClosed(on) {
   }
 }
 const SLIDE_MS = 200;
+const CHANGE_MS = 200;
+const CHANGE_EASE = 'cubic-bezier(.2, .8, .2, 1)';
+const moveless = (el) => !el?.animate || !el.getClientRects?.().length || Boolean(globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
+function fadeIn(el) {
+  if (!moveless(el)) el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: CHANGE_MS, easing: CHANGE_EASE });
+}
+/** Words put into `el` — they fade in when they replace other words, not when they are the same. */
+function putWords(el, text) {
+  if (!el || el.textContent === text) return;
+  const had = Boolean(el.textContent);
+  el.textContent = text;
+  if (had) fadeIn(el);
+}
 function putRows(list, rows, cur) {
   if (list.dataset.rows !== rows) {
+    const had = Boolean(list.dataset.rows);
+    const was = new Map([...(list.querySelectorAll?.('.now-row') || [])].map((r) => [r.dataset.key, r.querySelector('.now-sub')?.textContent || '']));
     list.dataset.rows = rows;
     list.innerHTML = cur ? rows.replace(`<div class="now-row" data-key="${cur}" `, `<div class="now-row now-row-cur" data-key="${cur}" `) : rows;
+    for (const row of had ? list.querySelectorAll?.('.now-row') || [] : []) {
+      if (!was.has(row.dataset.key)) { if (!moveless(row)) row.animate([{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'translateY(0)' }], { duration: CHANGE_MS + 60, easing: CHANGE_EASE }); continue; }
+      const sub = row.querySelector('.now-sub');
+      if (sub && sub.textContent !== was.get(row.dataset.key)) fadeIn(sub);
+    }
   }
   for (const row of list.querySelectorAll('.now-row')) row.classList.toggle('now-row-cur', row.dataset.key === cur);
 }
@@ -160,7 +180,7 @@ function paintTerm(c, r) {
   const gone = !r.session;
   const live = !gone && !r.dead;
   const lost = gone && Boolean(c.run?.ended?.lost);
-  st.textContent = lost ? tr('Session interrupted') : gone ? tr('Not running') : r.dead ? endedWords(r) : tr(TERM_ACTIVITY[r.activity] || 'Running');
+  putWords(st, lost ? tr('Session interrupted') : gone ? tr('Not running') : r.dead ? endedWords(r) : tr(TERM_ACTIVITY[r.activity] || 'Running'));
   // a terminal another board started: one line in place of the field, the keys, the ✕ and «Continue», as in the card
   const can = termControls(r);
   const go = c.el.querySelector('.now-col-resume');
@@ -466,7 +486,14 @@ export function syncColumns(box, runs, { head, tasks }) {
     if (board) hintColumn(c); // a status changed with the screen as it was (its looks come back «same»)
     c.el.classList.toggle('stale', Boolean(run.stale));
     const headEl = c.el.querySelector('.now-col-head');
-    headEl.innerHTML = head(run, { board });
+    const headHtml = head(run, { board });
+    if (headEl.dataset.html !== headHtml) {
+      // the head is `display: contents` — it has no box of its own: its parts whose words changed fade in
+      const had = headEl.dataset.html === undefined ? null : [...headEl.children].map((e) => e.textContent);
+      headEl.dataset.html = headHtml;
+      headEl.innerHTML = headHtml;
+      if (had) [...headEl.children].forEach((e, n) => { if (e.textContent !== had[n]) fadeIn(e); });
+    }
     // a narrow column hides the time and the count, and cuts the project: the whole line is in the tooltip
     c.el.querySelector('.now-col-who').title = [...headEl.children].map((e) => e.textContent.trim()).filter(Boolean).join(' · ');
     const list = c.el.querySelector('.now-col-tasks');

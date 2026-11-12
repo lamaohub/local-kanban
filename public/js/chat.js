@@ -15,6 +15,7 @@ import { intoField, leftoverWords } from './ask-rules.js';
 import { paceStep, paceWords, stalled } from './pace-rules.js';
 import { tokensPhrase } from './usage-rules.js';
 import { otherBoardLine } from './term-owner-rules.js';
+import { freshBlocks, glideBy, liveChanged } from './chat-motion-rules.js';
 
 const TURNS_STEP = 15;
 const STEP_KIND = {
@@ -414,6 +415,12 @@ function tickRuns() {
 }
 
 const UNFOLD_MS = 180;
+const EASE = 'cubic-bezier(.2, .8, .2, 1)';
+const RISE_MS = 260;
+const FADE_MS = 200;
+const GLIDE_MS = 240;
+const RISE_IN = [{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'translateY(0)' }];
+const FADE_IN = [{ opacity: 0 }, { opacity: 1 }];
 export function unfold(el, open, ms = UNFOLD_MS) {
   if (!el?.animate || globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return null;
   const h = `${el.scrollHeight}px`;
@@ -591,9 +598,69 @@ export function mountChat(box, { key = null, session = null, scroller = null, fu
     c.paceMark = paceStep(c.paceMark, JSON.stringify([d.session, d.pace, d.turns?.at(-1)?.items.length]), at);
     return liveHTML(d, stalled(d.pace, stepInHand(d), c.paceMark, at) ? c.paceMark.at : 0);
   }
+  const noMotion = () => typeof Element !== 'function' || !(log instanceof Element) || !log.getClientRects().length
+    || Boolean(globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
+  const bubbleWords = (el) => { const t = el?.querySelector('.chat-bubble')?.firstChild; return t?.nodeType === 3 ? t.data : ''; };
+  const blocksOf = () => [...log.querySelectorAll(':scope > .chat-turn[data-at]')].map((t) => ({
+    at: t.dataset.at,
+    blocks: [...t.children].map((el) => ({ el, kind: el.classList[0] || '', label: el.querySelector('.chat-run-t, .chat-done-t')?.textContent || '',
+      words: el.classList.contains('chat-user') ? bubbleWords(el) : '' })),
+  }));
+  const queueIds = () => [...queueEl.querySelectorAll('[data-q]')].map((b) => b.dataset.q);
+  /** What the chat shows before a repaint — null when nothing is to move after it. */
+  function noteShown() {
+    if (noMotion()) return null;
+    const turns = blocksOf();
+    if (!turns.length) return null; // «Loading…» or no messages yet: the first turns just show, the chat does not glide
+    const frame = sc.getBoundingClientRect();
+    return {
+      turns, top: sc.scrollTop, queue: queueIds(),
+      sent: [...log.querySelectorAll(':scope > .chat-sending:not(.chat-queued)')].map(bubbleWords),
+      flush: log.getBoundingClientRect().top <= frame.top + 1, // nothing over the chat in sight moves without it (the card's head)
+    };
+  }
+  function settle(was, atEnd) {
+    const now = blocksOf();
+    for (const m of freshBlocks(was.turns, now, was.sent)) {
+      const el = now[m.turn].blocks[m.block].el;
+      if (m.how === 'label') el.querySelector('.chat-run-t, .chat-done-t')?.animate(FADE_IN, { duration: FADE_MS, easing: EASE });
+      else el.animate(m.how === 'rise' ? RISE_IN : FADE_IN, { duration: m.how === 'rise' ? RISE_MS : FADE_MS, easing: EASE });
+    }
+    // added to what moves already (the bubble «sending…» rises by its own animation)
+    const d = atEnd && was.flush ? glideBy(was.top, sc.scrollTop, sc.clientHeight) : 0;
+    if (d) for (const el of log.children) el.animate([{ transform: `translateY(${d}px)` }, { transform: 'translateY(0)' }], { duration: GLIDE_MS, easing: EASE, composite: 'add' });
+    const had = new Set(was.queue);
+    const rows = [...queueEl.querySelectorAll('.chat-q-row')].filter((r) => !had.has(r.querySelector('[data-q]')?.dataset.q));
+    if (rows.length && !had.size) unfold(queueEl, true, RISE_MS); else for (const r of rows) r.animate(RISE_IN, { duration: RISE_MS, easing: EASE });
+  }
+  const liveParts = () => ({ words: liveEl.querySelector('.chat-working-t')?.textContent || '', now: liveEl.querySelector('.chat-working-now')?.textContent || '' });
+  const liveRows = () => [...liveEl.querySelectorAll('.chat-going .chat-step')].map((r) => r.title);
+  function liveGone() {
+    liveEl.innerHTML = '';
+    liveEl.style.overflow = '';
+    c.liveOut = null;
+  }
+  function drawLive(lit) {
+    const before = liveEl.dataset.html && !noMotion() ? { parts: liveParts(), rows: new Set(liveRows()) } : null;
+    const was = Boolean(liveEl.dataset.html);
+    liveEl.dataset.html = lit;
+    if (c.liveOut) { const a = c.liveOut; c.liveOut = null; a.cancel(); liveEl.style.overflow = ''; }
+    if (!lit) {
+      const going = was && !noMotion() && unfold(liveEl, false, FADE_MS);
+      if (!going) { liveGone(); return; }
+      c.liveOut = going;
+      going.finished.then(() => { if (c.liveOut === going) { liveGone(); going.cancel(); } }, () => {});
+      return;
+    }
+    liveEl.innerHTML = lit;
+    if (!was) { if (!noMotion()) unfold(liveEl, true, RISE_MS); return; }
+    if (!before) return;
+    for (const k of liveChanged(before.parts, liveParts())) liveEl.querySelector(k === 'words' ? '.chat-working-t' : '.chat-working-now')?.animate(FADE_IN, { duration: FADE_MS, easing: EASE });
+    for (const r of liveEl.querySelectorAll('.chat-going .chat-step')) if (!before.rows.has(r.title)) r.animate(RISE_IN, { duration: RISE_MS, easing: EASE });
+  }
   function showLive(lit, d) {
-    // drawn only when it changed: the pulse would start anew on every look, five seconds apart
-    if (liveEl.dataset.html !== lit) { liveEl.dataset.html = lit; liveEl.innerHTML = lit; }
+    if (liveEl.dataset.html !== lit) drawLive(lit);
+    if (c.liveOut) return; // going: what it says no longer counts
     const count = liveEl.querySelector?.('.chat-working-n');
     if (!count) return;
     // a count that stopped says nothing new, and a narrow column has no room for it beside the words of a silent Claude
@@ -610,9 +677,12 @@ export function mountChat(box, { key = null, session = null, scroller = null, fu
       for (const el of [top, note, form, ask]) el.classList.add('hidden');
       dropAsk();
       queueEl.innerHTML = '';
-      liveEl.innerHTML = liveEl.dataset.html = '';
+      c.liveOut?.cancel();
+      liveGone();
+      liveEl.dataset.html = '';
       return;
     }
+    const shown = c.shown && c.session === d.session && !c.keep && !c.follow && !c.earlier ? noteShown() : null;
     c.session = d.session;
     // a task Claude worked on in several sessions: which one the chat shows
     const newest = [...(d.sessions || [])].sort((a, b) => String(b.last_seen).localeCompare(String(a.last_seen)))[0]?.session_id;
@@ -737,6 +807,7 @@ export function mountChat(box, { key = null, session = null, scroller = null, fu
     c.earlier = false;
     c.follow = false;
     c.atEnd = gapToEnd() < END_GAP; // a fold opened at the end leaves the reader above it, not held to the end
+    if (shown) settle(shown, atEnd);
   }
 
   function reveal(head, body, opening) {
