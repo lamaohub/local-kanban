@@ -117,6 +117,8 @@ export function ownWaitIn(lines, { whole = true } = {}) {
         if (service) continue;
         launched.set(b.id, { at: i, task: null });
       } else if (d.type === 'user' && b?.type === 'tool_result' && launched.has(b.tool_use_id)) {
+        // refused (a permission denied, a bad input): it never ran — counted, it held Claude «at work» for two hours
+        if (b.is_error === true) { launched.delete(b.tool_use_id); continue; }
         const text = typeof b.content === 'string' ? b.content : JSON.stringify(b.content ?? '');
         launched.get(b.tool_use_id).task = wentBackground(d, b) || /with ID: (\w+)/.exec(text)?.[1] || null;
       } else if (d.type === 'user' && b?.type === 'tool_result' && steps.has(b.tool_use_id)) {
@@ -130,7 +132,8 @@ export function ownWaitIn(lines, { whole = true } = {}) {
   // it stopped, not for one started after it
   const running = [...launched].filter(([id, { at, task }]) => !(task && stopped.get(task) > at)
     && !parsed.slice(at + 1).some((p) => endsIn(p.raw, id, task)));
-  if (!running.length) return deeper && !whole && !reachesBack(parsed) ? null : { own: false };
+  const cut = deeper || (first === 0 && !woken(parsed[from].d));
+  if (!running.length) return cut && !whole && !reachesBack(parsed) ? null : { own: false };
   return { own: true, at: turnEnd(Math.max(...running.map(([, l]) => l.at))) };
 }
 

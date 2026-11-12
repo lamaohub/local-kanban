@@ -319,6 +319,52 @@ test('straight through: the next batch starts once this one is handed in, the on
   assert.equal(epics.throughEpicKey([(await card(k[0])).id]), null);
 });
 
+// each other for good — each counted the other as running — and the next batch never started
+test('straight through: two batches handed in side by side hand on to the next one; the board itself never starts one next to a batch in work', async () => {
+  const G = await add('Fourth epic');
+  const k = [];
+  for (const [title, batch] of [['a', 'One'], ['b', 'Two'], ['c', 'Three'], ['d', 'Four']]) {
+    k.push((await kb(['add', 'demo', title, '-s', 'todo', '--epic', G, '--batch', batch])).stdout.split(' ')[0]);
+  }
+  await req('PATCH', `/api/tasks/${G}/epic`, { portion: 3, through: true });
+  kvSet('automations.on', '1');
+  const calls = [];
+  const fake = { inject: async ({ payload }) => { calls.push(payload); for (const key of payload.keys) await status(key, 'prep'); return { statusCode: 200, json: () => ({ ok: true }) }; } };
+  const epic = { id: (await card(G)).id, key: G };
+  const [one, two, three, four] = (await view(G)).batches.map((b) => b.id);
+  const words = { run: 'r', doTask: 'd', epic: 'e', through: 't' };
+  assert.equal((await run.runBatch(fake, epic, one, { words })).code, 200);
+  assert.equal((await run.runBatch(fake, epic, two, { words, force: true })).code, 200);
+  // one handed in, the other still in work: the board starts nothing next to a batch in work
+  await status(k[0], 'doing'); await status(k[0], 'review');
+  await run.tickEpics(fake);
+  assert.equal(calls.length, 2, 'the board started a batch next to one in work');
+  await status(k[1], 'doing'); await status(k[1], 'ready');
+  await run.tickEpics(fake);
+  assert.deepEqual(calls.at(-1).keys, [k[2]], 'two batches handed in side by side waited for each other');
+  let runs = epics.epicSettings(epic.id).run;
+  assert.equal(runs[three].state, 'running');
+  assert.equal(calls.length, 3, 'one hand-over started two batches');
+  // the other one handed in stays with the person while the next is in work, and hands on once that one is handed in
+  await run.tickEpics(fake);
+  assert.equal(calls.length, 3);
+  await status(k[2], 'doing'); await status(k[2], 'review');
+  await run.tickEpics(fake);
+  assert.deepEqual(calls.at(-1).keys, [k[3]]);
+  runs = epics.epicSettings(epic.id).run;
+  assert.equal(runs[four].state, 'running');
+  assert.equal(calls.length, 4);
+  // a batch accepted in part is not accepted
+  assert.equal(epics.batchClosed(['done', 'review']), false);
+  assert.equal(epics.batchClosed(['cancelled', 'todo']), false);
+  // kb: a batch needs its epic and an epic its batch
+  for (const args of [['add', 'demo', 'x', '--batch', 'One'], ['add', 'demo', 'x', '--epic', G]]) {
+    const r = await kb(args);
+    assert.notEqual(r.code, 0, args.join(' '));
+    assert.match(r.stderr, /both together/);
+  }
+});
+
 test('a start refused is said on the batch and not repeated every tick; nothing to start is a refusal of its own', async () => {
   const G = await add('Third epic');
   const x = (await kb(['add', 'demo', 'x', '-s', 'todo', '--epic', G, '--batch', '1st'])).stdout.split(' ')[0];

@@ -178,3 +178,39 @@ test('a helper started long before the end that was read still counts: the board
     human('go'), says('Started.'), human(note('toolu_none')), says('Done.')];
   assert.equal(ownWaitIn(old, { whole: false })?.own, false);
 });
+
+// chain of their turns reached the first line read, and the helper before it went unseen
+test('a helper started long before, then only the person asks: the board reads further back too', async () => {
+  const sid = '33333333-2222-4333-8444-555555555555';
+  const dir = join(process.env.KB_CLAUDE_DIR, 'projects', '-Users-me-tickets');
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, `${sid}.jsonl`);
+  const padding = Array.from({ length: 60 }, (_, i) => [tool(`toolu_Q${i}`, 'cat big.log'), result(`toolu_Q${i}`, 'z'.repeat(5 * 1024))]).flat();
+  writeFileSync(file, `${[human('accept the batch'), ...helper('toolu_V3', 'ae1da76d'), says('The helper is at it.'), system(),
+    human('and?'), ...padding, says('Still waiting for the helper.'), system(),
+    human('how long?'), says('A few minutes more.'), system()].join('\n')}\n`);
+  const end = T0 + n * 1000;
+  assert.equal(await waitsOwnWork(sid, end + 60_000), true, 'a helper started before the tail read was forgotten when only the person asked');
+  const tail = (await import('../src/own-wait.js')).tailLines;
+  const { size } = (await import('node:fs')).statSync(file);
+  assert.equal(ownWaitIn(await tail(file, size, 256 * 1024), { whole: false }), null, 'a chain of the person\'s turns cut by the tail answered instead of reading further');
+  // the helper ends: read whole, Claude waits for the person
+  appendFileSync(file, `${human(finished('ae1da76d'))}\n${says('Here is the report.')}\n`);
+  assert.equal(await waitsOwnWork(sid, end + 60_000), false);
+  // the same chain read whole answers at once; a part of it — only when it reaches two hours back
+  const chat = [human('hi'), says('Hello.'), human('and?'), says('Nothing runs.')];
+  assert.equal(ownWaitIn(chat)?.own, false);
+  assert.equal(ownWaitIn(chat, { whole: false }), null);
+  const long = [JSON.stringify({ type: 'system', subtype: 'turn_duration', timestamp: new Date(T0 - OWN_WAIT_MAX_MS - 1000).toISOString() }), ...chat];
+  assert.equal(ownWaitIn(long, { whole: false })?.own, false);
+});
+
+// permission check — it never ran, and the Claude explaining that to the person read as at work for two hours
+test('background work refused before it ran is not waited for', () => {
+  const refused = JSON.stringify({ type: 'user', timestamp: at(), toolUseResult: 'Error: Permission for this action was denied', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_D', is_error: true, content: 'Permission for this action was denied by the Claude Code auto mode classifier.' }] } });
+  const lines = [human('ship it'), bg('toolu_D', 'sh deploy.sh 2>&1 | tail -25'), refused, says('The safety check stopped the deploy: run it yourself.'), system()];
+  assert.equal(ownWaitIn(lines)?.own, false, 'a refused deploy held Claude «at work in the background»');
+  assert.equal(ownWaitIn(lines.map((l) => l.replace('"is_error":true,', '')))?.own, true, 'a launch that ran was dropped');
+  const agent = JSON.stringify({ type: 'user', timestamp: at(), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_E', is_error: true, content: 'Agent type not found' }] } });
+  assert.equal(ownWaitIn([human('go'), bg('toolu_E', 'review', 'Agent'), agent, says('Could not start the helper.')])?.own, false);
+});

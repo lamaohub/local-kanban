@@ -77,13 +77,14 @@ const announce = (epicId) => {
   const key = db.prepare("SELECT (p.prefix || '-' || t.task_no) AS key FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ?").get(epicId)?.key;
   if (key) emit('task.epic', { id: epicId, key });
 };
-/** The other batch of the epic the board is running now, or null. */
-export function runningBatch(epicId, exceptId) {
+export function runningBatch(epicId, exceptId, through = false) {
   const { run } = epicSettings(epicId);
   const batches = batchesOf(epicId);
   for (const [id, r] of Object.entries(run)) {
     const b = batches.find((x) => x.id === Number(id));
-    if (Number(id) !== exceptId && b && !b.closed && LEADING.has(r.state)) return b;
+    if (Number(id) === exceptId || !b || b.closed || !LEADING.has(r.state)) continue;
+    if (through && r.state !== 'starting' && handedIn(b)) continue;
+    return b;
   }
   return null;
 }
@@ -175,7 +176,7 @@ export async function tickEpics(app, now = Date.now()) {
       const j = batchJudge(batch, r, s.portion);
       if (j.phase === 'working') continue;
       if (j.phase === 'accepting') {
-        const next = s.through && handedIn(batch) && automationsOn() && !runningBatch(epic.id, id) ? nextBatch(batches, id, s.portion, s.run) : null;
+        const next = s.through && handedIn(batch) && automationsOn() && !runningBatch(epic.id, id, true) ? nextBatch(batches, id, s.portion, s.run) : null;
         if (next && limitHigh(now)) { if (r.hold !== 'limit-high') save({ ...r, hold: 'limit-high' }); continue; }
         if (next) { save({ ...r, state: 'passed', hold: undefined, at: now }); await startPortion(app, epic, next, nextPortion(next, s.portion)); continue; }
         if (r.state !== 'accepting' || r.hold) save({ ...r, state: 'accepting', hold: undefined });
@@ -188,7 +189,7 @@ export async function tickEpics(app, now = Date.now()) {
       }
       // closed: the person accepted every task of it. The next batch, if it is owed and the limit holds it, keeps this one
       // waiting (`hold`) — marked done, the start would be forgotten
-      const next = (s.auto_next || s.through) && automationsOn() && !runningBatch(epic.id, id) ? nextBatch(batches, id, s.portion, s.run) : null;
+      const next = (s.auto_next || s.through) && automationsOn() && !runningBatch(epic.id, id, s.through) ? nextBatch(batches, id, s.portion, s.run) : null;
       if (next && limitHigh(now)) { if (r.hold !== 'limit-high') save({ ...r, hold: 'limit-high' }); continue; }
       save({ ...r, state: 'done', hold: undefined, at: now });
       if (next) await startPortion(app, epic, next, nextPortion(next, s.portion));

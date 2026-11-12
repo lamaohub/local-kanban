@@ -2,13 +2,14 @@
 // «Claude done». It is no task in work all the same: the count of the sidebar does not take it.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
 
 const SR = '55555555-5555-4555-8555-555555555555'; // a run that handed its tasks in to Ready to ship, its Claude gone since
-let app, tmp, claude, now;
+const BG = '66666666-6666-4666-8666-666666666666'; // the board's Claude at its prompt with a shell left in the background
+let app, tmp, claude, now, db, live;
 
 before(async () => {
   tmp = mkdtempSync(join(tmpdir(), 'kb-test-'));
@@ -16,13 +17,14 @@ before(async () => {
   process.env.KB_DATA_DIR = tmp;
   process.env.KB_CLAUDE_DIR = claude;
   mkdirSync(join(claude, 'sessions'), { recursive: true });
-  const { db } = await import('../src/db.js');
+  ({ db } = await import('../src/db.js'));
   const { ghState } = await import('../src/sync/worker.js');
   ghState.available = false; ghState.lastCheck = Date.now() + 1e9;
   now = await import('../src/claude-now.js');
-  db.prepare("INSERT INTO projects (slug, prefix, name, next_task_no) VALUES ('tix','TX','Tickets',4)").run();
+  live = await import('../src/claude-live.js');
+  db.prepare("INSERT INTO projects (slug, prefix, name, next_task_no) VALUES ('tix','TX','Tickets',5)").run();
   const pid = db.prepare("SELECT id FROM projects WHERE slug = 'tix'").get().id;
-  for (const no of [1, 2, 3]) db.prepare("INSERT INTO tasks (project_id, task_no, title, status) VALUES (?,?,?,'todo')").run(pid, no, `Task ${no}`);
+  for (const no of [1, 2, 3, 4]) db.prepare("INSERT INTO tasks (project_id, task_no, title, status) VALUES (?,?,?,'todo')").run(pid, no, `Task ${no}`);
   app = Fastify();
   await app.register((await import('../src/routes/tasks.js')).default);
   await app.ready();
@@ -61,4 +63,21 @@ test('shipped and handed in to Review, the run is done: it leaves «Claude now»
   const done = now.doneRuns().runs.find((r) => r.session === SR);
   assert.ok(done, 'the finished run is not in «Claude done»');
   assert.equal(done.tasks_n, 3);
+});
+
+// in the background and its task in Ready to ship waits for the person, as with a task in work — not «at work in the
+// background» in «Claude now» while its card says «waits for you»
+test('a run held by Ready to ship with only a leftover shell waits for the person, in «Claude now» as on its card', async () => {
+  for (const st of ['prep', 'doing', 'ready']) {
+    const r = await app.inject({ method: 'PATCH', url: '/api/tasks/TX-4', headers: { 'x-claude-session': BG }, payload: { status: st } });
+    assert.equal(r.statusCode, 200, r.body);
+  }
+  db.prepare('INSERT INTO board_sessions (session_id) VALUES (?)').run(BG);
+  writeFileSync(join(claude, 'sessions', `${process.pid}.json`), JSON.stringify({ pid: process.pid, sessionId: BG, status: 'idle', statusUpdatedAt: Date.now() }));
+  const alive = (p) => p === process.pid;
+  await live.refreshLive(alive, async () => ({ live: [BG], questions: [], background: [BG], limited: [] }));
+  const run = (await now.nowRuns(alive, undefined, async () => false)).runs.find((r) => r.session === BG);
+  assert.deepEqual([run?.claude, run?.background], ['idle', true], 'a run held by Ready to ship reads as at work in the background');
+  const card = live.currentLive().find((t) => t.key === 'TX-4');
+  assert.deepEqual([card?.claude, card?.background], ['idle', true]);
 });

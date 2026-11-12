@@ -8,6 +8,14 @@ version it goes out as and opens an empty one again. Released sections are histo
 
 ## [Unreleased]
 
+## [2.0.0-beta.18]
+
+### Fixed
+
+- An epic running straight through no longer stalls when two of its batches were started side by side by hand: once both were handed in, each waited for the other and the next batch never started.
+- A card no longer says «waits for you» while Claude waits for a helper started long ago and the person has only asked it questions since; a background command refused by the permission check is no longer taken for work still running.
+- The chat of a busy Claude now rests after a slow answer too: its own look again while it is lit, and the end of the rest, used to ask the board at once, so with answers of several seconds it asked one look after another.
+
 ## [2.0.0-beta.17]
 
 ### Added

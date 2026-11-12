@@ -663,7 +663,7 @@ export function mountChat(box, { key = null, session = null, scroller = null, fu
     if (!runClock && log.querySelector('.chat-run-time')) runClock = setInterval(tickRuns, 1000);
     // stopped (Esc) or ended its turn rings no event once its last line is written: the light stayed on for good
     clearTimeout(c.helperTimer);
-    if (lit) c.helperTimer = setTimeout(refresh, LIT_LOOK_MS);
+    if (lit) c.helperTimer = setTimeout(() => c.refreshLive(), LIT_LOOK_MS);
     if (d.session && !d.away && d.turns.length) {
       log.querySelectorAll('[data-code]').forEach((b) => { b.onclick = (e) => { e.preventDefault(); codeAction(c, b); }; }); // a command inside a link: Copy does not follow it
       log.querySelectorAll('[data-shot]').forEach((b) => { b.onclick = () => openLightbox(b.dataset.shot); });
@@ -975,7 +975,7 @@ export function mountChat(box, { key = null, session = null, scroller = null, fu
         clearTimeout(c.awayTimer);
         c.awayTimer = setTimeout(() => { c.v = null; refresh(); }, AWAY_LOOK_MS);
       }
-      if (key === c.key && mounted.has(c) && c.data && workingLine(c.data)) { clearTimeout(c.helperTimer); c.helperTimer = setTimeout(refresh, LIT_LOOK_MS); }
+      if (key === c.key && mounted.has(c) && c.data && workingLine(c.data)) { clearTimeout(c.helperTimer); c.helperTimer = setTimeout(() => c.refreshLive(), LIT_LOOK_MS); }
       return;
     }
     if (key !== c.key || !mounted.has(c)) return; // another task meanwhile, or gone
@@ -983,7 +983,7 @@ export function mountChat(box, { key = null, session = null, scroller = null, fu
     if (r.same) {
       c.data.pace = r.pace;
       showLive(liveNow(c.data), c.data);
-      if (workingLine(c.data)) { clearTimeout(c.helperTimer); c.helperTimer = setTimeout(refresh, LIT_LOOK_MS); }
+      if (workingLine(c.data)) { clearTimeout(c.helperTimer); c.helperTimer = setTimeout(() => c.refreshLive(), LIT_LOOK_MS); }
       return;
     }
     c.v = r.v || null;
@@ -1006,7 +1006,7 @@ export function mountChat(box, { key = null, session = null, scroller = null, fu
     if (c.flight) { c.liveAfter = true; return; } // after this answer, and after its rest if it was slow
     const wait = (c.restUntil || 0) - Date.now();
     if (wait <= 0) { refresh(); return; }
-    if (!c.restTimer) c.restTimer = setTimeout(() => { c.restTimer = null; refresh(); }, wait);
+    if (!c.restTimer) c.restTimer = setTimeout(() => { c.restTimer = null; c.refreshLive(); }, wait);
   };
   c.paintAsk = paintAsk;
 

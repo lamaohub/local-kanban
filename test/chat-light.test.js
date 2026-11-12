@@ -184,3 +184,50 @@ test('after a slow answer the stream of events asks the chat again only after a 
   await settle();
   assert.equal(page.asked, 5, 'what the person does waited out the rest');
 });
+
+// it, and the end of the rest, with a look in flight, turned into a look the moment the slow answer came
+test('a lit chat waits out the rest too: its own look again, a rest ending mid-flight, a quick answer ending the rest', async () => {
+  let took = 4000;
+  let clock = 2_000_000;
+  class Clock extends Date { static now() { return clock; } }
+  const timed = async (f, done) => { try { return await f(); } finally { done(took); } };
+  let hold = null; // a look kept in flight until released
+  const { page, chat } = chatOn(async (n) => {
+    if (hold) await hold.promise;
+    return answer({ turns: turns(3), working: true, send: true, state: 'busy', v: `v${n}` });
+  }, { Date: Clock, timed });
+  await settle();
+  assert.equal(page.asked, 1);
+  // the lit chat's own look again, 5 s on, falls inside the 8 s rest of a 4 s answer
+  const lit = page.timers.filter((t) => t.ms === 5000);
+  assert.ok(lit.length, 'the lit chat is not asked again');
+  page.timers.length = 0;
+  clock += 5000;
+  lit.at(-1).fn();
+  await settle();
+  assert.equal(page.asked, 1, 'the lit chat\'s own look went past the rest of a slow answer');
+  const rest = page.timers.filter((t) => t.ms === 3000);
+  assert.equal(rest.length, 1, 'the look again was not put after the rest');
+  // the person asks meanwhile (at once), and that look is still in flight when the rest ends
+  let release;
+  hold = { promise: new Promise((r) => { release = r; }) };
+  chat.refresh();
+  await settle();
+  assert.equal(page.asked, 2, 'what the person does waited out the rest');
+  clock += 3000;
+  rest[0].fn();
+  await settle();
+  assert.equal(page.asked, 2);
+  hold = null;
+  release();
+  await settle(); await settle();
+  assert.equal(page.asked, 2, 'the rest that ended mid-flight asked again the moment the slow answer came');
+  // after a quick answer the rest is over: an event asks at once
+  took = 100;
+  chat.refresh();
+  await settle(); await settle();
+  const asked = page.asked;
+  chat.refreshLive();
+  await settle();
+  assert.equal(page.asked, asked + 1, 'a quick answer left the rest of the slow one in force');
+});

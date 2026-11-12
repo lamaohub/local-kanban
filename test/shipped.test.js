@@ -477,6 +477,21 @@ test('a task branch is asked again only when main or the branch moved', async ()
   git('branch', '-D', 'claude/DM-40');
 });
 
+// green — a task brought to main while its branch stands (cherry-pick, a merge) said «branch» for good
+test('main moved, the branch standing: the task brought to main is on main', async () => {
+  task(43);
+  git('checkout', '-q', '-b', 'claude/DM-43');
+  commit('DM-43 work on its branch', 'dm-43-file');
+  git('checkout', '-q', 'main');
+  assert.equal((await traced('/api/shipped?project=demo')).tasks['DM-43'], 'branch');
+  const tip = git('rev-parse', 'claude/DM-43');
+  git('cherry-pick', 'claude/DM-43');
+  assert.equal(git('rev-parse', 'claude/DM-43'), tip, 'the branch moved');
+  const moved = await traced('/api/shipped?project=demo', { lines: false });
+  assert.equal(moved.tasks['DM-43'], 'main', 'an answer kept from before main moved, the branch standing');
+  git('branch', '-D', 'claude/DM-43');
+});
+
 test('a branch with no commit of its own is answered without git cherry', async () => {
   task(41);
   git('branch', 'claude/DM-41');

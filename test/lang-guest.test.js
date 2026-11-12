@@ -55,3 +55,23 @@ test('the page sends its language on start as a start, and Settings without it',
   assert.doesNotMatch(read('js/init.js'), /\nsyncLangToServer\(\);/);
   assert.match(read('js/settings.js'), /smoothReload\(syncLangToServer\(v\)\)/);
 });
+
+// every page switches the board again) or one there by default (Settings and the wizard switch nothing) stayed green.
+// The very function of settings.js runs here with a stand-in `api` and says what goes in the body.
+test('the body the page sends: start only on start', async () => {
+  const vm = await import('node:vm');
+  const src = readFileSync(new URL('../public/js/settings.js', import.meta.url), 'utf8');
+  const fn = /export function syncLangToServer\([^]*?\n\}/.exec(src)?.[0];
+  assert.ok(fn, 'syncLangToServer is not in settings.js');
+  const sent = [];
+  const ctx = { LANG: 'en', api: (method, url, body) => { sent.push([method, url, body]); return Promise.resolve(); } };
+  vm.runInNewContext(`${fn.replace(/^export /, '')}\nthis.f = syncLangToServer;`, ctx);
+  await ctx.f(undefined, { start: true });
+  await ctx.f('ru');
+  await ctx.f();
+  assert.deepEqual(JSON.parse(JSON.stringify(sent)), [ // objects of the vm's own realm
+    ['POST', '/api/lang', { lang: 'en', start: true }],
+    ['POST', '/api/lang', { lang: 'ru' }],
+    ['POST', '/api/lang', { lang: 'en' }],
+  ]);
+});
