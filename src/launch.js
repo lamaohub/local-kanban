@@ -88,13 +88,22 @@ export const EFFORT_VAR = 'CLAUDE_CODE_EFFORT_LEVEL';
 /** Check an effort level of a start; the error text for a 400, or null. */
 export const effortProblem = (effort) => (effort !== undefined && !EFFORT_LEVELS.includes(effort) ? `effort: one of ${EFFORT_LEVELS.join(', ')}` : null);
 
+/* The prompt is the last word of Claude Code's command line, and a prompt starting with "-" was read as an option of
+   its own: "- fix the test" ended in «unknown option», and a prompt that IS an option (`--dangerously-skip-permissions`)
+   would have turned it on. Claude Code's parser (commander) takes everything after "--" as arguments — so the prompt goes
+   after one. Some flags Claude Code also looks for in its raw argv, past the "--" (a whole word, or its start, as
+   `--resume=`), so a prompt starting with "-" gets one space in front: no option starts with a space. */
+/** The prompt as the last words of a start of Claude: ['--', <the text>]. */
+export const promptArgs = (text) => ['--', String(text).startsWith('-') ? ` ${text}` : String(text)];
+
 export function terminalCommand({ text, resume, folder, session, url, effort, bin = 'claude', settings = null, model = null }) {
   const cd = folder ? `cd ${shellQuote(folder)} && ` : '';
   const level = EFFORT_LEVELS.includes(effort) ? `${EFFORT_VAR}=${effort} ` : '';
   const env = `${url ? `KB_URL=${shellQuote(url)} ` : ''}env -u CLAUDE_CODE_SIMPLE ${level}`;
   const prof = `${settings ? `--settings ${shellQuote(settings)} ` : ''}${model ? `--model ${shellQuote(model)} ` : ''}`;
   if (resume) return `${cd}${env}${bin} ${prof}--resume ${shellQuote(resume)}`;
-  return `${cd}${env}${bin} ${prof}${session ? `--session-id ${shellQuote(session)} ` : ''}${shellQuote(text)}`;
+  const [end, prompt] = promptArgs(text);
+  return `${cd}${env}${bin} ${prof}${session ? `--session-id ${shellQuote(session)} ` : ''}${end} ${shellQuote(prompt)}`;
 }
 
 /** What to run for a launch: `{cmd, args}` — never a shell line put together from the request. */

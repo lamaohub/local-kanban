@@ -30,6 +30,23 @@ test('bin() gives the full path, found once for a PATH, and a miss is not kept',
   assert.equal(bin('kb-probe-tool'), join(other, 'kb-probe-tool'), 'the PATH is not in the key: the stand-in first in PATH is not the one started');
 });
 
+test('a system program a short PATH leaves out is found in the folders named after PATH; PATH still comes first', (t) => {
+  // lsof is in /usr/sbin, which the PATH of a service or a sandbox may lack: the stands then read «unknown» for ever
+  const was = process.env.PATH;
+  const dir = mkdtempSync(join(tmpdir(), 'kb-bin-'));
+  t.after(() => { process.env.PATH = was; rmSync(dir, { recursive: true, force: true }); });
+  const sys = join(dir, 'sbin');
+  const first = join(dir, 'first');
+  mkdirSync(sys); mkdirSync(first);
+  writeFileSync(join(sys, 'kb-sys-tool'), '#!/bin/sh\n', { mode: 0o755 });
+  process.env.PATH = '/usr/bin:/bin';
+  assert.equal(bin('kb-sys-tool'), 'kb-sys-tool');
+  assert.equal(bin('kb-sys-tool', [sys]), join(sys, 'kb-sys-tool'), 'a folder named after PATH is not looked in');
+  writeFileSync(join(first, 'kb-sys-tool'), '#!/bin/sh\n', { mode: 0o755 });
+  process.env.PATH = `${first}:/usr/bin:/bin`;
+  assert.equal(bin('kb-sys-tool', [sys]), join(first, 'kb-sys-tool'), 'a stand-in first in PATH lost to the system folder');
+});
+
 const CP_MOD = String.raw`['"\`](?:node:)?child_process['"\`]`;
 const FNS = ['exec', 'execSync', 'execFile', 'execFileSync', 'spawn', 'spawnSync'];
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

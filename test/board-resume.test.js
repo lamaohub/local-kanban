@@ -299,3 +299,32 @@ test('the chat of an older session offers no «Continue» while a newer Claude o
   const chat = (await app.inject({ method: 'GET', url: `/api/tasks/RES-9/chat?session=${old}` })).json();
   assert.equal(chat.ended, undefined, 'the chat offered a second Claude on a task a live one works on');
 });
+
+// The board's Stop is the person's word: the automation that goes on with cut work read the session it closed as one a
+// restart had cut, and brought it back a minute later. The Stop is kept; the person's own Continue lifts it.
+test('the board\'s Stop keeps the session from the automation until the person\'s own Continue', { skip }, async () => {
+  const resume = await import('../src/auto-resume.js');
+  const pid = db.prepare("SELECT id FROM projects WHERE slug = 'res'").get().id;
+  db.prepare("INSERT INTO tasks (project_id, task_no, title, status) VALUES (?, 10, 'T', 'todo'), (?, 11, 'T', 'todo')").run(pid, pid);
+  const r = await post({ mode: 'board', project: 'res', keys: ['RES-10'], text: 'Do RES-10' });
+  assert.equal(r.statusCode, 200, r.body);
+  const sid = r.json().session;
+  await until(() => entries().find((e) => e.argv?.includes(sid)), 'Claude to start');
+  assert.equal(resume.heldByPerson(sid), false);
+  const stop = await app.inject({ method: 'DELETE', url: '/api/tasks/RES-10/terminal' });
+  assert.equal(stop.statusCode, 200, stop.body);
+  assert.equal(resume.heldByPerson(sid), true, 'the Stop of the person is not kept: the automation would bring the session back');
+  const go = await post({ mode: 'board', project: 'res', keys: ['RES-10'], resume: sid });
+  assert.equal(go.statusCode, 200, go.body);
+  assert.equal(resume.heldByPerson(sid), false, 'the person\'s Continue left the session held');
+  // the screen of a Claude killed from outside, closed by the same button, is no word against going on with it
+  const killed = await post({ mode: 'board', project: 'res', keys: ['RES-11'], text: 'Do RES-11' });
+  assert.equal(killed.statusCode, 200, killed.body);
+  const ksid = killed.json().session;
+  const first = await until(() => entries().find((e) => e.argv?.includes(ksid)), 'Claude to start');
+  process.kill(first.pid, 'SIGTERM'); // the stand-in this test started, by its own pid
+  await until(async () => (await terminal('RES-11')).dead, 'the terminal to die');
+  const close = await app.inject({ method: 'DELETE', url: '/api/tasks/RES-11/terminal' });
+  assert.equal(close.statusCode, 200, close.body);
+  assert.equal(resume.heldByPerson(ksid), false, 'closing the screen of a Claude killed from outside kept the board from going on with it');
+});

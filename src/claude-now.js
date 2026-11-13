@@ -78,7 +78,7 @@ const WAITS_ON_PERSON = `
   JOIN tasks t ON t.id = l.task_id JOIN projects p ON p.id = t.project_id AND p.archived = 0
   WHERE l.session_id IN (SELECT value FROM json_each(?)) AND ${noclaudeFilter('t.')}
     AND l.session_id = (SELECT x.session_id FROM task_sessions x WHERE x.task_id = l.task_id ORDER BY x.last_seen DESC, x.session_id LIMIT 1)
-    AND (t.status IN ('ready', 'review') OR (t.status = 'todo'
+    AND (t.status IN ('ready', 'review') OR (t.status = 'done' AND t.labels LIKE '%"check"%') OR (t.status = 'todo'
       AND (SELECT e.session_id FROM task_events e WHERE e.task_id = t.id ORDER BY e.id DESC LIMIT 1) = l.session_id))`;
 /** The board's sessions that are "now" with none of their tasks in work: Map sid → 'busy' | 'background' (at work) |
     'idle' | 'waiting' (at its prompt, a task handed in to Ready to ship or Review, or put back to To do). */

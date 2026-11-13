@@ -350,7 +350,7 @@ function streamMessage(data) {
   callHears(ev);
   if (ev.type === 'sync.status') { refreshSync(); return; }
   if (ev.type === 'session.chat') { chatEvent(ev.data?.session); return; }
-  if (ev.type === 'task.work') { const open = state.drawerKey && (ev.data?.keys || []).includes(state.drawerKey); if (open) refreshUsage(state.drawerKey); if (open) refreshWork(state.drawerKey); return; }
+  if (ev.type === 'task.work') { const open = state.drawerKey && (ev.data?.keys || []).includes(state.drawerKey); if (open) refreshUsage(state.drawerKey); if (open) refreshWork(state.drawerKey, { live: true }); return; }
   if (ev.type === 'task.live') { liveEvents++; state.liveProjects = ev.data?.projects || []; maybeQuestionAlert(applyTerminalQuestions(ev.data?.questions), maybeWaitingAlert(applyLive(ev.data?.tasks))); markNowEntry(); peekTerminal(); if (state.slug === DASH || state.slug === NOW || state.slug === REVIEW) loadTasks().catch(() => {}); repaintHealth(); return; }
   if (ev.type === 'task.checklist') { applyChecklist(ev.data?.key, ev.data?.checklist); if (state.slug === NOW && !ev.data?.text_only) loadTasks().catch(() => {}); return; }
   if (ev.type === 'limits.updated') { applyLimits(ev.data); return; }

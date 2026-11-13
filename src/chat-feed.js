@@ -521,16 +521,48 @@ export function waitStep(list, d, items) {
   }
 }
 
-/* ── reading: once, then only what was appended (as the work feed) ── */
-const parsed = new Map(); // path → { size, items, rest, asks, built }
-const PARSED_MAX = 12;
+/* ── reading: once, then only what was appended (as the work feed) ──
+   The read transcripts are kept by what they hold, not by their number (the audit of 14.11.2026): twelve of any size held
+   254–614 MB on transcripts of 20 MB, and a thirteenth small one was read from the start on every ask. At most
+   PARSED_BYTES (an estimate of the strings kept, `weightOf`) and PARSED_MAX of them; the least recently asked goes first,
+   the one just read always stays. */
+const parsed = new Map(); // path → { size, items, rest, asks, built, weight, counted (its weight in parsedBytes) }
+export const PARSED_MAX = 32;
+export const PARSED_BYTES = 48 * 1024 * 1024;
+let parsedBytes = 0;
 const reading = new Map();
+/** About how many bytes the strings of a value hold (two a character, as V8 keeps most of them), and a little a field. */
+export function weightOf(v, depth = 0) {
+  if (typeof v === 'string') return 2 * v.length;
+  if (!v || typeof v !== 'object' || depth > 4) return 8;
+  let n = 16;
+  for (const k in v) n += 8 + weightOf(v[k], depth + 1);
+  return n;
+}
+/** Tests: what the cache of read transcripts holds now. */
+export const parsedChats = () => ({ n: parsed.size, bytes: parsedBytes, paths: [...parsed.keys()] });
+let bytesMax = PARSED_BYTES;
+/** Tests: a smaller bound on the bytes kept (null — the real one back). */
+export const setParsedBytes = (n) => { bytesMax = n ?? PARSED_BYTES; };
+function keepParsed(path, c) {
+  const was = parsed.get(path); // the same object read further, or the one a shrunk file replaced
+  if (was) { parsed.delete(path); parsedBytes -= was.counted; }
+  c.counted = c.weight;
+  parsed.set(path, c);
+  parsedBytes += c.counted;
+  for (const [p, old] of parsed) {
+    if (parsed.size <= 1 || (parsed.size <= PARSED_MAX && parsedBytes <= bytesMax)) break;
+    if (p === path) continue;
+    parsed.delete(p);
+    parsedBytes -= old.counted;
+  }
+}
 
 async function readMore(path) {
   let st;
   try { st = await stat(path); } catch { return null; }
   let c = parsed.get(path);
-  if (!c || st.size < c.size) c = { size: 0, items: [], rest: Buffer.alloc(0), asks: new Set(), built: null, waits: [] };
+  if (!c || st.size < c.size) c = { size: 0, items: [], rest: Buffer.alloc(0), asks: new Set(), built: null, waits: [], weight: 0 };
   if (st.size > c.size) {
     await readTail(path, c, st.size, (d) => {
       const m = modelOf(d);
@@ -542,13 +574,12 @@ async function readMore(path) {
         if (it.kind === 'tool' && it.tool === 'AskUserQuestion') c.asks.add(it.id);
         if (it.kind === 'result' && !c.asks.has(it.id)) { delete it.text; delete it.given; }
         c.items.push(it);
+        c.weight += weightOf(it);
       }
     });
     c.built = null;
   }
-  parsed.delete(path);
-  parsed.set(path, c);
-  if (parsed.size > PARSED_MAX) parsed.delete(parsed.keys().next().value);
+  keepParsed(path, c);
   return c;
 }
 // reads of one transcript one at a time: the cached size moves only when a read is over

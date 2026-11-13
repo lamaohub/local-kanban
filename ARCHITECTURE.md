@@ -484,8 +484,10 @@ it runs in a background worker, not in the request path.
   created in the board's language, and the name→status map understands both locales plus GitHub's
   own defaults, so a renamed column still resolves.
 - The queue payload is a **snapshot**, so an operation survives deletion of the task it describes.
-  It drains FIFO; a failing `create_issue` blocks only the dependent operations of *that* task, not
-  the whole queue.
+  It drains FIFO, and the operations of one task keep their order: while one waits for its retry,
+  the later ones of *that* task wait too (a close retried after a reopen would close the issue of a
+  task in work), never the whole queue. `create_issue` waits for nobody; a pending close and reopen
+  of one task collapse into the latest. A `gh` still running dies with the board.
 - Labels must exist in the palette in `sync/github.js` — `gh` does not create labels on the fly, and
   a label outside the palette fails on sync forever, retrying the same missing name.
 

@@ -17,6 +17,7 @@ function follow({ drawerKey = 'ALP-19', openingKey = null, pending = false, draf
     state: { drawerKey, openingKey },
     autosaveTimer: pending ? 7 : null,
     commentDrafts: new Map(drafts),
+    unsentPictures: new Map(),
     clearTimeout: (t) => log.push(['clear', t]),
     openDrawer: (k) => log.push(['open', k, box.state.drawerKey]),
     log,

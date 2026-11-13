@@ -10,12 +10,13 @@ export const showsShip = (status) => status === 'ready' || status === 'review';
 /** What stays in Review under the filter: everything not known to be on main. */
 export const notOnMain = (t, shipped) => shipped[t.key] !== 'main';
 /** `askShipped`: one question at a time, at most once in `every` ms and at once on a new board. An answer about a board left
-    is dropped, and that board's successor is asked about as it lands: its own render found the question flying. */
-export function shipAsker({ every, board, wanted, ask, apply, now = Date.now }) {
+    is dropped, and that board's successor is asked about as it lands: its own render found the question flying. A tab out
+    of sight (`hidden`) asks nothing — every question is a look at git on the board's machine; it asks as it comes back. */
+export function shipAsker({ every, board, wanted, ask, apply, now = Date.now, hidden = () => false }) {
   let last = { slug: null, at: 0, flying: false };
   const askShipped = () => {
     const at = now();
-    if (last.flying || !wanted()) return;
+    if (last.flying || hidden() || !wanted()) return;
     const slug = board();
     if (last.slug === slug && at - last.at < every) return;
     const asked = { slug, at, flying: true };

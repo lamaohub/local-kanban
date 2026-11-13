@@ -472,11 +472,17 @@ const commands = {
   },
 
   async ls() {
-    const [proj] = args.filter((a) => !a.startsWith('-'));
-    if (!proj) die('kb ls <project> [-s status] [-a]');
     const si = args.indexOf('-s');
+    // the value of -s is no project: `kb ls -s todo <project>` read «todo» as the project
+    const [proj] = args.filter((a, i) => !a.startsWith('-') && (si < 0 || i !== si + 1));
+    if (!proj) die('kb ls <project> [-s status] [-a]');
     const q = new URLSearchParams({ project: proj });
-    if (si >= 0) q.set('status', ST_ALIAS[args[si + 1]] || args[si + 1]);
+    if (si >= 0) {
+      // a status the board does not have used to print «empty» with code 0 — read as «nothing in that column»
+      const status = ST_ALIAS[args[si + 1]];
+      if (!status) die(`kb: status ${[...new Set(Object.values(ST_ALIAS))].join('|')}${args[si + 1] === undefined ? '' : ` — not «${args[si + 1]}»`}`);
+      q.set('status', status);
+    }
     if (args.includes('-a')) q.set('all', '1');
     const ts = await api('GET', `/api/tasks?${q}`, null, LIST);
     if (!ts.length) return console.log('empty');

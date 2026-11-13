@@ -18,7 +18,7 @@ module.exports = {
         //                         // (the older names PANEL_URL/PANEL_INFO still work)
         // KB_SKILLS_EXTRA: '',    // extra skill root directories, ':'-separated
       },
-      max_memory_restart: '200M',
+      max_memory_restart: '512M', // a restart cuts the live stream of every open tab: leave room above a large board's peaks
       merge_logs: true,
     },
   ],

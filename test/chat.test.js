@@ -219,7 +219,7 @@ test('a chat\'s pictures are the task\'s attachments, by id — never a path, ne
   } finally { queue.setQueueDeps(null); queue.clearQueues(); }
 });
 
-// DELIVER_TRIES times in all, then the journal says so
+// DELIVER_TRIES times in all, then the journal says so, and they stay at the head marked not delivered (never dropped)
 test('queued words that did not reach Claude wait at the head of the queue and go again, a few times', async () => {
   const tries = [];
   queue.setQueueDeps({ atPrompt: async () => 'idle', gone: async () => false, say: async (t, s, b) => { tries.push(b.text); return { refused: 'not-typed' }; }, task: (id) => ({ id }), timer: false });
@@ -232,6 +232,104 @@ test('queued words that did not reach Claude wait at the head of the queue and g
     assert.equal(tries.filter((x) => x === 'first').length, queue.DELIVER_TRIES, 'words that never arrive are tried for good');
     const { db: d } = await import('../src/db.js');
     assert.ok(d.prepare("SELECT 1 FROM app_errors WHERE message LIKE 'queued words did not reach Claude (not-typed)%'").get(), 'given-up words are not in the journal');
+    assert.deepEqual(queue.queued(SID).map((q) => [q.text, q.stuck]), [['first', 'not-typed'], ['second', undefined]], 'words the board gave up on were thrown away');
+  } finally { queue.setQueueDeps(null); queue.clearQueues(); }
+});
+
+// Queued words met a Claude idle with no input field the board could read (`no-box`): three looks in 7 s threw them away,
+// and the chat never said so. Nothing is typed then — no try is spent; the words wait for the field, and after
+// NO_BOX_HOLD_MS they stay in the queue marked not delivered, for the person to send again or take back.
+test('queued words wait for Claude\'s field, and are kept marked not delivered when it does not come', async () => {
+  let field = false;
+  const said = [];
+  queue.setQueueDeps({ atPrompt: async () => 'idle', gone: async () => false, task: (id) => ({ id }), timer: false,
+    say: async (t, s, b) => { if (!field) return { refused: 'no-box' }; said.push(b.text); return { ok: true }; } });
+  try {
+    queue.enqueue(SID, 7, 'first');
+    queue.enqueue(SID, 7, 'second');
+    let now = 1000;
+    const tick = async (n) => { for (let i = 0; i < n; i++) { await queue.queueTick(now); now += 1000; } };
+    await tick(30); // half a minute of looks with no field: far past DELIVER_TRIES of them
+    assert.deepEqual(queue.queued(SID).map((q) => [q.text, q.stuck]), [['first', undefined], ['second', undefined]], 'a missing field spent the words\' tries');
+    // the field comes back: they go, in order
+    field = true;
+    await tick(8);
+    assert.deepEqual(said, ['first', 'second']);
+    // no field for good: past NO_BOX_HOLD_MS the words stay, marked
+    field = false;
+    queue.enqueue(SID, 7, 'third');
+    queue.enqueue(SID, 7, 'fourth');
+    await tick(queue.NO_BOX_HOLD_MS / 1000 + 10);
+    assert.deepEqual(queue.queued(SID).map((q) => [q.text, q.stuck]), [['third', 'no-box'], ['fourth', undefined]], 'the words were not kept as not delivered');
+    const { db: d } = await import('../src/db.js');
+    assert.ok(d.prepare("SELECT 1 FROM app_errors WHERE message LIKE 'queued words did not reach Claude (no-box)%'").get(), 'the journal does not say so');
+    // the field is back, but words said not delivered wait for the person — and those behind them too
+    field = true;
+    await tick(8);
+    assert.equal(said.length, 2, 'words said not delivered went by themselves');
+    // «Send again»: they go once Claude is idle with its field
+    const id = queue.queued(SID)[0].id;
+    assert.equal(queue.sendAgain(SID, id), true);
+    assert.equal(queue.queued(SID)[0].stuck, undefined);
+    await tick(8);
+    assert.deepEqual(said, ['first', 'second', 'third', 'fourth']);
+    assert.equal(queue.sendAgain(SID, id), false, 'words that went are not there to send again');
+    // review: the wait counts no-box looks one after another — one no-box, ten minutes of work, one more no-box is not
+    // «minutes without a field»
+    queue.enqueue(SID, 7, 'fifth');
+    field = false;
+    await tick(4);
+    let busy = true;
+    queue.setQueueDeps({ atPrompt: async () => (busy ? 'busy' : 'idle'), gone: async () => false, task: (x) => ({ id: x }), timer: false,
+      say: async (t, s, b) => { if (!field) return { refused: 'no-box' }; said.push(b.text); return { ok: true }; } });
+    now += 10 * 60_000;
+    await tick(3);
+    busy = false;
+    await tick(4);
+    assert.equal(queue.queued(SID)[0].stuck, undefined, 'one no-box after a turn of work counted the minutes before it');
+  } finally { queue.setQueueDeps(null); queue.clearQueues(); }
+});
+
+// Review: a tmux failure is a try only BEFORE Enter. Past it (the Enter itself failed, or the look after it) the words
+// may have reached Claude — typed again, Claude got them twice; they go out of the queue with a line in the journal
+test('words tmux failed on after Enter are never typed again; before Enter they are tried again', async () => {
+  const said = [];
+  let answer = [];
+  queue.setQueueDeps({ atPrompt: async () => 'idle', gone: async () => false, task: (id) => ({ id }), timer: false,
+    say: async (t, s, b) => { said.push(b.text); return answer.shift() ?? { ok: true }; } });
+  try {
+    const tick = async (from, n) => { for (let i = 0; i < n; i++) await queue.queueTick(from + i * 2500); };
+    answer = [{ err: new Error('capture-pane timed out'), text: '', entered: true }];
+    queue.enqueue(SID, 7, 'once');
+    await tick(1000, 10);
+    assert.deepEqual(said, ['once'], 'words that may have reached Claude were typed again');
+    assert.deepEqual(queue.queued(SID), []);
+    answer = [{ err: new Error('send-keys timed out'), text: '' }];
+    queue.enqueue(SID, 7, 'again');
+    await tick(100_000, 10);
+    assert.deepEqual(said, ['once', 'again', 'again'], 'words tmux failed on before Enter were not tried again');
+  } finally { queue.setQueueDeps(null); queue.clearQueues(); }
+});
+
+test('«Send again» and «Back to the field» of the chat: the words come back whole, with their pictures', async () => {
+  const pic = db.prepare("INSERT INTO task_attachments (task_id, file, mime) VALUES (?, 'back.png', 'image/png')").run(taskId).lastInsertRowid;
+  queue.setQueueDeps({ timer: false });
+  try {
+    const { taskAttachmentPaths } = await import('../src/routes/tasks.js');
+    const { id } = queue.enqueue(SID, taskId, 'look at this', taskAttachmentPaths(taskId, [pic]), [pic]);
+    assert.equal((await app.inject({ method: 'POST', url: `/api/tasks/CH-1/chat/queue/${id}/again` })).statusCode, 200);
+    assert.equal((await app.inject({ method: 'POST', url: '/api/tasks/CH-1/chat/queue/q999999/again' })).statusCode, 404);
+    const back = await app.inject({ method: 'DELETE', url: `/api/tasks/CH-1/chat/queue/${id}` });
+    assert.equal(back.statusCode, 200);
+    assert.deepEqual(back.json(), { ok: true, text: 'look at this', images: [{ id: pic, url: `/attachments/${taskId}/back.png` }] });
+    assert.deepEqual(queue.queued(SID), []);
+    // words said on another task of the same session: their pictures are that task's — sent from here they would be
+    // refused, so only the words come back, and the chat is told the pictures stayed where they are
+    const other = db.prepare("SELECT id FROM tasks WHERE title = 'Other task'").get().id;
+    const their = db.prepare("INSERT INTO task_attachments (task_id, file, mime) VALUES (?, 'their.png', 'image/png')").run(other).lastInsertRowid;
+    const q2 = queue.enqueue(SID, other, 'theirs', taskAttachmentPaths(other, [their]), [their]);
+    const elsewhere = await app.inject({ method: 'DELETE', url: `/api/tasks/CH-1/chat/queue/${q2.id}` });
+    assert.deepEqual(elsewhere.json(), { ok: true, text: 'theirs', images: [], pictures_elsewhere: 1 }, 'a picture of another task came into this chat');
   } finally { queue.setQueueDeps(null); queue.clearQueues(); }
 });
 

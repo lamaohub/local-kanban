@@ -214,3 +214,42 @@ test('background work refused before it ran is not waited for', () => {
   const agent = JSON.stringify({ type: 'user', timestamp: at(), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_E', is_error: true, content: 'Agent type not found' }] } });
   assert.equal(ownWaitIn([human('go'), bg('toolu_E', 'review', 'Agent'), agent, says('Could not start the helper.')])?.own, false);
 });
+
+test('a helper at the head of a long turn cut by the tail: how far back the lines reach counts from the end of that turn', async () => {
+  const T = Date.parse('2026-11-12T10:00:00Z');
+  const MIN = 60_000;
+  const ts = (ms) => new Date(T + ms).toISOString();
+  const said = (t, text) => JSON.stringify({ type: 'user', timestamp: ts(t), message: { role: 'user', content: text } });
+  const answer = (t, text) => JSON.stringify({ type: 'assistant', timestamp: ts(t), message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text }] } });
+  const step = (t, id) => JSON.stringify({ type: 'assistant', timestamp: ts(t), message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Bash', input: { command: 'cat big.log' } }] } });
+  const out = (t, id, text) => JSON.stringify({ type: 'user', timestamp: ts(t), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: text }] } });
+  const agent = JSON.stringify({ type: 'assistant', timestamp: ts(1000), message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_LH', name: 'Agent', input: { prompt: 'x', run_in_background: true } }] } });
+  const pad = Array.from({ length: 60 }, (_, i) => [step(MIN + i * MIN, `toolu_LP${i}`), out(MIN + i * MIN + 500, `toolu_LP${i}`, 'y'.repeat(5 * 1024))]).flat();
+  const lines = [said(0, 'go'), agent, out(2000, 'toolu_LH', 'Async agent launched successfully.\nagentId: alh1 (internal)'), ...pad,
+    answer(61 * MIN, 'The helper is at it.'), said(150 * MIN, 'and?'), answer(150 * MIN + 5000, 'Still waiting for the helper.')];
+  assert.deepEqual(ownWaitIn(lines), { own: true, at: T + 61 * MIN }, 'read whole');
+  const sid = '55555555-2222-4333-8444-555555555555';
+  const dir = join(process.env.KB_CLAUDE_DIR, 'projects', '-Users-me-long');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${sid}.jsonl`), `${lines.join('\n')}\n`);
+  assert.equal(await waitsOwnWork(sid, T + 151 * MIN), true, 'the tail answered «waits for you» though the turn of the helper ended 90 minutes ago');
+  assert.equal(await waitsOwnWork(sid, T + 61 * MIN + OWN_WAIT_MAX_MS), false, 'two hours after the end of that turn it still read as at work');
+});
+
+// a week of the owner's transcripts, 2 with an interim and a final one of different helpers): each block counts on its own
+test('an interim notification of one helper next to the final one of another ends the other', () => {
+  const lines = [human('two sides'), ...helper('toolu_A1', 'aa01'), ...helper('toolu_B1', 'bb01'), says('Two helpers.'), system(),
+    human(`${interim('toolu_A1', 'aa01')}\n${finished('bb01')}`), says('One is back, one waits on its run.'), system()];
+  assert.equal(ownWaitIn(lines)?.own, true);
+  assert.equal(ownWaitIn([...lines, human(finished('aa01')), says('Both are back.')])?.own, false, 'the final notification next to an interim one was taken for interim too');
+});
+
+test('a helper started more than 2 MB before the end is still found', async () => {
+  const sid = '66666666-2222-4333-8444-555555555555';
+  const dir = join(process.env.KB_CLAUDE_DIR, 'projects', '-Users-me-deep');
+  mkdirSync(dir, { recursive: true });
+  const padding = Array.from({ length: 60 }, (_, i) => [tool(`toolu_D${i}`, 'cat big.log'), result(`toolu_D${i}`, 'w'.repeat(50 * 1024))]).flat();
+  writeFileSync(join(dir, `${sid}.jsonl`), `${[human('accept the batch'), ...helper('toolu_V4', 'ae1da76e'), says('The helper is at it.'), system(),
+    human('and?'), ...padding, says('Still waiting.'), system(), human('how long?'), says('A few minutes more.'), system()].join('\n')}\n`);
+  assert.equal(await waitsOwnWork(sid, T0 + n * 1000 + 60_000), true, 'a helper 3 MB back was forgotten');
+});

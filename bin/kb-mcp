@@ -16,6 +16,7 @@ const KEY_RE = /^[A-Za-z0-9]{1,10}-\d+$/;
 const SEG_RE = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$/;
 
 class ToolError extends Error {}
+const STATUSES = ['backlog', 'todo', 'prep', 'doing', 'ready', 'deploy', 'review', 'done', 'cancelled'];
 
 async function board(method, path, body) {
   let res;
@@ -62,7 +63,7 @@ const TOOLS = [
       type: 'object',
       properties: {
         project: { type: 'string', description: 'project slug or key prefix' },
-        status: { type: 'string', enum: ['backlog', 'todo', 'prep', 'doing', 'ready', 'deploy', 'review', 'done', 'cancelled'] },
+        status: { type: 'string', enum: STATUSES },
         include_closed: { type: 'boolean', description: 'also backlog, done and cancelled' },
         query: { type: 'string', description: 'only tasks whose title, description, key or labels hold these words' },
       },
@@ -71,6 +72,7 @@ const TOOLS = [
     },
     run: async (a) => {
       const q = new URLSearchParams({ project: decodeURIComponent(seg(a.project, 'project')) });
+      if (a.status !== undefined && !STATUSES.includes(a.status)) throw new ToolError(`status: one of ${STATUSES.join(', ')}`);
       if (a.status) q.set('status', a.status);
       if (a.include_closed) q.set('all', '1');
       if (a.query) { q.set('q', String(a.query)); q.set('all', '1'); q.set('limit', '100'); }

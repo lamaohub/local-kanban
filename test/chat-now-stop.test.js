@@ -109,6 +109,9 @@ const look = async (q = '') => (await app.inject({ method: 'GET', url: `/api/tas
 const post = async (url, payload) => app.inject({ method: 'POST', url, payload });
 const typedSince = (n) => typed().slice(n);
 let taskId;
+/** Waits until what the stand-in logged since `n0` (as `vis` shows it) passes `ok`: an answer of the board means tmux has
+    the bytes, the stand-in reads them a moment later — under load, later than a read right after the answer. */
+const reached = async (n0, ok) => { for (let i = 0; i < 500 && !ok(vis(typedSince(n0))); i++) await pause(10); };
 const vis = (s) => s.replace(/\x1b\[200~/g, '<P>').replace(/\x1b\[201~/g, '</P>').replace(/\x0b/g, '^K').replace(/\x15/g, '^U').replace(/\r/g, '<CR>').replace(/\x1b/g, '<ESC>');
 
 test('«now» over an open question (no field drawn) — 409 question, not one byte typed; queued-now keeps its place', { skip }, async () => {
@@ -160,6 +163,7 @@ test('two «now» at once — two separate messages, never glued', { skip }, asy
   await pause(300);
   const n0 = typed().length;
   const [x, y] = await Promise.all([post('/api/tasks/CT-1/chat', { text: 'alpha words', now: true }), post('/api/tasks/CT-1/chat', { text: 'beta words', now: true })]);
+  await reached(n0, (t) => (t.match(/<CR>/g) || []).length >= 2); // the second Enter reached the stand-in too
   const t = vis(typedSince(n0));
   assert.equal(x.statusCode, 200); assert.equal(y.statusCode, 200);
   assert.match(t, /alpha words<\/P><CR>.*beta words<\/P><CR>|beta words<\/P><CR>.*alpha words<\/P><CR>/);
@@ -181,6 +185,9 @@ test('stop while words are being delivered — the Esc waits until the words wen
   } finally { rmSync(lagFile, { force: true }); }
   assert.equal(s.statusCode, 200, `the words were not delivered: ${s.body}`);
   assert.equal(st.statusCode, 200, `the stop was refused: ${st.body}`);
+  // tmux has the Esc when the stop answers, the stand-in reads it a moment later: under load the log was read before
+  // the Esc reached it, and a stop that went in order failed as «Esc came before the words»
+  for (let i = 0; i < 500 && !vis(typedSince(n0)).includes('<ESC>'); i++) await pause(10);
   const t = vis(typedSince(n0));
   const sent = t.indexOf('gamma words</P><CR>');
   assert.ok(sent >= 0 && t.indexOf('<ESC>') > sent, `Esc came before the words were sent: ${t}`);
@@ -191,7 +198,8 @@ test('two stops at once (two tabs) — exactly one Esc', { skip }, async () => {
   await pause(1600);
   const n0 = typed().length;
   const rs = await Promise.all([post('/api/tasks/CT-1/chat/stop'), post('/api/tasks/CT-1/chat/stop'), post('/api/tasks/CT-1/chat/stop')]);
-  await pause(300);
+  for (let i = 0; i < 500 && !vis(typedSince(n0)).includes('<ESC>'); i++) await pause(10); // the first Esc reached the stand-in
+  await pause(300); // and a second one would have by now
   const t = vis(typedSince(n0));
   assert.equal((t.match(/<ESC>/g) || []).length, 1);
 });
@@ -251,6 +259,7 @@ test('a picture goes with words typed at once and with words sent «now»: its p
     const r = await post('/api/tasks/CT-1/chat', { text: `see it ${status}`, images: [pic], ...(now ? { now: true } : {}) });
     assert.equal(r.statusCode, 200, r.body);
     assert.equal(r.json().queued, undefined, 'the words were queued, not typed');
+    await reached(n0, (t) => t.includes(`see it ${status}`));
     const t = vis(typedSince(n0));
     const at = t.indexOf(`<P>${path}</P>`);
     assert.ok(at >= 0 && at < t.indexOf(`see it ${status}`), `${now ? '«now»' : 'typed at once'}: the picture did not go first on its own: ${t}`);

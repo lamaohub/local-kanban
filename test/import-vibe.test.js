@@ -219,6 +219,31 @@ test('only what the import needs is unpacked, and all of it together to TOTAL_MA
   assert.ok(V.TOTAL_MAX >= V.IMPORT_MAX && V.TOTAL_MAX <= 2 * 1024 ** 3, 'the default bound of one import');
 });
 
+test('a project the person archived does not take new tasks out of sight: they get a new project, and an archive with none for it makes nothing', async () => {
+  const first = await post(zip([['issues.csv', ISSUES([['H-1', 'Before archive', 'Hidden Proj']])]]));
+  assert.equal(first.json().projects[0].created, true);
+  const old = db.prepare("SELECT id, slug FROM projects WHERE name = 'Hidden Proj'").get();
+  db.prepare('UPDATE projects SET archived = 1 WHERE id = ?').run(old.id);
+  const plan = (await app.inject({ method: 'POST', url: '/api/import/vibe-kanban?dry=1', headers: { 'content-type': 'application/zip' }, payload: zip([['issues.csv', ISSUES([['H-1', 'Before archive', 'Hidden Proj'], ['H-2', 'After archive', 'Hidden Proj']])]]) })).json();
+  assert.equal(plan.projects[0].created, true, 'the dry run does not say a new project comes');
+  const r = (await post(zip([['issues.csv', ISSUES([['H-1', 'Before archive', 'Hidden Proj'], ['H-2', 'After archive', 'Hidden Proj']])]]))).json();
+  assert.deepEqual([r.created, r.skipped], [1, 1]);
+  assert.equal(r.projects[0].created, true);
+  assert.notEqual(r.projects[0].slug, old.slug);
+  const t = db.prepare("SELECT p.archived, p.slug FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.title = 'After archive'").get();
+  assert.deepEqual(t, { archived: 0, slug: r.projects[0].slug }, 'the new task went into the archived project');
+  assert.equal(db.prepare("SELECT archived FROM projects WHERE id = ?").get(old.id).archived, 1, 'the archived project was touched');
+  // the same archive once more: nothing new, nothing made — the live project of that name now takes it
+  const again = (await post(zip([['issues.csv', ISSUES([['H-1', 'Before archive', 'Hidden Proj']])]]))).json();
+  assert.deepEqual([again.created, again.projects[0].created, again.projects[0].archived], [0, false, undefined]);
+  // a name only in the archive, with nothing new for it: no empty project, and the answer says it is archived
+  db.prepare("UPDATE projects SET archived = 1 WHERE name = 'Hidden Proj'").run();
+  const n = db.prepare('SELECT COUNT(*) AS n FROM projects').get().n;
+  const quiet = (await post(zip([['issues.csv', ISSUES([['H-1', 'Before archive', 'Hidden Proj']])]]))).json();
+  assert.deepEqual([quiet.created, quiet.projects[0].created, quiet.projects[0].archived], [0, false, true]);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM projects').get().n, n, 'an empty project was made');
+});
+
 test('a row repeated in one archive is one task, not a 500', async () => {
   const r = await post(zip([['issues.csv', ISSUES([['R-1', 'Twice'], ['R-1', 'Twice'], ['R-2', 'Once']])]]));
   assert.equal(r.statusCode, 200, r.body.slice(0, 300));

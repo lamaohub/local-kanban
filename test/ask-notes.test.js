@@ -1,11 +1,13 @@
 // under the questions, which goes with Decline, is not dropped without a word when the person answers
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 process.env.KB_DATA_DIR = mkdtempSync(join(tmpdir(), 'kb-ask-notes-'));
+const dataDir = process.env.KB_DATA_DIR;
+after(() => rmSync(dataDir, { recursive: true, force: true }));
 const { answerBody } = await import('../public/js/ask-rules.js');
 const { decisionFor } = await import('../src/claude-asks.js');
 

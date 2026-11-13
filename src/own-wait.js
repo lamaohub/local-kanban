@@ -133,13 +133,16 @@ export function ownWaitIn(lines, { whole = true } = {}) {
   const running = [...launched].filter(([id, { at, task }]) => !(task && stopped.get(task) > at)
     && !parsed.slice(at + 1).some((p) => endsIn(p.raw, id, task)));
   const cut = deeper || (first === 0 && !woken(parsed[from].d));
-  if (!running.length) return cut && !whole && !reachesBack(parsed) ? null : { own: false };
+  if (!running.length) return cut && !whole && !reachesBack(parsed, starts[0]) ? null : { own: false };
   return { own: true, at: turnEnd(Math.max(...running.map(([, l]) => l.at))) };
 }
 
-function reachesBack(parsed) {
-  const times = parsed.map((p) => Date.parse(p.d?.timestamp)).filter(Number.isFinite);
-  return times.length > 0 && times.at(-1) - times[0] >= OWN_WAIT_MAX_MS;
+function reachesBack(parsed, first) {
+  const at = (p) => Date.parse(p.d?.timestamp);
+  const times = parsed.map(at).filter(Number.isFinite);
+  const cutTurn = parsed.slice(0, first).map(at).filter(Number.isFinite);
+  const edge = cutTurn.length ? Math.max(...cutTurn) : times[0];
+  return times.length > 0 && times.at(-1) - edge >= OWN_WAIT_MAX_MS;
 }
 
 const paths = new Map(); // sid → transcript path

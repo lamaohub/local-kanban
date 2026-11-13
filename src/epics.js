@@ -68,18 +68,26 @@ export function stageCounts(statuses) {
 /** A batch is through when every task of it is closed — the person accepted it (done) or dropped it (cancelled). */
 export const batchClosed = (statuses) => statuses.length > 0 && statuses.every((s) => CLOSED.has(s));
 
-/* The owner's word: the board leads the epic's status itself. Into Review when every task of its batches is closed and one
-   at least was done — the person accepts the epic there; back to To do only from a Review the board itself put it in, when
+/* The owner's word: the board leads the epic's status itself. Into Review when every task of its batches is closed, one
+   at least was done, and one at least was closed after it came into its batch (`closedSince`) — an epic gathered from tasks
+   closed long ago has had no work, and placing them is no reason to hand it in; the person accepts the epic there; back to To do only from a Review the board itself put it in, when
    a task is opened again. A Review someone else gave it (Claude handed the epic in), a working status (a Claude works on
    the epic itself — its plan, its sub-tasks) and a closed epic are the person's and Claude's, and stay. The epic never goes
    into prep or doing by itself: those are a Claude's columns (a clock, a locked card, a queue held as «unfinished»). */
-/** The status the board moves an epic to, or null. `subs` — the statuses of its batches' tasks. Pure. */
-export function epicMove(status, subs, boardMoved) {
+/** The status the board moves an epic to, or null. `subs` — the statuses of its batches' tasks; `closedSince` — see
+    `closedSincePlaced`. Pure. */
+export function epicMove(status, subs, boardMoved, closedSince = false) {
   if (!subs.length) return null;
-  if (subs.every((s) => CLOSED.has(s)) && subs.includes('done')) return status === 'backlog' || status === 'todo' ? 'review' : null;
+  if (subs.every((s) => CLOSED.has(s)) && subs.includes('done')) return closedSince && (status === 'backlog' || status === 'todo') ? 'review' : null;
   if (status === 'review' && boardMoved) return 'todo';
   return null;
 }
+
+/** Whether a task of the epic's batches was closed after it came into its batch (`batch_placed`). */
+export const closedSincePlaced = (epicId) => Boolean(db.prepare(`SELECT 1 FROM batch_tasks bt JOIN epic_batches b ON b.id = bt.batch_id
+    LEFT JOIN batch_placed p ON p.task_id = bt.task_id
+  WHERE b.epic_id = ? AND EXISTS (SELECT 1 FROM task_events e WHERE e.task_id = bt.task_id AND e.status IN ('done', 'cancelled')
+    AND e.id > COALESCE(p.event_id, 0)) LIMIT 1`).get(epicId));
 
 export const isEpic = (taskId) => Boolean(db.prepare('SELECT 1 FROM epic_batches WHERE epic_id = ? LIMIT 1').get(taskId));
 export function throughEpicKey(taskIds) {
@@ -249,6 +257,10 @@ export function placeTask(epic, task, batchId, beforeId = null) {
       db.prepare("INSERT INTO task_links (task_id, linked_task_id, kind) VALUES (?, ?, 'parent')").run(epic.id, task.id);
     }
     if (batchId == null) { db.prepare('DELETE FROM batch_tasks WHERE task_id = ?').run(task.id); return; }
+    // a move between batches of the same epic keeps the mark: a close since the task came into the epic still counts
+    if (was !== epic.id) {
+      db.prepare('INSERT INTO batch_placed (task_id, event_id) VALUES (?, (SELECT COALESCE(MAX(id), 0) FROM task_events)) ON CONFLICT(task_id) DO UPDATE SET event_id = excluded.event_id').run(task.id);
+    }
     const before = beforeId == null ? null : db.prepare('SELECT position FROM batch_tasks WHERE task_id = ? AND batch_id = ?').get(beforeId, batchId);
     let pos;
     if (before) {

@@ -73,6 +73,30 @@ test('a project name is one encoded path segment', async () => {
   }
 });
 
+// a status the board does not have printed «empty» with code 0 — Claude read «nothing in that column»; the value of -s
+// before the project was taken for the project
+test('kb ls checks -s by the short names of kb mv and sends nothing on a wrong one; the flag may stand before the project', async () => {
+  const listed = [{ ...task, status: 'review' }];
+  for (const args of [['ls', 'demo', '-s', 'bogus'], ['ls', 'demo', '-s'], ['ls', '-s', 'bogus', 'demo']]) {
+    fresh(() => ({ status: 200, body: [] }));
+    const r = await run(args);
+    assert.equal(r.code, 2, `kb ${args.join(' ')}: ${r.stdout}`);
+    assert.match(r.stderr, /^kb: status backlog\|todo\|prep\|doing\|ready\|deploy\|review\|done\|cancelled/);
+    assert.equal(r.stdout, '');
+    assert.deepEqual(seen, [], `kb ${args.join(' ')} asked the board`);
+  }
+  for (const args of [['ls', 'demo', '-s', 'r'], ['ls', '-s', 'r', 'demo'], ['ls', '-s', 'review', '-a', 'demo']]) {
+    fresh(() => ({ status: 200, body: listed }));
+    const r = await run(args);
+    assert.equal(r.code, 0, `kb ${args.join(' ')}: ${r.stderr}`);
+    assert.equal(r.stdout, 'DM-7 review a task\n');
+    assert.match(seen[0], /^GET \/api\/tasks\?project=demo&status=review/);
+  }
+  fresh(() => ({ status: 200, body: listed }));
+  assert.equal((await run(['ls', 'demo'])).stdout, 'DM-7 review a task\n', 'kb ls without -s answers as it did');
+  assert.deepEqual(seen, ['GET /api/tasks?project=demo']);
+});
+
 test('a name from the prototype is an unknown command, not "the board is not responding"', async () => {
   fresh(() => ({ status: 200, body: [] }));
   for (const c of ['constructor', 'toString', '__proto__', 'hasOwnProperty', 'valueOf']) {

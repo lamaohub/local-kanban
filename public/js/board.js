@@ -112,7 +112,9 @@ const askShipped = shipAsker({
     state.shipped = r.tasks;
     renderBoard();
   },
+  hidden: () => Boolean(globalThis.document?.hidden), // a tab out of sight starts no look at git
 });
+globalThis.document?.addEventListener?.('visibilitychange', () => { if (!document.hidden && !$('board')?.classList.contains('hidden')) askShipped(); });
 const gateHere = () => (state.slug === ALL ? state.projects.some((p) => p.ship_gate) : Boolean(state.projects.find((p) => p.slug === state.slug)?.ship_gate));
 function columnHead(key, tasks, mode, labels) {
   const head = document.createElement('div');

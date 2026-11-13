@@ -2,9 +2,9 @@
 // busy time of the process: a session's moves scanned the event journal, the launches waiting for a session
 // scanned it with a correlated subquery, and a task by its key scanned every task (upper(prefix) kept the
 // index off). The guard is the query plan itself, plus the answers of the rewritten queries.
-import { test, before } from 'node:test';
+import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -19,6 +19,7 @@ before(async () => {
   ({ resolveTask } = await import('../src/routes/tasks.js'));
   ({ sessionEvents } = await import('../src/work-feed.js'));
 });
+after(() => { for (const d of [process.env.KB_DATA_DIR, process.env.KB_CLAUDE_DIR]) rmSync(d, { recursive: true, force: true }); });
 
 const plan = (sql, ...args) => db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...args).map((r) => r.detail).join(' | ');
 /** The plans of the statements `fn` really prepares — a copy of the SQL here would stay green after the code went back. */

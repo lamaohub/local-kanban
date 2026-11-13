@@ -1,4 +1,5 @@
-import { monitorEventLoopDelay } from 'node:perf_hooks';
+import { monitorEventLoopDelay, performance } from 'node:perf_hooks';
+import { availableParallelism, cpus, loadavg as osLoadavg } from 'node:os';
 import { logError } from './db.js';
 
 export const WINDOW_MS = 60_000;
@@ -18,12 +19,27 @@ export const WAITS = new Set(['GET /api/health', 'GET /api/health/stands', 'GET 
   'POST /api/voice/warm', 'POST /api/voice']);
 
 const ms = (ns) => Math.round(ns / 1e6);
+const STEPS = Symbol('slow-watch.steps');
+/** Time a step of an answer: `work` (a promise, or a value) — what the route waits on; its time goes under `name` (summed
+    when the step comes again) into the record of the request, and the slowest answer of a route keeps them. */
+export function timed(req, name, work) {
+  const t0 = performance.now();
+  const note = () => {
+    if (!req || typeof req !== 'object') return;
+    const s = req[STEPS] || (req[STEPS] = {});
+    s[name] = (s[name] || 0) + performance.now() - t0;
+  };
+  return Promise.resolve(work).finally(note);
+}
+const stepsOf = (req) => (req?.[STEPS] ? Object.fromEntries(Object.entries(req[STEPS]).map(([k, v]) => [k, Math.round(v)])) : null);
+const CORES = (() => { try { return availableParallelism(); } catch { return cpus().length || 1; } })();
 
 /** A watch with its own clock, histogram and log (replaceable in tests). */
-export function createSlowWatch({ now = Date.now, log = logError, histogram = null } = {}) {
+export function createSlowWatch({ now = Date.now, log = logError, histogram = null, loadavg = osLoadavg, cpuUsage = (was) => process.cpuUsage(was), cores = CORES } = {}) {
   const loop = histogram || monitorEventLoopDelay({ resolution: 20 });
-  let routes = new Map(); // `${method} ${template}` → {n, total, max}
+  let routes = new Map(); // `${method} ${template}` → {n, total, max, steps (of the slowest)}
   let started = now();
+  let cpuAt = cpuUsage();
   const windows = []; // the last WINDOWS_KEPT minutes, oldest first
   let loggedAt = -Infinity;
 
@@ -34,8 +50,9 @@ export function createSlowWatch({ now = Date.now, log = logError, histogram = nu
     if (template && !HELD_OPEN.has(k) && !STREAM.test(String(reply.getHeader?.('content-type') || ''))) {
       const took = Number(reply.elapsedTime);
       if (Number.isFinite(took)) {
-        const r = routes.get(k) || routes.set(k, { n: 0, total: 0, max: 0 }).get(k);
-        r.n++; r.total += took; r.max = Math.max(r.max, took);
+        const r = routes.get(k) || routes.set(k, { n: 0, total: 0, max: 0, steps: null }).get(k);
+        r.n++; r.total += took;
+        if (took >= r.max) { r.max = took; r.steps = stepsOf(req); }
       }
     }
     if (typeof done === 'function') done();
@@ -44,18 +61,24 @@ export function createSlowWatch({ now = Date.now, log = logError, histogram = nu
   /** Sum the minute up, keep it, start the next; a slow one goes to the error log. Returns the minute. */
   function tick() {
     const at = now();
-    const top = [...routes].map(([route, r]) => ({ route, n: r.n, avg: Math.round(r.total / r.n), max: Math.round(r.max) }))
+    const top = [...routes].map(([route, r]) => ({ route, n: r.n, avg: Math.round(r.total / r.n), max: Math.round(r.max), ...(r.steps ? { steps: r.steps } : {}) }))
       .map((r) => (WAITS.has(r.route) ? { ...r, waits: true } : r))
       .sort((a, b) => b.max - a.max).slice(0, ROUTES_SHOWN);
+    const used = cpuUsage(cpuAt); // µs of this process since the minute began
+    const load = loadavg().map((x) => Math.round(x * 100) / 100);
     const win = {
       at, seconds: Math.round((at - started) / 1000),
       loop: loop.count ? { p50: ms(loop.percentile(50)), p95: ms(loop.percentile(95)), max: ms(loop.max) } : null,
       answers: [...routes.values()].reduce((s, r) => s + r.n, 0),
       routes: top,
+      // the Mac's load (1, 5, 15 minutes) on its cores, and the share of one core the board took this minute (%)
+      machine: { load, cores },
+      cpu: at > started ? Math.round(((used.user + used.system) / 1000 / (at - started)) * 100) : null,
     };
     loop.reset();
     routes = new Map();
     started = at;
+    cpuAt = cpuUsage();
     windows.push(win);
     if (windows.length > WINDOWS_KEPT) windows.shift();
     const slowLoop = win.loop && win.loop.p95 > LOOP_P95_MS;
@@ -65,6 +88,7 @@ export function createSlowWatch({ now = Date.now, log = logError, histogram = nu
       const what = [
         slowLoop ? `the event loop waited ${win.loop.p95} ms at p95 (max ${win.loop.max} ms)` : null,
         slowRoutes.length ? `answers slower than ${ROUTE_SLOW_MS / 1000} s: ${slowRoutes.map((r) => `${r.route} ${r.max} ms`).join(', ')}` : null,
+        `the Mac's load ${load[0]} on ${cores} cores, the board took ${win.cpu ?? '?'}% of a core`,
       ].filter(Boolean).join('; ');
       log('server', 'slow', `The board was slow for a minute — ${what}`, JSON.stringify(win));
     }

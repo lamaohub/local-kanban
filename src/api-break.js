@@ -145,7 +145,8 @@ async function goOn(sid, c, now) {
   try {
     // person may go between a look and the typing
     r = await typing(sid, async () => {
-      if (saidLately(sid, now) || deps.queued(sid).length) return { later: true }; // the person's words answer the break
+      // the person's words answer the break — not words marked not delivered: they wait for the person, not for Claude
+      if (saidLately(sid, now) || deps.queued(sid).some((q) => !q.stuck)) return { later: true };
       const brk = await deps.breakNow(sid);
       if (!brk || brk.uuid !== c.uuid) return { gone: true }; // it is no longer the last word: someone spoke since
       if ((await deps.atPrompt(sid)) !== 'idle') return { later: true }; // busy again, or a question: the next look

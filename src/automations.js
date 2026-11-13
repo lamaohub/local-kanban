@@ -61,7 +61,7 @@ export function ruleProblem(b) {
   for (const k of wordsOf(b.kind)) if (typeof w[k] !== 'string' || !w[k].trim() || w[k].length > WORD_MAX) return `words.${k}: text`;
   if (scheduled(b.kind)) {
     const p = b.plan;
-    if (!p || typeof p !== 'object' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(String(p.at))) return 'plan.at: a time, HH:MM';
+    if (!p || typeof p !== 'object' || typeof p.at !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(p.at)) return 'plan.at: a time, HH:MM';
     if (p.day !== undefined && p.day !== null && !(Number.isInteger(p.day) && p.day >= 0 && p.day <= 6)) return 'plan.day: a day of the week, 0…6, or null for every day';
   }
   const l = b.launch;

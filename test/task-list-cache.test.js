@@ -116,3 +116,49 @@ test('each event that changes what the list shows clears it; each part of the re
   await list('/api/tasks?project=lc&all=1');
   assert.deepEqual((await list('/api/tasks?project=lc2&all=1')).json().map((t) => t.key), ['LD-1'], 'project is not a part of the key');
 });
+
+// The audit of 14.11.2026: every note of a Claude dropped every stored list — with five Claudes at work «All projects» was
+// built anew on nearly every open. A note or an edit of one task puts that task's row in place; a move that changes where
+// it stands drops the list.
+test('a note or an edit of one task patches it into the stored list, which reads as one built anew', async () => {
+  const lcId = (no) => db.prepare('SELECT id FROM tasks WHERE project_id = ? AND task_no = ?').get(pid, no).id;
+  emit('task.created', {});
+  await list('/api/tasks?project=lc&all=1');
+  await list('/api/tasks?all=1&newest=5');
+  // written past the routes and the events: a list built anew would show it
+  db.prepare("UPDATE tasks SET title = 'unseen' WHERE id = ?").run(lcId(5));
+  const r = await app.inject({ method: 'POST', url: '/api/tasks/LC-6/comments', payload: { body: 'a note', author: 'claude' } });
+  assert.ok(r.statusCode < 300, r.body);
+  const after = (await list('/api/tasks?project=lc&all=1')).json();
+  assert.equal(after.find((t) => t.key === 'LC-6').comments_n, 1, 'the note is not on its card');
+  assert.equal(after.find((t) => t.key === 'LC-5').title, 'task 5', 'the list was built anew for a note');
+  emit('task.updated', { id: lcId(40) }); // an edit of a task among the newest
+  assert.equal((await list('/api/tasks?all=1&newest=5')).json().length, 5);
+  // the patched answer is the very answer built anew, compressed copies too
+  const patched = (await list('/api/tasks?project=lc&all=1', { 'accept-encoding': 'gzip' })).rawPayload;
+  emit('task.updated', { id: lcId(5) });
+  const kept = (await list('/api/tasks?project=lc&all=1')).body;
+  emit('task.created', {});
+  const fresh = (await list('/api/tasks?project=lc&all=1')).body;
+  assert.equal(kept, fresh);
+  assert.equal(zlib.gunzipSync(patched).toString(), fresh.replace('"title":"unseen"', '"title":"task 5"'));
+});
+
+test('an edit that moves a task, or brings it into a list, is not patched in: that list is built anew', async () => {
+  const id = (no) => db.prepare('SELECT id FROM tasks WHERE project_id = ? AND task_no = ?').get(pid, no).id;
+  emit('task.created', {});
+  const open = (await list('/api/tasks?project=lc')).json().map((t) => t.key);
+  assert.ok(!open.includes('LC-7'), 'LC-7 is done');
+  await list('/api/tasks?project=lc&all=1');
+  const moved = await app.inject({ method: 'PATCH', url: '/api/tasks/LC-7', payload: { status: 'todo' } });
+  assert.equal(moved.statusCode, 200, moved.body);
+  assert.ok((await list('/api/tasks?project=lc')).json().some((t) => t.key === 'LC-7'), 'a task come into the open list is missing');
+  const order = (await list('/api/tasks?project=lc&all=1')).json().map((t) => t.key);
+  emit('task.created', {});
+  assert.deepEqual((await list('/api/tasks?project=lc&all=1')).json().map((t) => t.key), order, 'the column of the task moved, the list kept its place');
+  db.prepare('UPDATE tasks SET priority = 3 WHERE id = ?').run(id(3));
+  emit('task.updated', { id: id(3) });
+  const re = (await list('/api/tasks?project=lc&all=1')).json().map((t) => t.key);
+  emit('task.created', {});
+  assert.deepEqual(re, (await list('/api/tasks?project=lc&all=1')).json().map((t) => t.key), 'a new priority kept the old order');
+});

@@ -5,6 +5,8 @@ import { COLS_MAX, COLS_MIN, KEYS, REPLY_MAX, foreign, noteLook, otherBoardRefus
 import { logError } from '../db.js';
 import { scalarQuery } from '../query-params.js';
 import { createScreens } from '../term-screens.js';
+import { stoppedByPerson } from '../auto-resume.js';
+import { timed } from '../slow-watch.js';
 
 const screens = createScreens();
 
@@ -23,7 +25,7 @@ export default async function terminalRoutes(app) {
     if (cols !== null && !(Number.isInteger(cols) && cols >= COLS_MIN && cols <= COLS_MAX)) {
       return reply.code(400).send({ error: `cols: a whole number from ${COLS_MIN} to ${COLS_MAX}` });
     }
-    const term = await taskTerminal(t.id, { screen: true });
+    const term = await timed(req, 'terminal', taskTerminal(t.id, { screen: true })); // the steps of a slow answer go to its record
     if (!term) return { session: null };
     if (!foreign(term)) noteLook(term.session);
     if (term.unknown) return { session: term.session, unknown: true, ...(term.broken ? tmuxRefusal(term) : {}) };
@@ -32,7 +34,7 @@ export default async function terminalRoutes(app) {
     // open at once would otherwise lay the window out again every second, one after the other (review)
     const want = cols === null ? null : widthFor(term.session, cols);
     const lay = want !== null && !term.dead && !foreign(term) && (term.cols === null || want < term.cols || want > term.cols + 2);
-    if (lay && !(await phantomResize(term.session, want)).err) term.cols = want;
+    if (lay && !(await timed(req, 'resize', phantomResize(term.session, want))).err) term.cols = want;
     // whether Claude waits on an open question (a permission, the trust of a folder, a choice): «Claude review» says
     term.question = !term.dead && questionOpen(term.screen);
     return screens.answer(term, { seen: q.values.seen, delta: q.values.delta === '1' });
@@ -89,7 +91,11 @@ export default async function terminalRoutes(app) {
     if (!term) return reply.code(404).send({ error: 'no Claude of the board works on this task' });
     if (term.unknown) return reply.code(409).send(tmuxRefusal(term)); // whose it is cannot be told either
     if (term.other) return reply.code(409).send(otherBoardRefusal(term.other));
-    await phantomStop(term.session);
+    const stop = await phantomStop(term.session);
+    // the person's word: the automation that goes on with cut work must not bring this one back (only their Continue) —
+    // a Claude that was alive and is stopped now; closing the screen of one that had exited already (killed from outside)
+    // is not a word about going on with it
+    if (!term.dead && !stop.err) stoppedByPerson(term.session);
     return { ok: true, session: term.session };
   });
 }

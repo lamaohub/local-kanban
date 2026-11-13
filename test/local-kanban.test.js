@@ -128,6 +128,23 @@ test('start --data=~/x opens the data folder in HOME, not a folder named "~" in 
   } finally { busy.close(); }
 });
 
+// a port Node cannot listen on threw a RangeError at listen, and the person got a JSON log line with a stack
+test('start with a port out of range says so in a line, before the board opens its data; PORT says the same', async () => {
+  const data = join(tmp, 'd-port');
+  const env = { HOME: join(tmp, 'h-port'), KB_DATA_DIR: data, KB_CLAUDE_DIR: join(tmp, 'claude-port'), KB_TMUX_SOCKET: `kb-test-lk-${process.pid}`, KB_GH_BIN: join(tmp, 'no-gh') };
+  for (const port of ['99999', 'abc', '0']) {
+    const r = await runLK(['start', '--port', port], env);
+    assert.equal(r.code, 2, `${r.stdout}${r.stderr}`);
+    assert.match(r.stderr, new RegExp(`port must be a whole number from 1 to 65535 — got «${port}»`));
+    assert.doesNotMatch(r.stderr + r.stdout, /"level"|RangeError|\bat /, 'a raw log line with a stack');
+  }
+  assert.equal(existsSync(data), false, 'the board opened its data before the port was checked');
+  const r = await runLK(['start'], { ...env, PORT: '99999' });
+  assert.equal(r.code, 1, `${r.stdout}${r.stderr}`);
+  assert.match(r.stderr, /did not start: the port must be a whole number from 1 to 65535 — got «99999» \(PORT\)/);
+  assert.doesNotMatch(r.stderr + r.stdout, /"level"|RangeError/);
+});
+
 // step, the same installSkills) made it, and `local-kanban hooks install` then passed its own check
 test('local-kanban skills makes no Claude folder KB_CLAUDE_DIR names that is not there', async () => {
   const typo = join(tmp, 'no-such-claude');

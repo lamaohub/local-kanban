@@ -209,7 +209,7 @@ function card({ open = 'VV-1' } = {}) {
     termUntrusted: new Set(),
     els: {},
     $: (id) => { if (!box.els[id]) box.els[id] = { value: '', disabled: false }; return box.els[id]; },
-    commentDrafts: new Map(), autoGrow: () => {}, renderLaunchButtons: () => {},
+    commentDrafts: new Map(), autoGrow: () => {}, renderLaunchButtons: () => {}, forgetUnsent: () => {}, canRetry: () => false,
     showWorkTab: (tab) => { calls.tab = tab; }, stopTermPoll: () => {}, savedTab: () => 'comments',
   };
   vm.runInNewContext([

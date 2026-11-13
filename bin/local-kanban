@@ -276,6 +276,13 @@ if (cmd === 'start') {
     const { DATA_DIR } = await import(pathToFileURL(join(ROOT, 'src', 'config.js')).href);
     process.env.KB_DATA_DIR = DATA_DIR;
   }
+  // a port Node cannot listen on is said in a line, before the board opens its data. config.js only after the data
+  // folder above is in the environment: it reads it once, on import
+  const { portProblem } = await import(pathToFileURL(join(ROOT, 'src', 'config.js')).href);
+  if (argv.some((a) => a === '--port' || a.startsWith('--port=')) && portProblem(flag('port'))) {
+    console.error(`\n  local-kanban start: ${portProblem(flag('port'))}.\n`);
+    process.exit(2);
+  }
   // the server prints its address and backup path itself; the data directory is resolved by config.js
   await import(pathToFileURL(join(ROOT, 'src', 'server.js')).href);
   // the wizard follows below and must not run under `start`; the listening socket holds the process
@@ -349,7 +356,7 @@ module.exports = {
       env: {
 ${env}
       },
-      max_memory_restart: '200M',
+      max_memory_restart: '512M',
       merge_logs: true,
     },
   ],

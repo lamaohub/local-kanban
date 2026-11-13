@@ -110,6 +110,10 @@ test('the board\'s refusals and wrong arguments come back as tool errors, and th
   assert.match(text(odd), /^the board refused \(400\)/);
   assert.equal((await mcp.call('get_task', { key: 'MC-99' })).isError, true);
   assert.match(text(await mcp.call('get_task', { key: '../x' })), /key: a task key/);
+  // a status the board does not have answered «no tasks»: nothing in that column, to the reader
+  const bogus = await mcp.call('list_tasks', { project: 'mcp', status: 'bogus' });
+  assert.equal(bogus.isError, true);
+  assert.match(text(bogus), /^status: one of backlog, todo/);
   assert.equal((await mcp.ask('tools/call', { name: 'rm_rf', arguments: {} })).error.code, -32602);
   mcp.child.stdin.write('not json\n');
   assert.match(text(await mcp.call('list_projects', {})), /^mcp /, 'a bad line stopped the server');

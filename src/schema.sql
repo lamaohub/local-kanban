@@ -308,6 +308,13 @@ CREATE TABLE IF NOT EXISTS batch_tasks (
   position    REAL NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_batch_tasks_batch ON batch_tasks(batch_id, position);
+-- When a task came into a batch of its present epic: the last task_events id at that moment. A close journalled before it
+-- is no work of the epic — a closed task put into a batch does not send the epic to Review (epicMove). No row — a task
+-- placed before this table: any close counts. A table of its own, not a column: no migration step.
+CREATE TABLE IF NOT EXISTS batch_placed (
+  task_id     INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+  event_id    INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS epics (
   task_id      INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
   portion      INTEGER NOT NULL DEFAULT 3,
@@ -317,3 +324,22 @@ CREATE TABLE IF NOT EXISTS epics (
   run          TEXT NOT NULL DEFAULT '{}',
   launch       TEXT NOT NULL DEFAULT '{}'
 );
+-- Words for a busy Claude wait in the board's queue (src/chat-queue.js), one row a message, `position` its place in its
+-- session's queue: kept here so that a restart of the board (pm2 restarts it past its memory limit) does not lose them.
+-- `images` — a JSON list of the paths of its pictures, `ids` — their attachments; `tries` — how many times the board saw
+-- them not reach Claude; `stuck` — why they are marked not delivered (NULL — they are not); `no_box_since` — since when
+-- they wait for Claude's input field to show (ms, NULL — they do not). Local-only.
+CREATE TABLE IF NOT EXISTS chat_queue (
+  id            TEXT PRIMARY KEY,
+  session_id    TEXT NOT NULL,
+  task_id       INTEGER NOT NULL,
+  text          TEXT NOT NULL,
+  images        TEXT NOT NULL DEFAULT '[]',
+  ids           TEXT NOT NULL DEFAULT '[]',
+  at            INTEGER NOT NULL,
+  tries         INTEGER NOT NULL DEFAULT 0,
+  stuck         TEXT,
+  no_box_since  INTEGER,
+  position      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_queue_session ON chat_queue(session_id, position);

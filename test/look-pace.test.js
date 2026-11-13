@@ -19,10 +19,10 @@ test('a quick answer keeps the usual pause, a slow one rests twice its time, nev
 test('the time is reported whatever the look ended with', async () => {
   let took = null;
   assert.equal(await timed(async () => 5, (ms) => { took = ms; }), 5);
-  assert.ok(took >= 0);
+  assert.ok(typeof took === 'number' && took >= 0);
   took = null;
   await assert.rejects(timed(async () => { throw new Error('refused'); }, (ms) => { took = ms; }));
-  assert.ok(took >= 0, 'a failed look set no rest: the next came at once');
+  assert.ok(typeof took === 'number' && took >= 0, 'a failed look set no rest: the next came at once');
 });
 
 test('the terminal of a card, «Claude now» and the live chat rest after a slow answer', () => {
@@ -31,4 +31,7 @@ test('the terminal of a card, «Claude now» and the live chat rest after a slow
   const chat = read('chat.js');
   assert.match(chat, /c\.restUntil = Date\.now\(\) \+ lookPause\(0, ms\)/);
   assert.match(chat, /if \(c\.session === session\) c\.refreshLive\(\);/, 'the stream of events asks the chat past its rest');
+  // past the rest, 20 looks a minute with answers of 3 s; only opening the card asks at once
+  assert.match(read('sse.js'), /ev\.type === 'task\.work'[^\n]*refreshWork\(state\.drawerKey, \{ live: true \}\)/, '`task.work` asks the card chat past its rest');
+  assert.match(read('drawer.js'), /else if \(live\) cardChat\.refreshLive\(\); else cardChat\.refresh\(\);/);
 });

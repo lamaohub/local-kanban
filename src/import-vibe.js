@@ -170,18 +170,32 @@ export function importVibe(buf, { dry = false, total, pictures = PICTURES_MAX } 
   const unknownStatus = new Set();
   const run = db.transaction(() => {
     const projectId = new Map();
+    const makeProject = (name) => {
+      const base = slugOf(name);
+      let slug = base;
+      for (let n = 2; db.prepare('SELECT 1 FROM projects WHERE slug = ?').get(slug); n++) slug = `${base}-${n}`;
+      if (dry) return { id: null, slug };
+      const id = db.prepare("INSERT INTO projects (slug, name, prefix, category, description) VALUES (?, ?, ?, 'Local', ?)")
+        .run(slug, name, makePrefix(slug), 'Imported from vibe-kanban').lastInsertRowid;
+      return { id, slug };
+    };
+    /* A project of that name the person has archived is not where new tasks go: they would be on neither the board nor
+       its search, and the answer would say «created». Its new tasks get a new project; when it gets none (an archive
+       imported again), nothing is made, and the answer says the project is archived. */
+    const archivedOnly = new Map(); // lower-cased name → its entry in out.projects
     for (const name of projectNames.length ? projectNames : ['vibe-kanban']) {
-      let p = db.prepare('SELECT id, slug FROM projects WHERE name = ? COLLATE NOCASE ORDER BY archived, id LIMIT 1').get(name);
+      let p = db.prepare('SELECT id, slug FROM projects WHERE name = ? COLLATE NOCASE AND archived = 0 ORDER BY id LIMIT 1').get(name);
       let created = false;
       if (!p) {
-        const base = slugOf(name);
-        let slug = base;
-        for (let n = 2; db.prepare('SELECT 1 FROM projects WHERE slug = ?').get(slug); n++) slug = `${base}-${n}`;
-        if (!dry) {
-          const id = db.prepare("INSERT INTO projects (slug, name, prefix, category, description) VALUES (?, ?, ?, 'Local', ?)")
-            .run(slug, name, makePrefix(slug), 'Imported from vibe-kanban').lastInsertRowid;
-          p = { id, slug };
-        } else p = { id: null, slug };
+        const hidden = db.prepare('SELECT slug FROM projects WHERE name = ? COLLATE NOCASE AND archived = 1 ORDER BY id LIMIT 1').get(name);
+        if (hidden) {
+          const entry = { name, slug: hidden.slug, created: false, archived: true };
+          archivedOnly.set(name.toLowerCase(), entry);
+          projectId.set(name.toLowerCase(), entry); // a new project is made below, once a new task needs one
+          out.projects.push(entry);
+          continue;
+        }
+        p = makeProject(name);
         created = true;
       }
       projectId.set(name.toLowerCase(), p.id);
@@ -204,6 +218,14 @@ export function importVibe(buf, { dry = false, total, pictures = PICTURES_MAX } 
       if (!knownStatus && i.Status) unknownStatus.add(i.Status);
       fresh.push({ i, ext, pid, status, kept });
       out.created++;
+    }
+    for (const entry of archivedOnly.values()) {
+      const mine = fresh.filter((f) => f.pid === entry);
+      if (!mine.length) continue;
+      const made = makeProject(entry.name);
+      for (const f of mine) f.pid = made.id;
+      Object.assign(entry, { slug: made.slug, created: true });
+      delete entry.archived;
     }
     const freshExt = new Set(fresh.map((f) => f.ext));
     const notes = new Map(); // ext → lines added under the description

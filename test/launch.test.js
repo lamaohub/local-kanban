@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import Fastify from 'fastify';
 import { boardOnly, effortOf, startEffort, checksOnly, launchPick, withBoardAddress } from '../public/js/launch-rules.js';
+import { osascriptWorks, osascriptReads, parseAppleString, readAppleString } from './apple-string.js';
 import { bin as fullPath } from '../src/bin-path.js'; // `bin` is a folder in some tests here
 
 const KB = fileURLToPath(new URL('../bin/kb', import.meta.url));
@@ -69,18 +70,26 @@ test('the terminal line starts claude in the project folder with exactly the pro
   try {
     for (const text of NASTY) {
       const out = execFileSync('/bin/sh', ['-c', launch.terminalCommand({ text, folder })], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } }).toString();
-      assert.equal(out, `${folder}\n[${text}]`);
+      assert.equal(out, `${folder}\n[--][${text}]`);
+    }
+    // a prompt starting with "-" is no option of Claude's: after "--", and one space in front of it for the flags Claude
+    // Code reads off its raw argv (a whole word, or its start)
+    for (const text of ['- fix the flaky test', '--dangerously-skip-permissions', '--resume=x']) {
+      const out = execFileSync('/bin/sh', ['-c', launch.terminalCommand({ text, folder })], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } }).toString();
+      assert.equal(out, `${folder}\n[--][ ${text}]`);
     }
     const resumed = execFileSync('/bin/sh', ['-c', launch.terminalCommand({ resume: '44444444-4444-4444-8444-444444444444', folder })], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } }).toString();
     assert.equal(resumed, `${folder}\n[--resume][44444444-4444-4444-8444-444444444444]`);
   } finally { rmSync(bin, { recursive: true, force: true }); }
 });
 
-test('an AppleScript string reads back as the same text in a real osascript', { skip: process.platform !== 'darwin' && 'osascript is macOS only' }, () => {
+test('an AppleScript string reads back as the same text — by the rules of the literal, and in a real osascript where it answers', () => {
   for (const s of NASTY) {
-    const out = execFileSync(fullPath('osascript'), ['-e', `return ${launch.appleString(s)}`]).toString();
-    // osascript ends its answer with one newline of its own; everything before it is the text, byte for byte
-    assert.equal(out.replace(/\n$/, ''), s);
+    const literal = launch.appleString(s);
+    assert.equal(parseAppleString(literal), s);
+    // osascript ends its answer with one newline of its own; everything before it is the text, byte for byte. A sandbox
+    // can leave osascript answering nothing: then the rules above are the check, not a red line for the machine
+    if (osascriptWorks()) assert.equal(osascriptReads(literal), s, 'the reader of literals and osascript disagree');
   }
 });
 
@@ -201,15 +210,15 @@ test('Claude in the Terminal is given this board\'s address, through a real shel
     // .zshrc does not reach Claude (it would print SIMPLE|)
     const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, KB_URL: 'http://127.0.0.1:3100', CLAUDE_CODE_SIMPLE: '1' };
     const run = (line) => execFileSync('/bin/sh', ['-c', line], { env }).toString();
-    assert.equal(run(launch.terminalCommand({ text: NASTY[0], folder, url })), `${url}|[${NASTY[0]}]`);
+    assert.equal(run(launch.terminalCommand({ text: NASTY[0], folder, url })), `${url}|[--][${NASTY[0]}]`);
     assert.equal(run(launch.terminalCommand({ resume: '44444444-4444-4444-8444-444444444444', folder, url })), `${url}|[--resume][44444444-4444-4444-8444-444444444444]`);
-    assert.equal(run(launch.terminalCommand({ text: 'x', folder, session: '44444444-4444-4444-8444-444444444444', url })), `${url}|[--session-id][44444444-4444-4444-8444-444444444444][x]`);
+    assert.equal(run(launch.terminalCommand({ text: 'x', folder, session: '44444444-4444-4444-8444-444444444444', url })), `${url}|[--session-id][44444444-4444-4444-8444-444444444444][--][x]`);
     if (process.platform === 'darwin') {
       // what Terminal is told to run is the same line, quotes and all
       const line = launch.terminalCommand({ text: NASTY[0], folder, url });
       const script = launch.launchSpec({ mode: 'terminal', text: NASTY[0], folder, url }, 'darwin').args[1];
       assert.equal(script, `tell application "Terminal" to do script ${launch.appleString(line)}`);
-      assert.equal(execFileSync(fullPath('osascript'), ['-e', `return ${launch.appleString(line)}`]).toString().replace(/\n$/, ''), line);
+      assert.equal(readAppleString(launch.appleString(line)), line);
     }
   } finally { rmSync(bin, { recursive: true, force: true }); }
 });

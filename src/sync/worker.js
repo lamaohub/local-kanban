@@ -95,17 +95,29 @@ export async function drain({ handler = processOp } = {}) {
   if (syncPaused()) return;
   draining = true;
   try {
+    /* The ops of one task go to GitHub in the order they were made: an op does not run while an
+       earlier op of the same task waits for its retry. Otherwise a close that failed once came back a
+       minute later, after the reopen made in between, and left the issue of a task in work closed;
+       two comments could reach the issue the other way round. Ops of other tasks never wait.
+       create_issue waits for nobody: a dependent op made before it (sync switched on later) waits
+       for it, and the two would hold each other until the attempts ran out. */
     const rows = db.prepare(`
-      SELECT * FROM sync_queue
-      WHERE attempts < ${SYNC_MAX_ATTEMPTS} AND next_attempt_at <= datetime('now')
-      ORDER BY id LIMIT 20
+      SELECT * FROM sync_queue q
+      WHERE q.attempts < ${SYNC_MAX_ATTEMPTS} AND q.next_attempt_at <= datetime('now')
+        AND (q.task_id IS NULL OR q.op = 'create_issue' OR NOT EXISTS (
+          SELECT 1 FROM sync_queue e
+          WHERE e.task_id = q.task_id AND e.id < q.id
+            AND e.attempts < ${SYNC_MAX_ATTEMPTS} AND e.next_attempt_at > datetime('now')))
+      ORDER BY q.id LIMIT 20
     `).all();
     if (!rows.length) return;
     if (!(await checkGh())) return;
 
-    const awaitingCreate = new Set();
+    // The same rule within one pass: a task whose op failed in this pass waits; other tasks and
+    // projects go on, a single broken task never stalls the whole queue.
+    const halted = new Set();
     for (const row of rows) {
-      if (row.task_id && awaitingCreate.has(row.task_id)) continue;
+      if (row.task_id && row.op !== 'create_issue' && halted.has(row.task_id)) continue;
       try {
         await handler(row);
         db.prepare('DELETE FROM sync_queue WHERE id = ?').run(row.id);
@@ -118,7 +130,8 @@ export async function drain({ handler = processOp } = {}) {
           .run(err.permanent ? SYNC_MAX_ATTEMPTS : attempts, String(err.message).slice(0, 500), `+${delay ?? 0} seconds`, row.id);
         emit('sync.status', { error: String(err.message).slice(0, 200), op: row.op });
         logError('sync', row.op, err.message, `attempt ${attempts}, op #${row.id}${row.task_id ? `, task #${row.task_id}` : ''}`, row.id);
-        if (row.op === 'create_issue' && row.task_id) awaitingCreate.add(row.task_id);
+        // later ops of this task wait for this one — and only of this task
+        if (row.task_id) halted.add(row.task_id);
       }
     }
     const pending = db.prepare(`SELECT COUNT(*) AS n FROM sync_queue WHERE attempts < ${SYNC_MAX_ATTEMPTS}`).get().n;

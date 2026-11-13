@@ -302,7 +302,7 @@ async function mainLog(top, ref) {
 
 /** The folders where some process stands (its cwd) — one call to lsof; null when lsof did not answer. */
 async function processFolders() {
-  const r = await run(bin('lsof'), ['-n', '-P', '-a', '-d', 'cwd', '-Fn'], { timeout: 30_000, max: 64 * 1024 * 1024 });
+  const r = await run(bin('lsof', ['/usr/sbin', '/usr/bin', '/sbin']), ['-n', '-P', '-a', '-d', 'cwd', '-Fn'], { timeout: 30_000, max: 64 * 1024 * 1024 });
   // lsof exits 1 when some processes could not be read — the rest is still there; killed by the timeout, the list is partial.
   // process read «free»; and an empty list is no answer: a working lsof sees the board's own folder at least
   if (r.err && (r.err.code !== 1 || !r.out || r.err.killed || r.err.signal)) return null;

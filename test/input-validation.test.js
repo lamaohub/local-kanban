@@ -23,6 +23,9 @@ before(async () => {
   await app.register((await import('../src/routes/projects.js')).default);
   await app.register((await import('../src/routes/tasks.js')).default);
   await app.register((await import('../src/routes/horizons.js')).default);
+  await app.register((await import('../src/routes/epics.js')).default);
+  await app.register((await import('../src/routes/automations.js')).default);
+  await app.register((await import('../src/routes/profiles.js')).default);
   await app.ready();
 });
 
@@ -211,4 +214,51 @@ test('a folder with a dot or an underscore in its name gets a prefix its task ke
     assert.equal(t.statusCode, 201);
     assert.equal(await codeOf('GET', `/api/tasks/${t.json().key}`), 200);
   }
+});
+
+// The audit's fuzzer (5612 requests over 29 routes): eleven 500s, all of two kinds — a moment past what a Date holds, and
+// an object whose toString is no function, which String() cannot turn into text. Each 500 wrote a line into Settings → Errors.
+test('an object String() cannot read and a moment past any date are a 400 naming the field, not a 500', async () => {
+  const odd = { toString: 1 };
+  const pid = db.prepare("SELECT id FROM projects WHERE slug='demo'").get().id;
+  db.prepare("INSERT INTO tasks (project_id, task_no, title, status, description) VALUES (?,2,'other','todo','d')").run(pid);
+  db.prepare("INSERT INTO tasks (project_id, task_no, title, status) VALUES (?,3,'epic','todo')").run(pid);
+  const batch = (await call('POST', '/api/tasks/DM-3/batches', { title: 'b' })).json().batches[0].id;
+  const words = { title: 't', tasks: 't', later: 'l', done: 'd', report: 'r', run: 'r', doTask: 'd', back: 'b', groom: 'g' };
+  const prof = (await call('POST', '/api/profiles', { name: 'fuzz' })).json();
+  const cases = [
+    ['PATCH', '/api/tasks/DM-2', { description: odd, description_base: 'd' }, 'description'],
+    ['PATCH', '/api/tasks/DM-2', { description: odd }, 'description'],
+    ['POST', '/api/tasks/DM-2/links', { key: odd, rel: 'related' }, 'key'],
+    ['POST', '/api/tasks/DM-3/epic/place', { key: 'DM-2', batch, before: odd }, 'before'],
+    ['POST', '/api/tasks/DM-3/epic/place', { key: 'DM-2', batch_name: '1', before: odd }, 'before'],
+    ['POST', '/api/automations', { project: 'demo', kind: 'schedule-check', repeat: true, words, plan: { at: odd, day: 1 } }, 'plan.at'],
+    ['POST', '/api/profiles', { name: 'p', model: odd }, 'model'],
+    ['PATCH', `/api/profiles/${prof.id}`, { model: odd }, 'model'],
+    ['PATCH', `/api/profiles/${prof.id}`, { effort: odd }, 'effort'],
+  ];
+  for (const [method, url, payload, field] of cases) {
+    const r = await call(method, url, payload);
+    assert.equal(r.statusCode, 400, `${method} ${url} ${JSON.stringify(Object.keys(payload))}: ${r.body}`);
+    assert.match(r.json().error, new RegExp(`^${field.replace('.', '\\.')}:`), r.body);
+  }
+  for (const since of ['99999999999999999999', '1e300', '8640000000000001']) {
+    const r = await call('GET', `/api/automations/summary?since=${since}`);
+    assert.equal(r.statusCode, 400, `since=${since}: ${r.body}`);
+    assert.match(r.json().error, /^since:/);
+  }
+  assert.equal((await call('GET', '/api/automations/summary?since=8640000000000000')).statusCode, 200, 'the last moment a Date holds is a moment');
+  assert.equal(db.prepare("SELECT description FROM tasks WHERE task_no = 2").get().description, 'd', 'a refused edit changed the text');
+});
+
+// a status the board does not have matched no task and answered [] — «nothing in that column» to kb ls and kb-mcp
+test('the list of tasks refuses a status the board does not have, and an empty one is still no filter', async () => {
+  const r = await call('GET', '/api/tasks?project=demo&status=bogus');
+  assert.equal(r.statusCode, 400, r.body);
+  assert.match(r.json().error, /^status: one of backlog, todo/);
+  assert.equal(r.json().field, 'status');
+  assert.equal((await call('GET', '/api/tasks?project=demo&status=todo')).statusCode, 200);
+  const all = await call('GET', '/api/tasks?project=demo&status=');
+  assert.equal(all.statusCode, 200);
+  assert.ok(all.json().length > 0);
 });

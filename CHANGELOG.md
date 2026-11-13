@@ -8,6 +8,41 @@ version it goes out as and opens an empty one again. Released sections are histo
 
 ## [Unreleased]
 
+## [2.0.0-beta.21]
+
+### Fixed
+
+- Words queued for a busy Claude survive a restart of the board, and the chat no longer rereads its transcripts from scratch when more than 12 are open; the pm2 memory limit of the example config and the setup wizard is 512M.
+- Chat messages waiting in the queue are no longer silently dropped when Claude's input field does not show: they wait for it, and after a few minutes stay in the queue marked «not delivered» with «Send again» and «Back to the field».
+- Stop on a card's Terminal tab now holds: the «go on with interrupted work» automation no longer brings back a session the person stopped, until they press Continue.
+- A task text starting with «-» now reaches Claude as its prompt instead of being read as a command-line option.
+- A chat message with a row of «─» in it (a piece of a table or program output) now reaches Claude instead of being refused as «did not show in the input field».
+- Stands no longer read as «unknown» when the board's PATH lacks /usr/sbin (lsof is found there). The test suite no longer leaves temporary folders behind or depends on the machine it runs on.
+- GitHub sync keeps the order of a task's changes: a task taken back from Done no longer ends up with a closed issue, and comments reach the issue in the order they were written. «Could not close the issue» on an issue that did get closed no longer counts as a failure, and a `gh` call still running when the board stops is stopped with it.
+- `kb ls` with a mistyped status now fails with an error instead of printing «empty», and accepts `-s` before the project name.
+- Malformed values in a few requests are refused with a clear message instead of an internal error; pressing «another attempt» twice no longer shows a raw git error; checking a project's services no longer starts a pm2 daemon on a machine where none runs; `local-kanban start --port` with an impossible port says so in one line.
+- Importing from vibe-kanban no longer puts tasks into an archived project of the same name, where they were invisible — they go into a new project instead.
+- An epic put together from tasks that were already accepted no longer jumps to Review by itself; the board hands it in only after work on its batches.
+- With «Ready to ship» on, a task that was worked on can no longer reach Review past that column by way of Cancelled or Done.
+- A picture of a card whose upload was cut off (no connection, the board restarting) is no longer lost: it stays on the card marked «not sent · retry» and goes on a click, also after the card is closed and opened again. Before, a new task's picture looked attached while it was not, and its × failed.
+- On a phone the journal in «Settings → Errors» is readable: the time and the source make the first line of a row, the message takes the whole width under them, and the mark «recovered on retry» no longer runs past the window's edge.
+- Pasting a picture no longer attaches it and shows «only PNG, JPEG, WebP and GIF» over it: a clipboard that carries one picture in two kinds sends only the kind the board takes, and the refusal comes only when none of them is one.
+- The terminal of a check no longer folds away in «Claude now → Terminals» the moment its report closes it: a check in Done whose Claude waits at its prompt stays in sight, as a report in Review does.
+- When a turn of Claude's words ends, the words already read no longer rise into place again: only the bar of the finished turn fades in above them.
+- A card no longer says «waits for you» while Claude waits for a helper it started at the head of a long turn, once the person comes back within two hours of that turn's end: the board stopped reading back too early.
+- The open card of a task in work now rests after a slow answer too: each write of its Claude's transcript asked the card's chat at once, so with answers of 3 s it asked 20 times a minute; now 7.
+- Words typed to the terminal or the chat of a check its report moved to Done now really take it back to In progress. Since 2.0.0-beta.19 only the move knew Done: the terminal stopped the words before it, so Claude got them, the card stayed in Done and the next report was dropped as a repeat.
+
+### Changed
+
+- With many tabs open and several Claudes at work, the project list and the «All projects» board are no longer rebuilt for every note.
+- The «on main» marks no longer rerun git across every repository on each 30 s refresh, and a hidden tab stops asking.
+- The database's write-ahead log is trimmed after large writes, and removing old backups also removes the -wal/-shm files left next to them.
+
+### Added
+
+- The «board was slow» record now says the Mac's load, the board's own CPU share, and which step the slowest chat and terminal answers waited on.
+
 ## [2.0.0-beta.20]
 
 ### Changed

@@ -1,5 +1,5 @@
-import { gateOfProject, labelDodges, skipsReady, workedSince } from '../ready-gate.js';
-import { batchesOf, boardMovedLast, epicMove, epicOf, epicSummaries, epicView, markMoved, planMeta } from '../epics.js';
+import { SIDE_DOORS, gateOfProject, labelDodges, skipsReady, workedSince } from '../ready-gate.js';
+import { batchesOf, boardMovedLast, closedSincePlaced, epicMove, epicOf, epicSummaries, epicView, markMoved, planMeta } from '../epics.js';
 import { execFile } from 'node:child_process';
 import { writeFileSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -252,7 +252,7 @@ function planPatch(t, b, sid = null, { undone = false, epic = false } = {}) {
     }
     // a check has nothing to ship, and words undone only put back what they moved. The labels the task HAD: one given in this
     // very request frees nothing
-    if (!undone && !epic && !isCheck(t) && !isManual(t.labels) && skipsReady(t.status, b.status, t.status === 'prep' && b.status === 'review' && workedSince(t.id)) && gateOfProject(t.project_id)) {
+    if (!undone && !epic && !isCheck(t) && !isManual(t.labels) && skipsReady(t.status, b.status, SIDE_DOORS.includes(t.status) && b.status === 'review' && workedSince(t.id)) && gateOfProject(t.project_id)) {
       return { code: 409, error: `${t.key} goes to ready first: this project ships on the person's word — kb mv ${t.key} ready, and deploy once they say so`, reason: 'ready-first', field: 'status' };
     }
     updates.push('status = ?'); values.push(b.status);
@@ -324,7 +324,7 @@ export function followEpic(epicId) {
   const epic = resolveTask(String(epicId));
   if (!epic) return;
   const subs = db.prepare('SELECT t.status FROM batch_tasks bt JOIN epic_batches b ON b.id = bt.batch_id JOIN tasks t ON t.id = bt.task_id WHERE b.epic_id = ?').all(epicId).map((r) => r.status);
-  const to = epicMove(epic.status, subs, boardMovedLast(epicId));
+  const to = epicMove(epic.status, subs, boardMovedLast(epicId), closedSincePlaced(epicId));
   if (to) {
     const b = { status: to };
     const plan = planPatch(epic, b, null, { epic: true });
@@ -347,12 +347,15 @@ export function moveLaunched(tasks, sid, via) {
   return moveFrom(tasks, ['backlog', 'todo'], 'prep', sid, via);
 }
 
+export const wordsMoveFrom = (t) => ({ prep: ['backlog', 'todo'], doing: isCheck(t) ? ['review', 'done'] : ['review'] });
+
 export function moveTyped(t, sid) {
   if (isCheck(t) && openCheck(t.project_id, t.id)) return { prep: [], doing: [] };
   const before = resolveTask(String(t.id));
-  const prep = moveFrom([t], ['backlog', 'todo'], 'prep', sid, null, 'typed');
+  const from = wordsMoveFrom(t);
+  const prep = moveFrom([t], from.prep, 'prep', sid, null, 'typed');
   // again, as words to a report in Review were: left in Done, Claude worked unseen and its next report was a silent retry
-  const doing = moveFrom([t], isCheck(t) ? ['review', 'done'] : ['review'], 'doing', sid, null, 'typed');
+  const doing = moveFrom([t], from.doing, 'doing', sid, null, 'typed');
   if (doing.length && sid) {
     const print = treePrint(worktreeOf(t.id)?.path || db.prepare('SELECT path FROM projects WHERE id = ?').get(t.project_id)?.path);
     holdTyped(t.id, { sid, event: lastEvent(t.id).id, at: Date.now(), seconds: before.work_seconds, truncated: before.work_truncated, print });
@@ -562,14 +565,18 @@ export const NEWEST_MAX = 100;
 let shownCache = null; // the store of the last board made — tests read its size
 export const listCacheSize = () => shownCache?.size ?? 0;
 
+const LIST_PATCHED = new Set(['task.comment', 'task.updated']);
+const listJson = (entry) => `[${entry.parts.join(',')}]`;
+const listOrder = (t) => `${t.status} ${t.priority} ${t.position} ${t.project}`;
+
 /** A stored list, compressed the way the browser takes it — once per encoding (compressAnswer then leaves it be). */
 async function sendList(req, reply, entry) {
   reply.type('application/json; charset=utf-8');
   const enc = pickEncoding(req.headers['accept-encoding']);
-  if (!enc || entry.json.length < COMPRESS_MIN) return reply.send(entry.json);
+  if (!enc || entry.size < COMPRESS_MIN) return reply.send(listJson(entry));
   let packed = entry.packed.get(enc);
   if (!packed) {
-    packed = compressBody(Buffer.from(entry.json), enc);
+    packed = compressBody(Buffer.from(listJson(entry)), enc);
     entry.packed.set(enc, packed);
     packed.catch(() => entry.packed.delete(enc));
   }
@@ -580,16 +587,86 @@ async function sendList(req, reply, entry) {
   return reply.send(body);
 }
 
+/** The rows of the list of tasks for a WHERE of `t`/`p` — the tasks as `listShape` gives them, with `epic` and `linked_ids`. */
+function listRows(where, args, order) {
+  const sql = `
+    SELECT t.id, t.project_id, t.task_no, t.title, substr(t.description, 1, 180) AS description,
+      t.status, t.priority, t.blocked, t.blocked_reason, t.position, t.pinned,
+      t.work_seconds, t.work_started_at, t.work_truncated,
+      t.gh_issue_number, t.gh_issue_url, t.updated_at, t.labels,
+      p.slug AS project, (p.prefix || '-' || t.task_no) AS key,
+      (SELECT COUNT(*) FROM task_comments c WHERE c.task_id = t.id) AS comments_n,
+      (SELECT COUNT(*) FROM task_attachments a WHERE a.task_id = t.id AND a.file != '') AS attachments_n,
+      r.number AS pr_number, r.state AS pr_state, r.url AS pr_url
+    FROM tasks t JOIN projects p ON p.id = t.project_id LEFT JOIN task_prs r ON r.task_id = t.id WHERE 1=1${where}
+    ${order}`;
+  const list = db.prepare(sql).all(...args).map(listShape);
+  const sums = epicSummaries(list.map((t) => t.id));
+  for (const t of list) t.epic = sums.get(t.id) || null;
+  const linkMap = {};
+  const linkRows = list.length
+    ? db.prepare(`WITH shown(id) AS (SELECT value FROM json_each(?))
+                  SELECT task_id, linked_task_id FROM task_links
+                  WHERE task_id IN shown OR linked_task_id IN shown`).all(JSON.stringify(list.map((t) => t.id)))
+    : [];
+  for (const { task_id, linked_task_id } of linkRows) {
+    (linkMap[task_id] ||= []).push(linked_task_id);
+    (linkMap[linked_task_id] ||= []).push(task_id);
+  }
+  for (const t of list) t.linked_ids = linkMap[t.id] || [];
+  return list;
+}
+
+/** Put the new row of task `id` into every stored list that holds it, where its place holds; drop a list it would join or
+    leave or move in. `rowOf` — the task as the list shows it, with its project's id and archived mark (null — no such task). */
+export function patchLists(cache, id, rowOf) {
+  let got;
+  const row = () => (got === undefined ? (got = rowOf(id)) : got);
+  for (const [key, e] of cache) {
+    const i = e.index.get(id);
+    if (i === undefined) {
+      // the newest tasks of any status are the newest by number: an edit brings no other task into them
+      if ((e.newest && !e.byStatus) || !row() || !e.fits(row())) continue; // not in it and not coming in: nothing to do
+      cache.delete(key);
+      continue;
+    }
+    const r = row();
+    const was = JSON.parse(e.parts[i]);
+    // the newest are ordered by number, every other list by column, priority and place
+    if (!r || !e.fits(r) || (!e.newest && listOrder(r.task) !== listOrder(was))) { cache.delete(key); continue; }
+    const part = JSON.stringify(r.task);
+    if (part === e.parts[i]) continue;
+    e.size += part.length - e.parts[i].length;
+    e.parts[i] = part;
+    e.packed = new Map();
+  }
+}
+
 export default async function taskRoutes(app) {
-  const listCache = new Map(); // `${project} ${status} ${all} ${newest}` → {at, json, packed: Map(enc → Promise<Buffer>)}
+  const listCache = new Map(); // `${project} ${status} ${all} ${newest}` → {at, parts, index, size, fits, newest, packed: Map(enc → Promise<Buffer>)}
   shownCache = listCache;
-  bus.on('event', (ev) => { if (!LIST_QUIET.has(ev?.type)) listCache.clear(); });
+  const rowOf = (id) => {
+    const meta = db.prepare('SELECT t.project_id, p.archived FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ?').get(id);
+    const [task] = meta ? listRows(' AND t.id = ?', [id], '') : [];
+    return task ? { task, project_id: meta.project_id, archived: Boolean(meta.archived) } : null;
+  };
+  bus.on('event', (ev) => {
+    if (LIST_QUIET.has(ev?.type)) return;
+    const id = Number(ev?.type === 'task.comment' ? ev.data?.task_id : ev?.data?.id);
+    if (LIST_PATCHED.has(ev?.type) && Number.isInteger(id)) {
+      try { patchLists(listCache, id, rowOf); return; } catch { /* the lists are built anew below */ }
+    }
+    listCache.clear();
+  });
   app.addContentTypeParser(/^image\//, { parseAs: 'buffer', bodyLimit: IMAGE_MAX_BYTES }, (req, body, done) => done(null, body));
 
   app.get('/api/tasks', async (req, reply) => {
     const parsed = scalarQuery(req.query, ['project', 'status', 'all', 'q', 'limit', 'newest']);
     if (parsed.error) return reply.code(400).send({ error: parsed.error });
     const { project, status, all, q, limit } = parsed.values;
+    // a status the board does not have matched no task and answered an empty list: «nothing in that column» to a reader.
+    // An empty one stays «no filter», as it always was
+    if (status && !STATUSES.includes(status)) return reply.code(400).send({ error: `status: one of ${STATUSES.join(', ')}`, field: 'status' });
     // every task of the board for them)
     const newest = parsed.values.newest === undefined ? null : Number(parsed.values.newest);
     if (newest !== null && !(Number.isInteger(newest) && newest >= 1 && newest <= NEWEST_MAX)) {
@@ -618,34 +695,14 @@ export default async function taskRoutes(app) {
       where += ' AND t.id IN (SELECT value FROM json_each(?))';
       args.push(JSON.stringify(found));
     }
-    const sql = `
-      SELECT t.id, t.project_id, t.task_no, t.title, substr(t.description, 1, 180) AS description,
-        t.status, t.priority, t.blocked, t.blocked_reason, t.position, t.pinned,
-        t.work_seconds, t.work_started_at, t.work_truncated,
-        t.gh_issue_number, t.gh_issue_url, t.updated_at, t.labels,
-        p.slug AS project, (p.prefix || '-' || t.task_no) AS key,
-        (SELECT COUNT(*) FROM task_comments c WHERE c.task_id = t.id) AS comments_n,
-        (SELECT COUNT(*) FROM task_attachments a WHERE a.task_id = t.id AND a.file != '') AS attachments_n,
-        r.number AS pr_number, r.state AS pr_state, r.url AS pr_url
-      FROM tasks t JOIN projects p ON p.id = t.project_id LEFT JOIN task_prs r ON r.task_id = t.id WHERE 1=1${where}
-      ${newest === null ? 'ORDER BY t.status, t.priority DESC, t.position, t.id' : `ORDER BY t.id DESC LIMIT ${newest}`}`;
-    const list = db.prepare(sql).all(...args).map(listShape);
-    const sums = epicSummaries(list.map((t) => t.id));
-    for (const t of list) t.epic = sums.get(t.id) || null;
-    const linkMap = {};
-    const linkRows = list.length
-      ? db.prepare(`WITH shown(id) AS (SELECT value FROM json_each(?))
-                    SELECT task_id, linked_task_id FROM task_links
-                    WHERE task_id IN shown OR linked_task_id IN shown`).all(JSON.stringify(list.map((t) => t.id)))
-      : [];
-    for (const { task_id, linked_task_id } of linkRows) {
-      (linkMap[task_id] ||= []).push(linked_task_id);
-      (linkMap[linked_task_id] ||= []).push(task_id);
-    }
-    for (const t of list) t.linked_ids = linkMap[t.id] || [];
+    const list = listRows(where, args, newest === null ? 'ORDER BY t.status, t.priority DESC, t.position, t.id' : `ORDER BY t.id DESC LIMIT ${newest}`);
     if (!key) return list;
-    // built and stored in one go, with no await in between: an event that comes later clears what is stored
-    const entry = { at: Date.now(), json: JSON.stringify(list), packed: new Map() };
+    // built and stored in one go, with no await in between: an event that comes later patches or clears what is stored
+    const parts = list.map((t) => JSON.stringify(t));
+    const fits = (r) => (p ? r.project_id === p.id : !r.archived)
+      && (status ? r.task.status === status : all || newest !== null || !['done', 'cancelled', 'backlog'].includes(r.task.status)); // the WHERE above
+    const entry = { at: Date.now(), parts, index: new Map(list.map((t, i) => [t.id, i])), size: parts.reduce((n, x) => n + x.length + 1, 1),
+      fits, newest: newest !== null, byStatus: Boolean(status), packed: new Map() };
     listCache.set(key, entry);
     while (listCache.size > LIST_KEEP) listCache.delete(listCache.keys().next().value);
     return sendList(req, reply, entry);
@@ -765,6 +822,9 @@ export default async function taskRoutes(app) {
     // Claude, another tab — the card's text would erase it silently: the description is left as it is, the rest of the
     // edit goes in, and the answer says so (`description_conflict`); the card asks the person which one to keep
     if (base !== undefined && typeof base !== 'string') return reply.code(400).send({ error: 'description_base: the description the edit started from' });
+    // the type before String() below: an object whose toString is not a function threw there, a 500 instead of a 400
+    const badDesc = badText(b.description, 'description');
+    if (badDesc) return reply.code(400).send({ error: badDesc, field: 'description' });
     const conflict = base !== undefined && b.description !== undefined && t.description !== base && t.description !== String(b.description ?? '');
     if (conflict) delete b.description;
     const flag = conflict ? { description_conflict: true } : {};
@@ -903,6 +963,7 @@ export default async function taskRoutes(app) {
 
   app.post('/api/tasks/:id/links', (req, reply) => {
     const t = taskOr404(req, reply); if (!t) return reply;
+    if (req.body?.key && badText(req.body.key, 'key')) return reply.code(400).send({ error: 'key: the key of the task to link to', field: 'key' });
     const other = req.body?.key
       ? taskOr404(req, reply, req.body.key, 'the task to link to was not found')
       : (reply.code(404).send({ error: 'the task to link to was not found' }), null);

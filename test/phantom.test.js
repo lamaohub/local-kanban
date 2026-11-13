@@ -100,7 +100,12 @@ after(async () => {
   for (const d of [tmp, folder && join(folder, '..'), plain, other]) if (d) rmSync(d, { recursive: true, force: true });
 });
 
-const entries = () => (existsSync(fakeLog) ? readFileSync(fakeLog, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+// Only whole lines: the stand-in appends a line while this reads, and a long one (a reply as long as the card allows)
+// can be read half-written — its JSON cut in the middle failed a run on Linux under load. Its rest comes in the next read
+const entries = () => {
+  const text = existsSync(fakeLog) ? readFileSync(fakeLog, 'utf8') : '';
+  return text.slice(0, text.lastIndexOf('\n') + 1).split('\n').filter(Boolean).map((l) => JSON.parse(l));
+};
 // eight copies of this file side by side (load ~20); a wait that comes true returns at once all the same
 async function until(check, what, ms = 15000, seen = () => undefined) {
   const end = Date.now() + ms;
@@ -166,6 +171,17 @@ test('a tmux argument ending in ";" is read back whole, and only the separators 
   assert.equal(phantom.tmuxArg('plain'), 'plain');
   const argv = phantom.tmuxArgv([['a', 'b;'], ['c']]);
   assert.deepEqual(argv.slice(2), ['a', 'b\\;', ';', 'c']);
+});
+
+// A prompt starting with "-" was the last word of Claude's command line as it was: "- fix…" ended in «unknown option», and
+// a prompt that is an option would have turned it on. It goes after "--", with a space in front of a leading "-".
+test('a prompt starting with "-" reaches Claude as its prompt, never as an option', () => {
+  for (const text of ['--dangerously-skip-permissions', '- fix the flaky test']) {
+    const spec = phantom.phantomSpec({ sid: '55555555-5555-4555-8555-555555555555', name: 'ODD-1', text, folder: tmp, port: 3100, read: () => ({ settings: {} }) });
+    assert.deepEqual(spec.args.slice(-4), ['--session-id', '55555555-5555-4555-8555-555555555555', '--', ` ${text}`]);
+  }
+  const plainSpec = phantom.phantomSpec({ sid: '55555555-5555-4555-8555-555555555555', name: 'ODD-1', text: 'Do ODD-1', folder: tmp, port: 3100, read: () => ({ settings: {} }) });
+  assert.deepEqual(plainSpec.args.slice(-2), ['--', 'Do ODD-1'], 'a plain prompt went changed');
 });
 
 test('the new Claude gets the environment of a terminal, not of the board process', () => {
@@ -266,7 +282,7 @@ test('▶ starts Claude in the background at once: the prompt, the folder and th
   const hooked = start.argv[0] === '--settings';
   if (hooked) assert.equal(JSON.parse(readFileSync(start.argv[1], 'utf8')).hooks.PermissionRequest[0].matcher, 'AskUserQuestion');
   assert.ok(!start.argv.join(' ').includes('kb hook permission'), 'the hook\'s text is on the command line of Claude again');
-  assert.deepEqual(start.argv.slice(hooked ? 2 : 0), ['--allowedTools', ...phantom.BOARD_ALLOWED, '--permission-mode', 'acceptEdits', '--name', 'ODD-1 +1', '--session-id', sid, NASTY]);
+  assert.deepEqual(start.argv.slice(hooked ? 2 : 0), ['--allowedTools', ...phantom.BOARD_ALLOWED, '--permission-mode', 'acceptEdits', '--name', 'ODD-1 +1', '--session-id', sid, '--', NASTY]);
   // the board's bookkeeping goes without asking; the person's word (done, cancel, rm) does not
   assert.ok(phantom.BOARD_ALLOWED.includes('Bash(kb review *)') && phantom.BOARD_ALLOWED.includes('Bash(kb ls)'));
   assert.ok(!phantom.BOARD_ALLOWED.some((r) => /^Bash\(kb (done|cancel|rm)\b/.test(r)), 'done, cancel or rm went without asking');
@@ -708,6 +724,23 @@ test('words typed to the terminal of a task back in To do move it to Preparation
   assert.deepEqual((await inject('POST', '/api/tasks/AGN-1/terminal', { text: 'by hand in Review' })).json(), { ok: true, prep: [], doing: [] });
   assert.equal(status(), 'review', 'a manual task in Review went to a column of Claude');
   assert.equal((await inject('DELETE', '/api/tasks/AGN-1/terminal')).statusCode, 200);
+});
+
+test('words typed to the terminal of a check its report closed take it back to doing, and its next report closes it', { skip }, async () => {
+  const pid = db.prepare("INSERT INTO projects (slug, prefix, name, next_task_no, path) VALUES ('chk', 'CHK', 'Check', 2, ?)").run(plain).lastInsertRowid;
+  db.prepare("INSERT INTO tasks (project_id, task_no, title, status, labels) VALUES (?, 1, 'Check', 'todo', '[\"check\"]')").run(pid);
+  const s = await launchOn('chk', ['CHK-1']);
+  const status = () => db.prepare('SELECT status FROM tasks WHERE project_id = ? AND task_no = 1').get(pid).status;
+  const as = (st) => app.inject({ method: 'PATCH', url: '/api/tasks/CHK-1', payload: { status: st }, headers: { 'x-claude-session': s } });
+  for (const st of ['prep', 'doing', 'review']) assert.equal((await as(st)).statusCode, 200);
+  assert.equal(status(), 'done', 'its report did not close the check');
+  assert.deepEqual((await inject('POST', '/api/tasks/CHK-1/terminal', { key: 'Enter' })).json(), { ok: true, prep: [], doing: [] });
+  assert.equal(status(), 'done', 'a key alone opened the check');
+  assert.deepEqual((await inject('POST', '/api/tasks/CHK-1/terminal', { text: 'check one more thing', key: 'Enter' })).json(), { ok: true, prep: [], doing: ['CHK-1'] });
+  assert.equal(status(), 'doing', 'words typed to the closed check left it in Done');
+  assert.equal((await as('review')).statusCode, 200);
+  assert.equal(status(), 'done', 'the next report did not close it again');
+  assert.equal((await inject('DELETE', '/api/tasks/CHK-1/terminal')).statusCode, 200);
 });
 
 test('words typed after a hand-in, about the next task, leave the handed-in task in Review', { skip }, async () => {

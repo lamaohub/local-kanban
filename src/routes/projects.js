@@ -7,10 +7,10 @@ import { execFile } from 'node:child_process';
 import { join, basename, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { db, DATA_DIR, genPrefix, usedPrefixes, makePrefix, kvGet, kvSet, logError, enqueue } from '../db.js';
-import { localRoot, panelUrl, panelInfo } from '../config.js';
-import { emit } from '../bus.js';
+import { localRoot, panelUrl, panelInfo, pm2Home } from '../config.js';
+import { bus, emit } from '../bus.js';
 import { forgetRepoBase } from '../repo-base.js';
-import { parsePm2Services, serializePm2Services } from '../pm2-services.js';
+import { parsePm2Services, pm2DaemonUp, serializePm2Services } from '../pm2-services.js';
 import { GENERIC_DEPLOY_SKILL, SKILL_NAME_RE, resolveSkillPath, skillInfo } from '../skills.js';
 import { snapshotFile } from '../file-snapshot.js';
 import { closeFinishedTerminals } from '../phantom.js';
@@ -153,6 +153,8 @@ async function remoteStats() {
 
 function localPm2Stats() {
   return new Promise((resolve, reject) => {
+    // `pm2 jlist` with no daemon running starts one: nothing runs under pm2 here, so there is nothing to ask it
+    if (!pm2DaemonUp(pm2Home())) return reject(new Error('no status source: pm2 runs no daemon on this machine and KB_PANEL_URL is not set'));
     execFile(bin('pm2'), ['jlist'], { timeout: 8000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
       if (err) {
         return reject(new Error(err.code === 'ENOENT'
@@ -177,9 +179,25 @@ async function serviceStats() {
   return data;
 }
 
+/* The audit of 14.11.2026: every tab asks the list of projects after every move of a task, and it was counted anew each time,
+   the board's switch of Ready to ship read from kv once a project (64 queries an answer; under 10 tabs and 5 Claudes the
+   first route by its time in SQL). The answer is kept until an event that may change it — a task moved, made, deleted, a
+   project changed — and never past PROJECTS_TTL_MS, the net for a write that sends no event; the events below change no
+   figure of it. */
+const PROJECTS_QUIET = new Set(['task.work', 'task.live', 'task.comment', 'task.linked', 'task.attached', 'task.checklist',
+  'task.plan', 'task.epic', 'session.chat', 'sync.status', 'share.updated', 'automation.updated', 'limits.updated',
+  'ask.created', 'ask.removed']);
+export const PROJECTS_TTL_MS = 60_000;
+let projectsKept = null; // {at, list}
+bus.on('event', (ev) => { if (!PROJECTS_QUIET.has(ev?.type)) projectsKept = null; });
+/** A write to the projects that sends no event (their order, a launch profile deleted) forgets the kept list itself. */
+export const forgetProjects = () => { projectsKept = null; };
+
 export default async function projectRoutes(app) {
   app.get('/api/projects', () => {
-    return db.prepare(`
+    if (projectsKept && Date.now() - projectsKept.at < PROJECTS_TTL_MS) return projectsKept.list;
+    const board = gateOfBoard(); // once an answer, not once a project
+    const list = db.prepare(`
       SELECT p.*,
         SUM(CASE WHEN t.status='backlog'   THEN 1 ELSE 0 END) AS c_backlog,
         SUM(CASE WHEN t.status='todo'      THEN 1 ELSE 0 END) AS c_todo,
@@ -198,7 +216,9 @@ export default async function projectRoutes(app) {
       WHERE p.archived = 0
       GROUP BY p.id
       ORDER BY p.position, p.name COLLATE NOCASE
-    `).all().map((p) => ({ ...p, ship_gate: gateOf(p.ready_gate) }));
+    `).all().map((p) => ({ ...p, ship_gate: gateOf(p.ready_gate, board) }));
+    projectsKept = { at: Date.now(), list }; // built with no await: an event that comes later clears it
+    return list;
   });
 
   app.get('/api/shipped', async (req, reply) => {
@@ -222,6 +242,7 @@ export default async function projectRoutes(app) {
     const upd = db.prepare('UPDATE projects SET position = ? WHERE slug = ?');
     const tx = db.transaction((list) => list.forEach((s, i) => upd.run(i, s)));
     tx(slugs);
+    forgetProjects();
     return { ok: true };
   });
 

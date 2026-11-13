@@ -153,7 +153,7 @@ test('a start that is refused or only pretends (KB_LAUNCH_DRYRUN) moves nothing'
   }
   const dry = (await post({ mode: 'terminal', text: 'x', project: 'site', keys: [a] })).json();
   assert.match(dry.session, SESSION_RE, 'a dry run does not say which session the Terminal would start');
-  assert.ok(dry.args.join(' ').includes(`claude --session-id '${dry.session}' 'x'`), dry.args.join(' '));
+  assert.ok(dry.args.join(' ').includes(`claude --session-id '${dry.session}' -- 'x'`), dry.args.join(' '));
   for (const [body, code] of [
     [{ mode: 'terminal', text: 'x', project: 'gone', keys: [g] }, 409], // the project has no folder here
     [{ mode: 'desktop', text: 'x', project: 'gone', keys: [g] }, 409],
@@ -192,7 +192,7 @@ test('▶ in the Terminal starts Claude under a session id the board picks, and 
     const { session, prep } = r.json();
     assert.match(session, SESSION_RE);
     assert.deepEqual(prep, [a, b]);
-    assert.ok(readFileSync(said, 'utf8').includes(`claude --session-id '${session}' 'Run the kanban skill`), 'Claude started in the Terminal under another session id than the board moved the tasks as');
+    assert.ok(readFileSync(said, 'utf8').includes(`claude --session-id '${session}' -- 'Run the kanban skill`), 'Claude started in the Terminal under another session id than the board moved the tasks as');
     for (const k of [a, b]) {
       assert.deepEqual(prepMoves(k), [{ session_id: session, via: 'terminal' }], k);
       assert.equal((await move(k, 'prep', session)).statusCode, 200, `${k}: the Claude in the Terminal was refused its own task`);
@@ -216,6 +216,28 @@ test('▶ in the Terminal starts Claude under a session id the board picks, and 
     const no = await post({ mode: 'terminal', text: `Do ${c}`, project: 'site', keys: [c] });
     assert.equal(no.statusCode, 500, no.body);
     assert.equal(statusOf(c), 'todo', 'a start that failed moved its task');
+  } finally {
+    process.env.PATH = path;
+    process.env.KB_LAUNCH_DRYRUN = '1';
+  }
+});
+
+// The person's own `--resume` of a session in the Terminal is their Continue too: the board's Stop no longer holds it
+// from the automation (a `claude --resume` typed outside the board is not seen — the rule says so)
+test('a session resumed in the Terminal from the board is the automation\'s again after the person\'s Stop', async () => {
+  const term = process.platform === 'darwin' ? 'osascript' : 'x-terminal-emulator';
+  writeFileSync(join(bin, term), '#!/bin/sh\nexit 0\n');
+  chmodSync(join(bin, term), 0o755);
+  const resume = await import('../src/auto-resume.js');
+  const sid = 'cccccccc-1111-4111-8111-cccccccccccc';
+  resume.stoppedByPerson(sid);
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}:${path}`;
+  delete process.env.KB_LAUNCH_DRYRUN;
+  try {
+    const r = await post({ mode: 'terminal', resume: sid, project: 'site' });
+    assert.equal(r.statusCode, 200, r.body);
+    assert.equal(resume.heldByPerson(sid), false, 'a resume in the Terminal left the person\'s Stop on the session');
   } finally {
     process.env.PATH = path;
     process.env.KB_LAUNCH_DRYRUN = '1';

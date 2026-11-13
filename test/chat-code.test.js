@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
 import { bin } from '../src/bin-path.js';
+import { readAppleString } from './apple-string.js';
 
 const SID = 'cccccccc-1111-4111-8111-cccccccccccc';
 const OTHER = 'dddddddd-2222-4222-8222-dddddddddddd';
@@ -110,7 +111,7 @@ test('a command Claude wrote runs in a Terminal window, in the project folder', 
     assert.equal(b.cmd, bin('osascript'));
     // the AppleScript string carries the line exactly, quotes and all
     const literal = /do script (".*")$/.exec(b.args[1])[1];
-    assert.equal(execFileSync(bin('osascript'), ['-e', `return ${literal}`], { encoding: 'utf8' }).replace(/\n$/, ''), line);
+    assert.equal(readAppleString(literal), line);
   } else {
     assert.deepEqual(b.args.slice(0, 3), ['-e', 'bash', '-lc']);
     // the shell the window keeps on a line of its own: after `cmd &` or a `# comment` line it was a syntax error or swallowed

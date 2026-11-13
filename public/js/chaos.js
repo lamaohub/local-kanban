@@ -4,7 +4,7 @@ import { $, api, esc, ic, LABEL_COLORS, LABEL_SELECTABLE, popoverPlacement, PRI_
 import { openDrawer, openLightbox, uploadAttachment } from './drawer.js';
 import { loadProjects } from './sidebar.js';
 import { autoGrow, refresh, titleOr } from './sse.js';
-import { errorLine, imageTooLarge, refusalLine } from './unsaved.js';
+import { IMAGES_ONLY, errorLine, imageTooLarge, picturesIn, refusalLine } from './unsaved.js';
 import { localStore } from './store.js';
 
 const CHAOS_IC = {
@@ -183,9 +183,10 @@ function chaosAddImages(files) {
   renderChaosPending();
 }
 function onChaosPaste(e) {
-  const imgs = [...(e.clipboardData?.items || [])].filter((i) => i.type.startsWith('image/'));
-  if (!imgs.length) return;
+  const { pictures: imgs, refused } = picturesIn(e.clipboardData?.items); // one picture in two kinds: the one the board takes
+  if (!imgs.length && !refused) return;
   e.preventDefault();
+  if (refused) { $('chaos-hint').textContent = refusalLine('Could not attach', IMAGES_ONLY, tr); $('chaos-hint').className = 'chaos-hint err'; return; }
   chaosAddImages(imgs.map((it) => it.getAsFile()).filter(Boolean));
 }
 function renderChaosPending() {

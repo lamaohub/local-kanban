@@ -26,6 +26,9 @@ export function profileInput(body, was = null) {
   const b = body || {};
   const name = typeof b.name === 'string' ? b.name.trim() : was?.name;
   if (!name || !NAME_RE.test(name)) return { error: 'name: 1–40 characters on one line', field: 'name' };
+  // the type first: String() of an object with a toString that is no function throws — a 500 instead of a 400
+  if (b.model !== undefined && b.model !== null && typeof b.model !== 'string') return { error: 'model: a model id', field: 'model' };
+  if (b.effort !== undefined && b.effort !== null && typeof b.effort !== 'string') return { error: `effort: one of ${EFFORT_LEVELS.join(', ')}`, field: 'effort' };
   const model = b.model === undefined ? (was?.model || '') : String(b.model ?? '').trim();
   if (model && !MODEL_RE.test(model)) return { error: 'model: a model id (letters, digits, . _ : / - [ ], not starting with -)', field: 'model' };
   const effort = b.effort === undefined ? (was?.effort || '') : String(b.effort ?? '');

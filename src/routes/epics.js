@@ -127,6 +127,7 @@ export default async function epicRoutes(app) {
     } else if (b.batch === undefined) return reply.code(400).send({ error: 'batch: the id of a batch, or null — or batch_name', field: 'batch' });
     let before = null;
     if (b.before !== undefined && b.before !== null) {
+      if (typeof b.before !== 'string' && typeof b.before !== 'number') return reply.code(400).send({ error: 'before: the key of the task to stand before', field: 'before' });
       const t = resolveTask(String(b.before));
       if (!t) return reply.code(404).send({ error: 'the task to stand before was not found', field: 'before' });
       before = t.id;

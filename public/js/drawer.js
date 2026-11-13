@@ -9,7 +9,7 @@ import { getSetting, openSettingsModal, plural, setClaudeView } from './settings
 import { onPhone } from './phone-rules.js';
 import { NARROW, closeTopLayer, currentProject, layersOpen, overlayLayer, popLayer, pushLayer, selectProject, styledAlert, styledConfirm, watchLayers } from './sidebar.js';
 import { SHORT_MONTHS, askUsageNow, autoGrow, claudeInfoHTML, copyText, onClaudeInfo, launchInClaude, openSessionInClaude, refresh, relTime, renderTimeline, resumeOnBoard, taskPromptText } from './sse.js';
-import { canRetry, changedFields, createCommentKeys, createRefusedTyped, createTurns, createUnsentComments, createUnsentEdits, imageTooLarge, pullExternal, refusalLine, refusalText, refusedFields, resendDelay } from './unsaved.js';
+import { canRetry, changedFields, createCommentKeys, createRefusedTyped, createTurns, createUnsentComments, createUnsentEdits, IMAGES_ONLY, IMAGE_TYPES, imageTooLarge, picturesIn, pullExternal, refusalLine, refusalText, refusedFields, resendDelay } from './unsaved.js';
 import { renderAsks } from './asks.js';
 import { stillOpen } from './review-rules.js';
 import { wireTermCopy } from './term-copy.js';
@@ -997,11 +997,12 @@ export function wireTermImages(input, keyOf) {
   const ready = () => Boolean(keyOf()) && !input.disabled;
   wirePicturePick(input.closest('.comment-form'), (f, key) => termImage(input, keyOf, f, key), { ready, at: keyOf });
   input.addEventListener('paste', (e) => {
-    const imgs = [...(e.clipboardData?.items || [])].filter((i) => i.type.startsWith('image/')).map((i) => i.getAsFile()).filter(Boolean);
-    if (!imgs.length || !ready()) return;
+    const { pictures, refused } = picturesIn(e.clipboardData?.items);
+    if ((!pictures.length && !refused) || !ready()) return;
     e.preventDefault();
     e.stopPropagation();
-    for (const f of imgs) termImage(input, keyOf, f);
+    if (refused) { styledAlert(refusalLine('Could not attach', IMAGES_ONLY, tr)); return; }
+    for (const f of pictures.map((i) => i.getAsFile()).filter(Boolean)) termImage(input, keyOf, f);
   });
   input.addEventListener('dragover', (e) => { if (ready() && [...(e.dataTransfer?.items || [])].some((i) => i.kind === 'file')) e.preventDefault(); });
   input.addEventListener('drop', (e) => {
@@ -1012,7 +1013,7 @@ export function wireTermImages(input, keyOf) {
     for (const f of files.filter((x) => x.type.startsWith('image/'))) termImage(input, keyOf, f);
   });
 }
-export const IMAGE_ACCEPT = 'image/png,image/jpeg,image/webp,image/gif';
+export const IMAGE_ACCEPT = IMAGE_TYPES.join(',');
 export function wirePicturePick(form, take, { ready = () => true, at = () => null } = {}) {
   const btn = form?.querySelector('.form-attach');
   const file = form?.querySelector('input[type=file]');
@@ -1025,9 +1026,9 @@ export function wirePicturePick(form, take, { ready = () => true, at = () => nul
   file.onchange = () => {
     const all = [...(file.files || [])];
     file.value = ''; // the same picture picked again is a change too
-    const ok = all.filter((f) => IMAGE_ACCEPT.split(',').includes(f.type));
-    if (ok.length < all.length) styledAlert(refusalLine('Could not attach', { status: 400, message: 'images only' }, tr));
-    for (const f of ok) take(f, clicked);
+    const ok = all.filter((f) => IMAGE_TYPES.includes(f.type));
+    if (ok.length < all.length) styledAlert(refusalLine('Could not attach', IMAGES_ONLY, tr));
+    for (const f of ok) take(f, clicked ?? at()); // a change without a click of ours (a picker that fires twice): the moment now
   };
 }
 async function termImage(input, keyOf, blob, key = keyOf()) {
@@ -1129,16 +1130,16 @@ export function initTerminal() {
 }
 
 const workShown = () => !$('work-block').classList.contains('hidden') && !document.hidden;
-function workFlight(key) {
+function workFlight(key, live = false) {
   if (key !== state.drawerKey || key !== workKey) return;
   if (!cardChat) cardChat = mountChat($('work'), { key: null, scroller: $('drawer') }); // the card scrolls, the field stays at its edge
   cardChat.show(workShown());
-  if (cardChat.key !== key) cardChat.setKey(key); else cardChat.refresh();
+  if (cardChat.key !== key) cardChat.setKey(key); else if (live) cardChat.refreshLive(); else cardChat.refresh();
 }
 
-/** Read the chat of the open task again — on opening the card and on `task.work`. */
-export function refreshWork(key) {
-  return key && key === state.drawerKey && key === workKey && chatTab ? workFlight(key) : undefined;
+/** Read the chat of the open task again — at once on opening the card; `live` — on `task.work`, after the rest. */
+export function refreshWork(key, { live = false } = {}) {
+  return key && key === state.drawerKey && key === workKey && chatTab ? workFlight(key, live) : undefined;
 }
 export function repaintWorkTabs() {
   if (!tabsTask || tabsTask.key !== state.drawerKey) return;
@@ -1156,16 +1157,54 @@ async function deleteComment(id) {
   await refresh();
 }
 
-function renderAttachments(list) {
-  const box = $('d-attachments');
-  if (!list || !list.length) { box.innerHTML = ''; box.classList.add('hidden'); return; }
-  box.innerHTML = list.map((a) =>
-    `<div class="attach"><img src="${a.url}" data-url="${a.url}" alt="${tr('attachment')}" loading="lazy">`
-    + `<span class="attach-x" data-id="${a.id}" title="${tr('delete')}">×</span></div>`).join('');
-  box.classList.remove('hidden');
-  box.querySelectorAll('.attach img').forEach((img) => { img.onclick = () => openLightbox(img.dataset.url); });
-  box.querySelectorAll('.attach-x').forEach((x) => { x.onclick = () => deleteAttachment(x.dataset.id); });
+const unsentPictures = new Map(); // task key → [{blob, url}]
+const unsentOf = (key) => unsentPictures.get(key) || [];
+function keepUnsent(key, blob) {
+  unsentPictures.set(key, [...unsentOf(key), { blob, url: URL.createObjectURL(blob) }]);
 }
+function dropUnsent(key, pic) {
+  URL.revokeObjectURL(pic.url);
+  const rest = unsentOf(key).filter((p) => p !== pic);
+  if (rest.length) unsentPictures.set(key, rest); else unsentPictures.delete(key);
+}
+/** Pictures cut off on their way, on any card: a reload of the tab would lose them (hasUnsavedInput in init.js). */
+export const hasUnsentPictures = () => unsentPictures.size > 0;
+/** The task is gone (deleted here or elsewhere): its kept pictures go with it. */
+function forgetUnsent(key) {
+  for (const p of unsentOf(key)) URL.revokeObjectURL(p.url);
+  unsentPictures.delete(key);
+}
+const RETRY_STUCK_MS = 60_000; // a retry whose request never answered may be pressed again after this
+let attachShown = { key: null, list: [] }; // what the box draws from the board — redrawn with the unsent ones as they change
+function renderAttachments(list = attachShown.key === state.drawerKey ? attachShown.list : []) {
+  const key = state.drawerKey;
+  attachShown = { key, list: list || [] };
+  const box = $('d-attachments');
+  const unsent = key ? unsentOf(key) : [];
+  if (!attachShown.list.length && !unsent.length) { box.innerHTML = ''; box.classList.add('hidden'); return; }
+  box.innerHTML = attachShown.list.map((a) =>
+    `<div class="attach"><img src="${a.url}" data-url="${a.url}" alt="${tr('attachment')}" loading="lazy">`
+    + `<span class="attach-x" data-id="${a.id}" title="${tr('delete')}">×</span></div>`).join('')
+    + unsent.map((p, i) => `<div class="attach attach-unsent"><img src="${p.url}" alt="${tr('attachment')}">`
+    + `<button type="button" class="attach-retry" data-u="${i}" title="${tr('The picture did not reach the board — send it again')}"${sendingNow(p) ? ' disabled' : ''}>${tr(sendingNow(p) ? 'sending…' : 'not sent · retry')}</button>`
+    + `<span class="attach-x" data-u="${i}" title="${tr('delete')}">×</span></div>`).join('');
+  box.classList.remove('hidden');
+  box.querySelectorAll('.attach img').forEach((img) => { img.onclick = () => openLightbox(img.dataset.url || img.getAttribute('src')); });
+  box.querySelectorAll('.attach-x[data-id]').forEach((x) => { x.onclick = () => deleteAttachment(x.dataset.id); });
+  box.querySelectorAll('.attach-x[data-u]').forEach((x) => { const pic = unsent[Number(x.dataset.u)]; x.onclick = () => { if (pic) dropUnsent(key, pic); renderAttachments(); }; });
+  box.querySelectorAll('.attach-retry').forEach((b) => {
+    const pic = unsent[Number(b.dataset.u)];
+    b.onclick = async () => {
+      if (!pic || sendingNow(pic)) return;
+      // it stays in the list while it goes: closed and opened again meanwhile, the card still shows it (and «sending…»)
+      pic.sending = Date.now();
+      renderAttachments();
+      await uploadAttachment(pic.blob, key, { keep: true, kept: pic });
+      if (key === state.drawerKey) renderAttachments();
+    };
+  });
+}
+const sendingNow = (p) => Boolean(p.sending) && Date.now() - p.sending < RETRY_STUCK_MS;
 
 let drawerChecklist = [];
 const clSaveTimers = {};
@@ -1430,7 +1469,7 @@ async function redrawAttachments(key) {
   if (key === state.drawerKey) renderAttachments(t.attachments);
 }
 
-export async function uploadAttachment(blob, key = state.drawerKey) {
+export async function uploadAttachment(blob, key = state.drawerKey, { keep = false, kept = null } = {}) {
   if (!key) return null;
   const big = imageTooLarge(blob);
   if (big) { styledAlert(refusalLine('Could not attach', big, tr)); return null; }
@@ -1438,10 +1477,14 @@ export async function uploadAttachment(blob, key = state.drawerKey) {
   try {
     r = await apiBlob(`/api/tasks/${seg(key)}/attachments`, blob);
   } catch (e) {
-    if (refusalText(e).gone) sayRefused(e, key);
-    else styledAlert(refusalLine('Could not attach', e, tr));
+    if (refusalText(e).gone) { forgetUnsent(key); sayRefused(e, key); return null; }
+    // `kept` — a retry of a picture kept already: it stays where it is, or goes when the board refuses the picture itself
+    if (keep && canRetry(e)) { if (kept) kept.sending = 0; else keepUnsent(key, blob); } else if (kept) dropUnsent(key, kept);
+    if (keep && key === state.drawerKey) renderAttachments(); // drawn now: the look at the card may fail the same way
+    styledAlert(refusalLine('Could not attach', e, tr));
     return null;
   }
+  if (kept) dropUnsent(key, kept);
   await redrawAttachments(key);
   return r;
 }
@@ -1460,6 +1503,7 @@ function renderPendingAttachments() {
   box.querySelectorAll('.attach img').forEach((img) => { img.onclick = () => openLightbox(img.getAttribute('src')); });
   box.querySelectorAll('.attach-x').forEach((x) => { x.onclick = () => {
     const i = Number(x.dataset.i);
+    if (!pendingAttachments[i]) return; // drawn before the list changed: the next draw is the truth
     URL.revokeObjectURL(pendingAttachments[i].url);
     pendingAttachments.splice(i, 1);
     renderPendingAttachments();
@@ -1467,15 +1511,17 @@ function renderPendingAttachments() {
 }
 
 export function onDrawerPaste(e) {
-  const imgs = [...(e.clipboardData?.items || [])].filter((i) => i.type.startsWith('image/'));
-  if (!imgs.length) return;
+  // one picture in two kinds (JPEG + TIFF) attached the one and refused the other over it: only the kinds the board takes
+  const { pictures: imgs, refused } = picturesIn(e.clipboardData?.items);
+  if (!imgs.length && !refused) return;
   e.preventDefault();
+  if (refused) { styledAlert(refusalLine('Could not attach', IMAGES_ONLY, tr)); return; }
   const intoComment = e.target.id === 'c-input' && state.drawerKey;
   for (const it of imgs) {
     const blob = it.getAsFile();
     if (!blob) continue;
     if (intoComment) uploadCommentImage(blob);
-    else if (state.drawerKey) uploadAttachment(blob);
+    else if (state.drawerKey) uploadAttachment(blob, state.drawerKey, { keep: true });
     else addPendingPicture(blob);
   }
 }
@@ -1489,10 +1535,10 @@ function addPendingPicture(blob) {
 export function wireTaskPicture() {
   const btn = $('d-attach');
   wirePicturePick(btn.parentElement, (blob, at) => {
-    if (at.key) { uploadAttachment(blob, at.key); return; }
+    if (at.key) { uploadAttachment(blob, at.key, { keep: true }); return; }
     if (at.form !== newFormId) return; // the form was left for another one
     if (!state.drawerKey) { if (drawerShown()) addPendingPicture(blob); return; }
-    if (formCreated.form === at.form) uploadAttachment(blob, formCreated.key);
+    if (formCreated.form === at.form) uploadAttachment(blob, formCreated.key, { keep: true });
   }, { at: () => ({ key: state.drawerKey, form: newFormId }) });
   btn.innerHTML = `${ic('attach', 13)}${esc(tr('picture'))}`;
 }
@@ -2254,6 +2300,7 @@ export async function deleteTask(key) {
   if (key && await styledConfirm(tr('Delete the task permanently (comments included)?'), { okLabel: tr('Delete'), danger: true })) {
     // the person is told it did not happen (or that the task is already gone)
     try { await api('DELETE', `/api/tasks/${seg(key)}`); } catch (e) { sayRefused(e, key); return; }
+    forgetUnsent(key);
     if (key === state.drawerKey) closeDrawer();
     await refresh();
   }
@@ -2590,6 +2637,7 @@ export async function followMovedTask(from, to) {
   if (autosaveTimer) { clearTimeout(autosaveTimer); autosaveTimer = null; await doAutosave(); }
   if (state.drawerKey !== from) return; // another card was opened meanwhile
   if (commentDrafts.has(from)) { commentDrafts.set(to, commentDrafts.get(from)); commentDrafts.delete(from); }
+  if (unsentPictures.has(from)) { unsentPictures.set(to, unsentPictures.get(from)); unsentPictures.delete(from); }
   openDrawer(to, { quiet: true });
 }
 
@@ -2834,9 +2882,10 @@ async function createTask(formId, body, pend) {
     renderLaunchButtons({ ...created, status: selVal('d-status'), labels: drawerLabels });
   }
   const shots = here ? [...pendingAttachments] : pend;
-  for (const p of shots) await uploadAttachment(p.blob, created.key);
+  for (const p of shots) await uploadAttachment(p.blob, created.key, { keep: true });
   if (here) {
     clearPending();
+    if (created.key === state.drawerKey && unsentOf(created.key).length) renderAttachments(); // the form's thumbnails are gone with the list
     setScrollToNewCardId(created.id); setTimeout(() => setScrollToNewCardId(null), 900);
   }
   await refresh();

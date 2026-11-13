@@ -46,7 +46,7 @@ function form({ labels = [], status = 'todo' } = {}) {
     },
     queueCreate: () => {}, dropUnsaved: () => {}, setDrawerId: () => {}, renderComments: () => {}, renderChecklist: () => {},
     canRetry, refusalLine, tr: (s) => s,
-    uploadAttachment: async () => {}, clearPending: () => {}, setScrollToNewCardId: () => {}, refresh: async () => {},
+    uploadAttachment: async () => {}, clearPending: () => {}, unsentOf: () => [], setScrollToNewCardId: () => {}, refresh: async () => {},
     fieldsSnapshot: (t) => ({ title: t.title, description: t.description, priority: t.priority, labels: [...t.labels], status: t.status }),
     selVal: (id) => (id === 'd-status' ? box.formStatus : undefined),
     formStatus: status,

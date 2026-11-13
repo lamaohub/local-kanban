@@ -46,6 +46,12 @@ class El {
   set scrollTop(v) { this.top = Math.max(0, Math.min(v, this.scrollHeight - this.clientHeight)); for (const f of this.heard || []) f(); }
   querySelector(sel) { return this.kids[sel] || null; }
   querySelectorAll(sel) {
+    // the buttons of a queued row, as the page's own markup names them
+    const btn = /^\[data-(again|back|now|q)\]$/.exec(sel);
+    if (btn) { // the same buttons on every ask, until the markup is put anew: the page wires them, the test clicks them
+      if (this.btnsOf !== this.html) { this.btnsOf = this.html; this.btns = {}; }
+      return (this.btns[sel] ||= [...this.html.matchAll(new RegExp(`data-${btn[1]}="([^"]+)"`, 'g'))].map((m) => Object.assign(new El('btn'), { dataset: { [btn[1]]: m[1] } })));
+    }
     if (sel === '.chat-thumb img') return [...this.html.matchAll(/<img src="([^"]*)"/g)].map((m) => Object.assign(new El('img'), { src: m[1] }));
     return sel === '[data-fold]' ? this.folds : sel === '.chat-unfold' ? this.bodies : [];
   }
@@ -205,6 +211,37 @@ test('a busy Claude has no line under its chat; words that wait say it themselve
   r = await chatWith({ ...busy, state: 'question', question: 'Do you want to proceed?\n❯ 1. Yes\nEsc to cancel', queue: [] });
   assert.notEqual(r.note.textContent, '', 'an open question lost its line under the chat');
   r.c.destroy();
+});
+
+// Words the board could not type are kept in the queue, marked: «not delivered», with «Send again» (the server tries them
+// again) and «Back to the field» (taken out of the queue, the words stand in the field) — never thrown away
+test('words marked not delivered say so, and go again or back into the field', async () => {
+  const stuck = { id: 'q7', text: 'the lost words', at: '2026-10-22T10:20:00.000Z', stuck: 'no-box' };
+  const calls = [];
+  let queue = [stuck, { id: 'q8', text: 'after them', at: '2026-10-22T10:21:00.000Z' }];
+  const api = async (method, url) => {
+    if (method !== 'GET') calls.push(`${method} ${url}`);
+    if (method === 'DELETE') { queue = queue.filter((q) => !url.endsWith(q.id)); return { ok: true, text: stuck.text, images: [] }; }
+    if (method === 'POST') return { ok: true };
+    return structuredClone({ ...answer, send: true, state: 'idle', queue, v: `v${calls.length}` });
+  };
+  const mountChat = chatModule(api);
+  const p = page();
+  const c = mountChat(p.box, { key: 'CH-1' });
+  await c.flight;
+  assert.match(p.queue.innerHTML, /class="chat-q-row chat-q-stuck" title="the lost words"[\s\S]*not delivered[\s\S]*data-again="q7"[\s\S]*data-back="q7"/, 'the words are not marked, or the two ways on are missing');
+  assert.doesNotMatch(p.queue.innerHTML, /data-now="q7"/, 'words not delivered offer «Now» beside «Send again»');
+  assert.match(p.queue.innerHTML, /data-now="q8"/, 'the words behind them lost their own buttons');
+  p.form.kids.textarea.value = 'typed meanwhile';
+  await p.queue.querySelectorAll('[data-again]')[0].onclick();
+  assert.deepEqual(calls, ['POST /api/tasks/CH-1/chat/queue/q7/again']);
+  await c.flight;
+  await p.queue.querySelectorAll('[data-back]')[0].onclick();
+  assert.equal(calls[1], 'DELETE /api/tasks/CH-1/chat/queue/q7');
+  assert.equal(p.form.kids.textarea.value, 'typed meanwhile\nthe lost words', 'the words did not come back into the field, after what was typed');
+  await c.flight;
+  assert.doesNotMatch(p.queue.innerHTML, /the lost words/);
+  c.destroy();
 });
 
 test('the chat of a Claude the board did not start is only read: no field, and it says why', async () => {

@@ -4,6 +4,9 @@ import { announce, armRule, automationsView, awaySummary, dropRule, extrasProble
 import { nowRuns } from '../claude-now.js';
 import { scalarQuery } from '../query-params.js';
 
+/** The latest moment a Date holds, in milliseconds (ECMAScript: ±8.64e15). */
+const MAX_TIME_MS = 8.64e15;
+
 export default async function automationRoutes(app) {
   app.get('/api/automations', () => automationsView());
 
@@ -19,7 +22,8 @@ export default async function automationRoutes(app) {
     const q = scalarQuery(req.query, ['since']);
     if (q.error) return reply.code(400).send({ error: q.error });
     const since = Number(q.values.since);
-    if (!Number.isFinite(since) || since <= 0) return reply.code(400).send({ error: 'since: a moment in milliseconds' });
+    // past 8.64e15 ms a Date is no time at all, and toISOString threw — a 500 instead of a 400
+    if (!Number.isFinite(since) || since <= 0 || since > MAX_TIME_MS) return reply.code(400).send({ error: 'since: a moment in milliseconds' });
     return awaySummary(since, (await nowRuns()).runs);
   });
 

@@ -436,3 +436,35 @@ test('manual snapshots are rotated by the moment in their names, offsets and old
   assert.deepEqual(left, [path.split('/').pop(), B, C, D, E].sort(), 'the earliest moment (A, 03:00 UTC) should be the one rotated away');
   clearManual();
 });
+
+// A snapshot someone opened with sqlite3 has its -wal and -shm beside it; the rotation took the .db and left the pair for
+// good (on the live board, pairs from months before). They go with their .db, and pairs of a .db gone before go too.
+test('the rotation takes a snapshot\'s -wal and -shm with it, and pairs whose snapshot is gone already', async () => {
+  for (const f of readdirSync(DIR)) if (MANUAL_ANY.test(f)) rmSync(join(DIR, f));
+  const now = Date.now();
+  const older = [5, 4, 3, 2, 1].map((h) => `kanban-${new Date(now - h * 3600_000).toISOString().slice(0, 19).replace('T', '-').replace(/:/g, '-')}.db`);
+  for (const f of older) writeFileSync(join(DIR, f), 'x');
+  const orphan = 'kanban-2026-01-02-03-04-05.db'; // gone before: only its pair is left
+  const daily = 'kanban-2026-01-01.db'; // not this rotation's: a daily one is the daily rotation's
+  for (const f of [older[0], older[4], orphan, daily]) for (const s of ['-wal', '-shm']) writeFileSync(join(DIR, f + s), 'x');
+  await backupNow();
+  const pairs = readdirSync(DIR).filter((f) => /-(wal|shm)$/.test(f)).sort();
+  assert.deepEqual(pairs, [`${daily}-shm`, `${daily}-wal`, `${older[4]}-shm`, `${older[4]}-wal`]);
+  const { sidecarOrphans } = await import('../src/db.js');
+  assert.deepEqual(sidecarOrphans(['a.db-wal', 'a.db-journal', 'b.db', 'b.db-shm', 'c.db-wal', 'x.part-wal'], (base) => base.endsWith('.db') && base !== 'c.db'), ['a.db-wal', 'a.db-journal']);
+});
+
+// The WAL file kept the size of the largest write it ever held (11 MB beside a 35 MB base on the live board). With
+// journal_size_limit a checkpoint that resets the log cuts it back.
+test('the WAL file of the board is cut back after a large write, not kept at its largest size', async () => {
+  const { db, WAL_LIMIT_BYTES } = await import('../src/db.js');
+  assert.equal(db.pragma('journal_size_limit', { simple: true }), WAL_LIMIT_BYTES);
+  const wal = join(tmp, 'kanban.db-wal');
+  db.exec('CREATE TABLE wal_probe (b BLOB)');
+  try {
+    db.transaction(() => { for (let i = 0; i < 300; i++) db.prepare('INSERT INTO wal_probe VALUES (randomblob(40000))').run(); })();
+    assert.ok(statSync(wal).size > WAL_LIMIT_BYTES, `the large write left only ${statSync(wal).size} bytes of WAL`);
+    for (let i = 0; i < 3000; i++) db.prepare('INSERT INTO wal_probe VALUES (?)').run(i); // small writes: a checkpoint, then a reset
+    assert.ok(statSync(wal).size <= WAL_LIMIT_BYTES, `the WAL file stayed at ${statSync(wal).size} bytes`);
+  } finally { db.exec('DROP TABLE wal_probe'); }
+});

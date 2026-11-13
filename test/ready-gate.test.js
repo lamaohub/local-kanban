@@ -134,9 +134,9 @@ test('a task done by hand does not wait: the person is the word', async () => {
   await gate(false);
 });
 
-test('Prep is no way round: a task that has been in Doing holds code, a question answered in Prep does not', async () => {
+test('Prep, Cancelled and Done are no way round: a task that has been in Doing holds code, a question answered in Prep does not', async () => {
   await gate(true);
-  for (const path of [['prep'], ['todo', 'prep']]) {
+  for (const path of [['prep'], ['todo', 'prep'], ['cancelled'], ['done'], ['cancelled', 'prep']]) {
     const key = task('demo', 'doing');
     db.prepare("INSERT INTO task_events (task_id, status) SELECT id, 'doing' FROM tasks WHERE task_no = ?").run(Number(key.split('-')[1]));
     for (const s of path) assert.equal((await move(key, s)).statusCode, 200, s);
@@ -151,6 +151,13 @@ test('Prep is no way round: a task that has been in Doing holds code, a question
   db.prepare("INSERT INTO task_events (task_id, status) SELECT id, 'doing' FROM tasks WHERE task_no = ?").run(Number(back.split('-')[1]));
   await move(back, 'ready'); await move(back, 'review'); await move(back, 'todo'); await move(back, 'prep');
   assert.equal((await move(back, 'review')).statusCode, 200, 'sent back from Review and answered in Prep: nothing new to ship');
+  const closed = task('demo', 'doing');
+  db.prepare("INSERT INTO task_events (task_id, status) SELECT id, 'doing' FROM tasks WHERE task_no = ?").run(Number(closed.split('-')[1]));
+  assert.equal((await move(closed, 'done')).statusCode, 200, 'Done is the person\'s word: a task closed from Doing ships nothing');
+  const reopened = task('demo', 'doing');
+  db.prepare("INSERT INTO task_events (task_id, status) SELECT id, 'doing' FROM tasks WHERE task_no = ?").run(Number(reopened.split('-')[1]));
+  for (const s of ['ready', 'review', 'done']) await move(reopened, s);
+  assert.equal((await move(reopened, 'review')).statusCode, 200, 'shipped through the column, accepted and reopened: nothing new to ship');
   await gate(false);
 });
 

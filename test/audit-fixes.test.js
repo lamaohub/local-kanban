@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
+import { IMAGES_ONLY, IMAGE_TYPES } from '../public/js/unsaved.js';
 
 const read = (rel) => readFileSync(fileURLToPath(new URL(`../public/${rel}`, import.meta.url)), 'utf8');
 const code = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
@@ -267,7 +268,7 @@ test('CK-796: the clip takes pictures only, for the task it was pressed on', () 
   const file = { files: [], value: 'x', click() {} };
   const form = { querySelector: (q) => (q === '.form-attach' ? btn : q === 'input[type=file]' ? file : null) };
   let open = 'DEMO-1';
-  const ctx = { ic: () => '', tr: (s) => s, styledAlert: (m) => alerts.push(m), refusalLine: () => 'refused' };
+  const ctx = { ic: () => '', tr: (s) => s, styledAlert: (m) => alerts.push(m), refusalLine: () => 'refused', IMAGE_TYPES, IMAGES_ONLY };
   vm.runInNewContext(`${src}; this.wire = wirePicturePick;`, ctx);
   ctx.wire(form, (f, key) => taken.push([f.name, key]), { at: () => open });
   btn.onclick();

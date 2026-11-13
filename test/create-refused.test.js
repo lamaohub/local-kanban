@@ -47,7 +47,7 @@ function form(serverSays) {
     dropUnsaved: (k) => { calls.dropped.push(k); },
     // what a created task draws in the card — not this test's business
     setDrawerId: () => {}, renderComments: () => {}, renderChecklist: () => {}, buildStatusSelect: () => {}, renderDrawerLinks: () => {},
-    renderIssueRow: () => {}, renderBranchRow: () => {}, renderTimeline: () => {}, renderLaunchButtons: () => {}, uploadAttachment: async () => {}, clearPending: () => {},
+    renderIssueRow: () => {}, renderBranchRow: () => {}, renderTimeline: () => {}, renderLaunchButtons: () => {}, uploadAttachment: async () => {}, clearPending: () => {}, unsentOf: () => [],
     setScrollToNewCardId: () => {}, refresh: async () => {}, styledAlert: () => {}, closeDrawer: () => {},
     fieldsSnapshot: (t) => ({ ...t }),
     unsentEdits: { supersede: () => true },

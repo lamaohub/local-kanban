@@ -28,7 +28,7 @@ New fields may be added to responses at any time — parse leniently.
 
 | Method & path | Meaning |
 |---|---|
-| `GET /api/tasks?project=<slug>` | tasks of a project (add `all=1` to include backlog/done/cancelled); a task carries `pr` — `{number, state, url}` of the pull request of its branch as last known, or null (never an ask of GitHub) |
+| `GET /api/tasks?project=<slug>` | tasks of a project (add `all=1` to include backlog/done/cancelled, `status=` for one column — a status the board does not have is a 400); a task carries `pr` — `{number, state, url}` of the pull request of its branch as last known, or null (never an ask of GitHub) |
 | `GET /api/tasks?newest=N` | the N most recently created tasks of any status (1…100), newest first — of every project not archived, or of `project=` |
 | `GET /api/tasks?q=<words>&limit=N` | search: title, the whole description, key and labels, any case; with `limit`, at most N matches (never more than 200), the open and the most recently changed first — without it, every match |
 | `GET /api/tasks/:key` | full task: events timeline, `links`, `attachments`, `checklist`, `commit_url`, `sessions`, `worktree` (`{path, branch, base}` of its own copy of the repository — `base` the branch it was made from, null when not known — or null), `pr` (`{url, number, state}` as last known, or null), `profile` (the id of its own launch profile, or null), `profile_name` (the name of the launch profile its start takes — its own, else its project's — or null) |

@@ -81,7 +81,7 @@ test('a terminal window gets the full path of a claude off the PATH, and the pla
   exe(join(bin, 'claude'));
   process.env.PATH = bin;
   assert.equal(launch.claudeWord(), 'claude');
-  assert.match(launch.terminalCommand({ text: 'x' }), /env -u CLAUDE_CODE_SIMPLE claude 'x'$/, 'the plain command changed');
+  assert.match(launch.terminalCommand({ text: 'x' }), /env -u CLAUDE_CODE_SIMPLE claude -- 'x'$/, 'the plain command changed');
 });
 
 test('Settings say where claude was found, and give the install command when it is nowhere', () => {

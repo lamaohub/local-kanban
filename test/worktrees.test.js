@@ -156,7 +156,8 @@ test('a path that is not «copy/link» inside the project is refused; kb show na
   const info = await kb(['info', 'wt']);
   assert.match(info.stdout, /^worktrees: each task works in its own copy/m);
   assert.match(info.stdout, /^worktree setup: run in a fresh copy before work — npm install$/m);
-  assert.doesNotMatch((await kb(['info', 'plain'])).stdout, /worktree/);
+  // by the lines kb prints about copies, not by the word anywhere: the path of the project holds whatever TMPDIR holds
+  assert.doesNotMatch((await kb(['info', 'plain'])).stdout, /^worktree/m);
 });
 
 // before this one is shipped and must see its code; off the switch, each task keeps a copy of its own

@@ -14,12 +14,13 @@ export function onPath(name, env = process.env) {
 
 const found = new Map(); // PATH + name → full path
 /** `name` for execFile/spawn: its full path when PATH has it, else the name itself (the start then fails as it would).
-    Found once for a PATH; a miss is not kept — a program installed later is found. */
-export function bin(name) {
+    `also` — folders tried after PATH, for a system program a short PATH leaves out (lsof lives in /usr/sbin, which the PATH
+    of a service or of a sandbox may not have). Found once for a PATH; a miss is not kept — a program installed later is found. */
+export function bin(name, also = []) {
   const key = `${process.env.PATH || ''}\0${name}`;
   let p = found.get(key);
   if (!p) {
-    p = onPath(name);
+    p = onPath(name) || onPath(name, { PATH: also.join(delimiter) });
     if (p) found.set(key, p);
   }
   return p || name;

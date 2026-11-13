@@ -107,8 +107,36 @@ function giveUp(sid, was) {
 }
 const heldBy = (was, what) => { if (was.held_by !== what) { was.held_by = what; keepStopped(); } };
 let lastLook = 0;
+
+/* Sessions the person stopped with the board's Stop: sid → when. Kept in the database (a restart must not forget the
+   person's word), until they press Continue themselves; a mark older than PERSON_FORGET_MS goes, so the list stays short. */
+const PERSON_KEY = 'automations.resume.person';
+const PERSON_FORGET_MS = 30 * 24 * 3600_000;
+function personMap(now = Date.now()) {
+  let map = {};
+  try { map = JSON.parse(kvGet(PERSON_KEY) || '{}') || {}; } catch { /* starts anew */ }
+  for (const [sid, at] of Object.entries(map)) if (!(now - at < PERSON_FORGET_MS)) delete map[sid];
+  return map;
+}
+/** The person stopped the board's Claude of `sid` (Stop on the Terminal tab): the board does not bring it back by itself. */
+export function stoppedByPerson(sid, now = Date.now()) {
+  const map = personMap(now);
+  map[sid] = now;
+  kvSet(PERSON_KEY, JSON.stringify(map));
+  if (stopped.has(sid)) forget(sid); // nor tell it to go on after a limit: the person took it over
+}
+/** The person brought `sid` back (their own Continue): the board may go on with it again later. */
+export function continuedByPerson(sid) {
+  const map = personMap();
+  if (!(sid in map)) return;
+  delete map[sid];
+  kvSet(PERSON_KEY, JSON.stringify(map));
+}
+/** Whether the person's Stop holds `sid`. */
+export const heldByPerson = (sid, now = Date.now()) => sid in personMap(now);
+
 /** Tests start clean. */
-export function resetResume() { stopped.clear(); keepStopped(); lastLook = 0; }
+export function resetResume() { stopped.clear(); keepStopped(); kvSet(PERSON_KEY, '{}'); lastLook = 0; }
 
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 /** The first moment after `since` that the limit line names («12:50am», «3pm», «Oct 9 at 10am»), local time; null when it
@@ -187,9 +215,10 @@ export async function tickResume(app, now, { waiting = new Set(), limited = fals
     return;
   }
   const launch = (() => { try { return JSON.parse(kvGet(RESUME_LAUNCH) || '{}') || {}; } catch { return {}; } })();
+  const person = personMap(now);
   for (const r of runs) {
     const keys = resumable(r);
-    if (!keys || stopped.has(r.session) || !chainAllows(map[r.session], now)) continue;
+    if (!keys || stopped.has(r.session) || r.session in person || !chainAllows(map[r.session], now)) continue;
     const tasks = keys.map((k) => resolveTask(k)).filter(Boolean);
     if (!tasks.length || tasks.some((t) => waiting.has(t.id) || t.blocked || parseLabels(t.labels).includes('ask'))) continue;
     if (howItStopped(await deps.turn(r.session), Boolean(r.board)) !== 'cut') continue;

@@ -5,7 +5,7 @@ import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'nod
 import { dirname, join } from 'node:path';
 import { availableParallelism, loadavg } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { claudeCli, claudeRunnable, EFFORT_VAR, effortProblem, keysProblem, onPath } from './launch.js';
+import { claudeCli, claudeRunnable, EFFORT_VAR, effortProblem, keysProblem, onPath, promptArgs } from './launch.js';
 import { SESSION_ID_RE } from './claude-sessions.js';
 import { db, logError } from './db.js';
 import { claudeConfigFile, DATA_DIR, PORT, tmuxSocket } from './config.js';
@@ -188,7 +188,7 @@ export function phantomSpec({ sid, name, text, folder, permission = 'auto', port
       // terminal; it lives on while any of its sessions does, remain-on-exit) passed it to every Claude ▶ started after
       ...NOT_FOR_BOARD.map((k) => ['set-environment', '-g', '-u', k]),
       ['new-session', '-d', '-s', sessionName(sid), '-x', String(COLS), '-y', String(ROWS), '-e', `KB_URL=http://127.0.0.1:${port}`, '-e', `LANG=${cleanEnv().LANG}`, '-e', NO_SUGGESTIONS, '-e', NO_ALT_SCREEN, ...level,
-        '--', claudeCli(), ...settings, ...model, '--allowedTools', ...BOARD_ALLOWED, ...allow, '--permission-mode', permission, '--name', name, ...(resume ? ['--resume', sid] : ['--session-id', sid, text])],
+        '--', claudeCli(), ...settings, ...model, '--allowedTools', ...BOARD_ALLOWED, ...allow, '--permission-mode', permission, '--name', name, ...(resume ? ['--resume', sid] : ['--session-id', sid, ...promptArgs(text)])],
     ]),
   };
 }
@@ -258,8 +258,24 @@ const NO_PANE = /can't find (session|window|pane)|no current target|no server ru
     there is no such session (or no tmux server at all); a tmux that did not answer gives `{dead: false, unknown: true}`. */
 export function phantomPane(sid) {
   if (!SESSION_ID_RE.test(sid)) return Promise.resolve(null);
+  // a look at the whole view of the session still in flight holds the state of its pane too: the chat and the card's
+  // Terminal tab look at one session, and each of their looks was a `tmux list-panes` of its own (the audit of 14.11.2026:
+  // 927 of them in 3 minutes under five tabs). Only in flight, not an answer already given: typing and «Stop» look at the
+  // pane, and another board may have started the session anew since (test/terminal-foreign.test.js). A view that found no
+  // pane is not taken either: its look reads differently
+  const view = viewShared(sid);
+  if (view) return view.then((v) => (v && typeof v === 'object' ? paneOfView(v) : sharedLook(`pane ${sid}`, () => readPane(sid))));
   return sharedLook(`pane ${sid}`, () => readPane(sid));
 }
+/** The shared look at the view of `sid` (any number of lines) still in flight, or null. */
+function viewShared(sid) {
+  if (!SHARE_MS) return null;
+  for (const [k, e] of shared) {
+    if (k.startsWith(`view ${sid} `) && e.pending) return e.p.then((v) => (v && typeof v === 'object' ? { ...v } : v));
+  }
+  return null;
+}
+const paneOfView = ({ screen, wraps, links, ...st }) => st;
 async function readPane(sid) {
   const r = await tmux(['list-panes', '-t', pane(sid), '-F', STATE_FORMAT]);
   if (r.err) return NO_PANE.test(`${r.text} ${r.err.message}`) || SERVER_GONE.test(r.text) ? null : unknownPane(`${r.text} ${r.err.message}`);
@@ -398,7 +414,8 @@ async function fieldUntil(sid, ok) {
   }
 }
 /** Type the chat's `text` (and pictures `images`, paths) into Claude's field and send it: {err: null} — sent;
-    {refused: 'no-box'|'not-typed'|'not-sent'}; {err, text} — tmux refused. */
+    {refused: 'no-box'|'not-typed'|'not-sent'}; {err, text} — tmux refused; with `entered: true` once Enter may have gone,
+    so the words may have reached Claude and must not be typed again. */
 export async function deliverChat(sid, { text = '', images = [] }) {
   const first = await fieldNow(sid);
   if (first.err) return first;
@@ -412,9 +429,9 @@ export async function deliverChat(sid, { text = '', images = [] }) {
   if (there.late) { await empty(); return { refused: 'not-typed' }; }
   for (let i = 0; i < 2; i++) {
     const r = await tmux(['send-keys', '-t', pane(sid), 'Enter']);
-    if (r.err) return r;
+    if (r.err) return { ...r, entered: true };
     const gone = await fieldUntil(sid, (box) => !box || !inField(box.text, text, images));
-    if (gone.err) return gone;
+    if (gone.err) return { ...gone, entered: true };
     if (!gone.late) return { err: null };
   }
   return { refused: 'not-sent' };

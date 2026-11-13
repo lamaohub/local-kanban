@@ -26,7 +26,7 @@ const THEIRS_REST = 'bbbbbbbb-1111-4000-8000-0000000000c6'; // another board's, 
 const IDLE = 'Ready.\n\n────────────────────────────────\n❯ \n────────────────────────────────\n  ? for shortcuts\n';
 const BUSY = '* Working… (esc to interrupt)\n\n────────────────────────────────\n❯ \n────────────────────────────────\n  esc to interrupt\n';
 const pause = (ms) => new Promise((r) => { setTimeout(r, ms); });
-let tmp, claude, app, db, phantom, queue, silentFlag, keys = {}, pids = {};
+let tmp, folder, claude, app, db, phantom, queue, silentFlag, keys = {}, pids = {};
 
 const tmux = (...args) => execFileSync(TMUX, ['-L', SOCKET, ...args]).toString();
 const alive = (sid) => { try { tmux('has-session', '-t', `=kb-${sid}`); return true; } catch { return false; } };
@@ -76,7 +76,7 @@ function pane(sid, port, cmd) {
 before(async () => {
   if (skip) return;
   tmp = mkdtempSync(join(tmpdir(), 'kb-silent-'));
-  const folder = realpathSync(mkdtempSync(join(tmpdir(), 'kb-silent-folder-')));
+  folder = realpathSync(mkdtempSync(join(tmpdir(), 'kb-silent-folder-')));
   claude = join(tmp, 'claude');
   mkdirSync(join(claude, 'projects', '-silent'), { recursive: true });
   mkdirSync(join(claude, 'sessions'));
@@ -138,7 +138,7 @@ after(async () => {
   rmSync(join(process.env.TMUX_TMPDIR || '/tmp', `tmux-${process.getuid()}`, SOCKET), { force: true });
   for (const k of ['KB_TMUX_SOCKET', 'KB_CLAUDE_DIR', 'PORT', 'KB_LAUNCH_DRYRUN']) delete process.env[k];
   process.env.PATH = process.env.PATH.split(':').filter((d) => d !== join(tmp, 'bin')).join(':');
-  rmSync(tmp, { recursive: true, force: true });
+  for (const d of [tmp, folder]) if (d) rmSync(d, { recursive: true, force: true });
 });
 
 const inject = (method, url, payload) => app.inject({ method, url, payload });

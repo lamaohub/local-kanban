@@ -1,6 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
@@ -166,6 +167,33 @@ test('pm2_services accepts both a JSON array and a comma-separated string', asyn
   assert.equal((await get('pm2-proj')).json().pm2_services, '["three"]');
   await patch('pm2-proj', { pm2_services: '' });
   assert.equal((await get('pm2-proj')).json().pm2_services, null, 'an empty value clears the field');
+});
+
+// `pm2 jlist` starts a daemon of its own when none runs: the board asks pm2 only when its pid file names a live process
+test('the services of a project ask pm2 only when its daemon runs: no daemon, no pm2 started', async () => {
+  const { pm2DaemonUp } = await import('../src/pm2-services.js');
+  const home = mkdtempSync(join(tmpdir(), 'kb-pm2-'));
+  const was = { PM2_HOME: process.env.PM2_HOME, KB_PANEL_URL: process.env.KB_PANEL_URL, PANEL_URL: process.env.PANEL_URL };
+  try {
+    assert.equal(pm2DaemonUp(home), false, 'no pid file');
+    writeFileSync(join(home, 'pm2.pid'), `${process.pid}\n`);
+    assert.equal(pm2DaemonUp(home), true, 'a live process');
+    const gone = spawnSync(process.execPath, ['-e', '']).pid;
+    writeFileSync(join(home, 'pm2.pid'), String(gone));
+    assert.equal(pm2DaemonUp(home), false, 'a pid file left by a daemon that is gone');
+    writeFileSync(join(home, 'pm2.pid'), 'garbage');
+    assert.equal(pm2DaemonUp(home), false);
+    rmSync(join(home, 'pm2.pid'));
+    Object.assign(process.env, { PM2_HOME: home, KB_PANEL_URL: '', PANEL_URL: '' });
+    await create({ slug: 'pm2-none', name: 'no daemon', pm2_services: 'web' });
+    const r = await app.inject({ method: 'GET', url: '/api/projects/pm2-none/status' });
+    assert.equal(r.statusCode, 502);
+    assert.match(r.json().error, /pm2 runs no daemon/);
+    assert.deepEqual(readdirSync(home), [], 'pm2 was started and made its home');
+  } finally {
+    for (const [k, v] of Object.entries(was)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test('a project reports its docs and the skill it uses', async () => {

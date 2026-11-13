@@ -1,11 +1,13 @@
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import vm from 'node:vm';
 
 process.env.KB_DATA_DIR = mkdtempSync(join(tmpdir(), 'kb-turn-ends-')); // the feed reaches the board's database
+const dataDir = process.env.KB_DATA_DIR;
+after(() => rmSync(dataDir, { recursive: true, force: true }));
 const { answersOf, chatItems, chatTurns, commandWords } = await import('../src/chat-feed.js');
 
 function page() {

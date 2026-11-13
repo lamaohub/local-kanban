@@ -213,6 +213,31 @@ test('a Claude at its prompt with the task it put back to To do waits for you in
   }
 });
 
+// does — but «Claude now → Terminals» dropped the run the moment the check handed in: its column folded and was gone
+test('a Claude at its prompt with the check its report closed waits for you in Claude now', async () => {
+  const file = join(claude, 'sessions', `${PIDS[BG]}.json`);
+  writeFileSync(file, JSON.stringify({ pid: PIDS[BG], sessionId: BG, status: 'idle', statusUpdatedAt: Date.now() - 60_000 }));
+  await live.refreshLive(alive, async () => ({ live: [BG, BUSY, DONE], questions: [], background: [], limited: [] }));
+  const move = (key, status, sid) => app.inject({ method: 'PATCH', url: `/api/tasks/${key}`, headers: sid ? { 'x-claude-session': sid } : {}, payload: { status } });
+  const pidBg = db.prepare("SELECT id FROM projects WHERE prefix = 'BG'").get().id;
+  const check = db.prepare(`INSERT INTO tasks (project_id, task_no, title, status, labels) VALUES (?, 8, 'Check', 'todo', '["check"]')`).run(pidBg).lastInsertRowid;
+  assert.equal((await move('BG-1', 'done')).statusCode, 200); // the task it checked accepted: only the check is left
+  try {
+    for (const st of ['prep', 'doing']) assert.equal((await move('BG-8', st, BG)).statusCode, 200);
+    assert.equal((await move('BG-8', 'review', BG)).json().status, 'done', 'the report of a check did not carry it on to Done');
+    const run = (await now.nowRuns(alive)).runs.find((r) => r.session === BG);
+    assert.ok(run, 'a Claude at its prompt after its check closed itself is gone from Claude now');
+    assert.equal(run.claude, 'idle');
+    assert.ok(!(await app.inject({ method: 'GET', url: '/api/done' })).json().runs.some((r) => r.session === BG), 'the waiting check is in Claude done too');
+    // an ordinary task in Done holds nothing: accepted is accepted
+    db.prepare("UPDATE tasks SET labels = '[]' WHERE id = ?").run(check);
+    assert.ok(!sessions((await now.nowRuns(alive)).runs).some((r) => r[0] === BG), 'an accepted task that is no check keeps its Claude in Claude now');
+  } finally {
+    db.prepare('DELETE FROM tasks WHERE id = ?').run(check);
+    assert.equal((await move('BG-1', 'review')).statusCode, 200);
+  }
+});
+
 test('only a terminal the last look saw alive is asked about: no registry for the sessions of long ago', async () => {
   await live.refreshLive(alive, async () => ({ live: [], questions: [], background: [BG] }));
   assert.deepEqual([...(await now.activeBoardSessions(alive, () => { throw new Error('the registry was read'); }))], []);

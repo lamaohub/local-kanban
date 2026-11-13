@@ -3,7 +3,7 @@ import fastifyStatic from '@fastify/static';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DATA_DIR, logError } from './db.js';
-import { PORT, ROOT, localRoot } from './config.js';
+import { PORT, ROOT, localRoot, portProblem } from './config.js';
 import { makeOriginGuard } from './origin-guard.js';
 import { errorHandler } from './error-handler.js';
 import { compressAnswer } from './compress.js';
@@ -114,6 +114,10 @@ if (process.env.KB_PREVIEW_TTL_MS) {
   process.stdin.resume();
 }
 
+if (portProblem(PORT)) { // PORT from the environment: the same word as `local-kanban start --port`
+  console.error(`\n  The board did not start: ${portProblem(PORT)} (PORT).\n`);
+  process.exit(1);
+}
 app.listen({ port: PORT, host: '127.0.0.1' }).then(() => {
   console.log(`kanban: http://127.0.0.1:${PORT}`);
   console.log(`kanban: data ${DATA_DIR} · project folders ${localRoot()}`);

@@ -65,7 +65,7 @@ test('the card and the column both offer the hint, take it with Tab and take pic
   assert.match(cols, /if \(board\) hintColumn\(c\);/, 'a status changed under a screen as it was keeps the old hint');
   // and as pictures going with the message, not as a path in its words
   const chat = src('chat.js');
-  assert.match(chat, /input\.addEventListener\('paste', \(e\) => \{[\s\S]*?if \(!files\.length \|\| !c\.data\?\.send\) return;[\s\S]*?addImages\(files\);/, 'the chat\'s field does not take pictures');
+  assert.match(chat, /input\.addEventListener\('paste', \(e\) => \{[\s\S]*?picturesIn\([\s\S]*?if \(\(!got\.length && !refused\) \|\| !c\.data\?\.send\) return;[\s\S]*?addImages\(got\./, 'the chat\'s field does not take pictures');
   assert.doesNotMatch(chat, /wireTermImages|withPath/, 'a picture goes into the chat\'s words as a path again');
 });
 

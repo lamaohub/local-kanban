@@ -1,5 +1,5 @@
 
-const RULE = /^\s*─{8,}/;
+const RULE = /^─{8,}/;
 const MARK = /^\s*❯[\s ]?/;
 
 /** One captured row (`capture-pane -e`) without its escapes and without the text it draws faint. */

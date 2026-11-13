@@ -315,6 +315,20 @@ export const IMAGE_MAX_BYTES = 6 * 1024 * 1024;
 /** The refusal the server would give an image this large (said by refusalText as 413), or null when it fits. */
 export const imageTooLarge = (blob) => (blob?.size > IMAGE_MAX_BYTES ? { status: 413, message: 'larger than the board takes' } : null);
 
+/* The kinds of picture the board takes — the server's list (src/routes/tasks.js answers the rest 400 «images only»). A
+   clipboard often carries one picture in two kinds — a JPEG and a TIFF of the same screenshot — and a paste that sent
+   every `image/*` attached the one and showed a refusal over it for the other. */
+export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+/** What a paste brings that the board takes: `{pictures, refused}`. `list` — clipboard items or files (anything
+    with `type`); `refused` — pictures came and none of them is a kind the board takes (the refusal is said then only). */
+export function picturesIn(list) {
+  const imgs = [...(list || [])].filter((x) => x && typeof x.type === 'string' && x.type.startsWith('image/'));
+  const pictures = imgs.filter((x) => IMAGE_TYPES.includes(x.type));
+  return { pictures, refused: imgs.length > 0 && !pictures.length };
+}
+/** The refusal of a picture the board does not take, in the words the server would give it (refusalText). */
+export const IMAGES_ONLY = { status: 400, message: 'images only' };
+
 /** A refusal said after the action that failed: "Could not attach: the task already holds as many images as it can".
     `tr` — the board's translation (the module stays a leaf without imports); `head` is in I18N_RU like the reason. */
 export const refusalLine = (head, e, tr) => `${tr(head)}: ${tr(refusalText(e).reason)}`;

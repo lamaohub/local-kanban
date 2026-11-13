@@ -28,6 +28,8 @@ before(async () => {
   writeFileSync(join(bin, 'tmux'), [
     '#!/bin/sh',
     `echo "$*" >> '${log}'`,
+    // a view: the state, then the screen and the joined screen, each after the mark the board asked to be printed
+    `case "$*" in *kb-cut-*) cut=$(echo "$*" | grep -o 'kb-cut-[0-9a-f-]*' | head -1); echo "0||120|4242|4141"; echo "$cut"; echo "a screen"; echo "$cut"; echo "a screen"; exit 0;; esac`,
     `case "$*" in *list-panes*) ;; *) exit 0;; esac`, // a resize or a key: done
     `case "$(cat '${said}')" in`,
     '  dead) echo "1|1|120|4242|4141";;',
@@ -82,4 +84,22 @@ test('an ended terminal of the board is remembered until the board does somethin
   await phantom.phantomResize(SID, 80); // the board touched a terminal — «Continue» starts one the same way
   await pause(450);
   assert.equal(await live.boardPaneEnded(SID), null, 'a terminal started again still read as ended');
+});
+
+// The audit of 14.11.2026: the chat and the card's Terminal tab look at one session, and each look at the state of its pane
+// was a `tmux list-panes` of its own beside the look at the whole view — 927 of them in 3 minutes under five tabs
+test('a look at the pane takes the state from a look at the view of the same session in flight, never from an older one', async () => {
+  answer('up');
+  await pause(450);
+  clear();
+  const [view, pane] = await Promise.all([phantom.phantomView(SID), phantom.phantomPane(SID)]);
+  assert.equal(view.screen, 'a screen');
+  assert.equal(calls().length, 1, `a view and a pane at once: ${calls().join(' / ')}`);
+  assert.equal(pane.dead, false);
+  assert.equal(pane.cols, 120);
+  assert.ok(!('screen' in pane), 'the pane carried the screen of the view');
+  // a view already answered does not answer for the pane: typing and «Stop» look at the pane, and the session may have
+  // been started anew since by another board
+  await phantom.phantomPane(SID);
+  assert.equal(calls().length, 2, 'a view already answered answered for the pane');
 });

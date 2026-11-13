@@ -18,10 +18,20 @@ export function attemptsOf(task) {
   return list.map((a) => ({ n: a.n, path: a.path, branch: a.branch, base: a.base || null, profile: a.profile_id ? (profileById(a.profile_id)?.name || null) : null, profile_id: a.profile_id || null, chosen: Boolean(own && own.path === a.path) }));
 }
 
+/* The tasks an attempt is being made for. The number of a new attempt is read before its copy is made, and making it takes
+   git a while: a second press meanwhile read the same number and got git's own «cannot lock ref» back. */
+const making = new Set();
+
 /** A new attempt of the task: its copy made (nothing tied to the task yet) — {n, path, branch} or {error, reason}. */
 export async function newAttempt(project, task, profileId = null) {
   if (!project.worktrees) return { error: 'attempts need the project\'s switch «Each task in its own copy of the repository»', reason: 'no-copies' };
   if (profileId !== null && !profileById(profileId)) return { error: 'profile: a launch profile there is', reason: 'profile' };
+  if (making.has(task.id)) return { error: `an attempt at ${task.key} is being made right now — wait for it, then add another`, reason: 'busy' };
+  making.add(task.id);
+  try { return await makeAttempt(project, task, profileId); } finally { making.delete(task.id); }
+}
+
+async function makeAttempt(project, task, profileId) {
   const list = attemptsOf(task);
   if (list.length >= ATTEMPTS_MAX) return { error: `at most ${ATTEMPTS_MAX} attempts at a task`, reason: 'too-many' };
   // the first copy of the task is attempt 1: kept as one, so that taking another one does not lose it

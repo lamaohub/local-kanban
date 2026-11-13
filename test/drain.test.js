@@ -4,14 +4,13 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-let db, enqueue, drain, tasks = {};
+let db, enqueue, drain, tmp, tasks = {};
 
 before(async () => {
-  const tmp = mkdtempSync(join(tmpdir(), 'kb-test-'));
+  tmp = mkdtempSync(join(tmpdir(), 'kb-test-'));
   process.env.KB_DATA_DIR = tmp;
   process.env.KB_GH_OWNER = 'test-owner';
   process.env.KB_GH_REPO = 'test-owner/test-repo';
-  after(() => rmSync(tmp, { recursive: true, force: true }));
 
   ({ db, enqueue } = await import('../src/db.js'));
   const worker = await import('../src/sync/worker.js');
@@ -27,6 +26,9 @@ before(async () => {
     tasks[slug] = db.prepare('SELECT id FROM tasks WHERE project_id=?').get(pid).id;
   }
 });
+
+// at the top level: an `after` called inside `before` runs as soon as that hook ends, not after the tests
+after(() => { if (tmp) rmSync(tmp, { recursive: true, force: true }); });
 
 beforeEach(() => { db.exec('DELETE FROM sync_queue'); });
 

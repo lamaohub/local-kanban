@@ -1,6 +1,6 @@
-import { cpSync, mkdirSync, existsSync, readdirSync, unlinkSync, renameSync, rmSync, statSync } from 'node:fs';
+import { cpSync, mkdirSync, existsSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { db, DATA_DIR, logError } from './db.js';
+import { db, DATA_DIR, dropSnapshot, logError, sidecarOrphans } from './db.js';
 import { localStamp, stampTime, zonedStamp, ZONED } from './stamp.js';
 
 const DIR = join(DATA_DIR, 'backups');
@@ -19,7 +19,9 @@ function backupFiles(re) {
 
 function rotate(re, keep, order) {
   const files = order ? backupFiles(re).sort(order) : backupFiles(re);
-  while (files.length > keep) unlinkSync(join(DIR, files.shift()));
+  while (files.length > keep) dropSnapshot(DIR, files.shift()); // with its -wal and -shm, if someone opened it
+  // and the pairs a rotation before this one left behind
+  for (const f of sidecarOrphans(readdirSync(DIR), (base) => re.test(base))) rmSync(join(DIR, f), { force: true });
 }
 
 let tmpSeq = 0;

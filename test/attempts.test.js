@@ -104,7 +104,14 @@ test('attempts need copies; at most five; a guest neither makes nor takes one', 
   const plain = await app.inject({ method: 'POST', url: '/api/tasks/PL-1/attempts', payload: {} });
   assert.equal(plain.statusCode, 409);
   assert.equal(plain.json().reason, 'no-copies');
-  for (let i = 0; i < 3; i++) assert.equal((await app.inject({ method: 'POST', url: '/api/tasks/AT-1/attempts', payload: {} })).statusCode, 201);
+  // presses at once: one makes its copy, the others hear it is being made — not git's «cannot lock ref»
+  const once = await Promise.all([0, 1, 2].map(() => app.inject({ method: 'POST', url: '/api/tasks/AT-1/attempts', payload: {} })));
+  assert.deepEqual(once.map((r) => r.statusCode).sort(), [201, 409, 409], once.map((r) => r.body).join('\n'));
+  for (const r of once.filter((x) => x.statusCode === 409)) {
+    assert.equal(r.json().reason, 'busy');
+    assert.doesNotMatch(r.json().error, /fatal|lock ref/);
+  }
+  for (let i = 0; i < 2; i++) assert.equal((await app.inject({ method: 'POST', url: '/api/tasks/AT-1/attempts', payload: {} })).statusCode, 201);
   const sixth = await app.inject({ method: 'POST', url: '/api/tasks/AT-1/attempts', payload: {} });
   assert.equal(sixth.json().reason, 'too-many');
   assert.ok(existsSync(join(repo, '.claude', 'worktrees', 'AT-1-a5')));

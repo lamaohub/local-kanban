@@ -268,7 +268,7 @@ test('a growing transcript of a task in work rings the board with the task key',
 
 test('the card applies task.work to its own feed and does not refresh the whole board on it', () => {
   const sse = readFileSync(new URL('../public/js/sse.js', import.meta.url), 'utf8');
-  assert.match(sse, /if \(ev\.type === 'task\.work'\) \{[^\n]*refreshWork\(state\.drawerKey\); return; \}/,
+  assert.match(sse, /if \(ev\.type === 'task\.work'\) \{[^\n]*refreshWork\(state\.drawerKey, \{ live: true \}\); return; \}/,
     'task.work would fall into the queue and refresh the whole board every second and a half');
 });
 

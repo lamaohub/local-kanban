@@ -116,6 +116,13 @@ test('«go on» goes only to an idle Claude with an empty field, and its refusal
   fakes({ queued: () => [{ id: 'q1' }] });
   await brk.recoverDue(due);
   assert.equal(typed.length, 0, 'words the person queued in the chat go instead');
+  // words marked not delivered never leave the queue by themselves: waiting on them, the board never said «go on»
+  fresh('s');
+  const to = [];
+  fakes({ queued: (sid) => (sid === 's' ? [{ id: 'q2', stuck: 'no-box' }] : [{ id: 'q1' }]), say: async (t, sid) => { to.push(sid); return { ok: true }; } });
+  await brk.recoverDue(due);
+  assert.deepEqual(to, ['s'], 'words not delivered held «go on» for good');
+  brk.settleBreak('s');
   fakes({ atPrompt: async () => 'busy' });
   await brk.recoverDue(due);
   assert.equal(typed.length, 0, 'a busy Claude is not typed to');

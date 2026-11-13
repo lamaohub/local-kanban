@@ -1,11 +1,12 @@
 // `/model <id>`, «Compact» and a skill of the menu went after the task's key, and Claude read them as words
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const dir = mkdtempSync(join(tmpdir(), 'kb-chat-cmd-'));
+after(() => rmSync(dir, { recursive: true, force: true }));
 process.env.KB_CLAUDE_DIR = dir;
 process.env.KB_SKILLS_EXTRA = '';
 process.env.KB_DATA_DIR = join(dir, 'data'); // terminal-say reaches the board's database

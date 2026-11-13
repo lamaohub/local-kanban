@@ -26,6 +26,7 @@ import { bin } from '../bin-path.js';
 import { taskFolder } from '../worktrees.js';
 import { markSessionProfile, profileById, profileFor, settingsFile } from '../profiles.js';
 import { attemptOf, resumeFolder } from '../attempts.js';
+import { continuedByPerson } from '../auto-resume.js';
 
 export const ONBOARDING_VERSION = 5;
 
@@ -585,6 +586,7 @@ export default async function systemRoutes(app) {
       // the tasks it moves become the started Claude's (commitPatch ties its session to them); of the rest, only the
       // ones no live Claude holds (tieUnheld) — the second Claude is told the others are taken
       markSessionProfile(session, profile);
+      if (b.resume) continuedByPerson(b.resume); // the person's own resume in the Terminal lifts their Stop
       const prep = b.mode === 'desktop' ? [] : moveLaunched(picked.tasks, session, b.mode);
       if (session) await tieUnheld(picked.tasks, session, prep);
       if (prep.length) liveTick(); // their cards say "starting" now, not at the next look in up to 3 s
@@ -733,6 +735,7 @@ export default async function systemRoutes(app) {
       return reply.code(500).send({ error: failureReason(res.text, res.err.message) });
     }
     markBoardSession(sid);
+    if (b.adopt !== ADOPT_TOKEN) continuedByPerson(sid); // the person's own Continue lifts their Stop
     markResumed(sid); // «starting» on its cards until Claude Code puts it into its registry
     liveTick();
     emit('session.chat', { session: sid });

@@ -9,7 +9,7 @@ const chat = readFileSync(new URL('../public/js/chat.js', import.meta.url), 'utf
 test('the words that wait stand in the dock over the field, escaped, each with Now and ✕', () => {
   assert.match(chat, /'<div class="chat-dock"><div class="chat-live"><\/div><div class="chat-ask hidden"><\/div><div class="chat-note muted"><\/div><div class="chat-queue"><\/div>'/,
     'the queue went back under the turns, out of the dock');
-  assert.match(chat, /<div class="chat-q-row" title="\$\{esc\(q\.text\)\}"><span class="chat-q-t">\$\{esc\(q\.text\)\}<\/span>/, 'the words that wait go into the page unescaped');
+  assert.match(chat, /<div class="chat-q-row\$\{q\.stuck \? ' chat-q-stuck' : ''\}" title="\$\{esc\(q\.text\)\}"><span class="chat-q-t">\$\{esc\(q\.text\)\}<\/span>/, 'the words that wait go into the page unescaped');
   assert.match(chat, /class="chat-now-btn" data-now="\$\{esc\(q\.id\)\}"/, 'a waiting message has no Now');
   assert.match(chat, /class="chat-unq" data-q="\$\{esc\(q\.id\)\}"/, 'a waiting message has no ✕');
   assert.match(chat, /if \(e\?\.status !== 404\) \{ c\.refused = refusalLine\('Not taken back', e, tr\); say\(c\.refused\); \}/, 'a ✕ refused says nothing');

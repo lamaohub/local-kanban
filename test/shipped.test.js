@@ -379,15 +379,36 @@ test('a folder that is not a repository, or no folder: no word at all', async ()
 });
 
 test('an answer lives a while: two looks are one', async () => {
-  const { shippedOf } = await import('../src/shipped.js');
+  const { shippedOf, KEEP_MS } = await import('../src/shipped.js');
   forgetShipped();
   const p = { id: pid, path: repo };
   const one = shippedOf(p, 1000);
   assert.equal(one, shippedOf(p, 2000));
-  const later = shippedOf(p, 40000);
+  const later = shippedOf(p, 1000 + KEEP_MS);
   assert.notEqual(one, later);
-  await Promise.all([one, later]);
+  // a task come into Review is looked at now, not when the answer before it runs out
+  task(60);
+  const fresh = shippedOf(p, 2000 + KEEP_MS);
+  assert.notEqual(fresh, later, 'a new task of Review waited for the kept answer to run out');
+  assert.equal((await fresh)['DM-60'], 'none');
+  await Promise.all([one, later, fresh]);
   forgetShipped();
+});
+
+// The audit of 14.11.2026: the page asks every SHIP_EVERY_MS, and the answer lived exactly that long — every ask of the page
+// came to an answer just gone and read every repository again
+test('an answer outlives the pause of the page, and a tab out of sight asks nothing', async () => {
+  const { KEEP_MS } = await import('../src/shipped.js');
+  const every = Number(/const SHIP_EVERY_MS = (\d+);/.exec(readFileSync(new URL('../public/js/board.js', import.meta.url), 'utf8'))[1]);
+  assert.ok(KEEP_MS > every, `the answer lives ${KEEP_MS} ms, the page asks every ${every} ms`);
+  let hidden = true; const asked = [];
+  const ask = shipAsker({ every, board: () => 'alpha', wanted: () => true, now: () => 1000, hidden: () => hidden,
+    ask: (s) => { asked.push(s); return Promise.resolve({}); }, apply: () => {} });
+  ask();
+  assert.deepEqual(asked, [], 'a hidden tab asked');
+  hidden = false;
+  ask();
+  assert.deepEqual(asked, ['alpha']);
 });
 
 test('a branch is the task\'s by the key as a word of its name', async () => {
@@ -490,6 +511,71 @@ test('main moved, the branch standing: the task brought to main is on main', asy
   const moved = await traced('/api/shipped?project=demo', { lines: false });
   assert.equal(moved.tasks['DM-43'], 'main', 'an answer kept from before main moved, the branch standing');
   git('branch', '-D', 'claude/DM-43');
+});
+
+// The audit of 14.11.2026: every look past the answer's life read every repository again — eight git processes and the
+// parse of 4000 commits on the main thread each — though nothing in it had moved
+test('a repository whose refs stand is not read again: one git for-each-ref tells it', async () => {
+  task(44);
+  commit('DM-44 shipped');
+  assert.equal((await traced('/api/shipped?project=demo')).tasks['DM-44'], 'main');
+  const still = await traced('/api/shipped?project=demo', { lines: false, repos: false });
+  assert.equal(still.tasks['DM-44'], 'main');
+  assert.equal(still.count('for-each-ref'), 1);
+  assert.equal(still.count('log'), 0, 'the history was read again, though no ref moved');
+  assert.equal(still.count('rev-parse'), 0, 'the folder was asked for its repository again');
+  task(45);
+  commit('DM-45 main moved');
+  const moved = await traced('/api/shipped?project=demo', { lines: false, repos: false });
+  assert.equal(moved.tasks['DM-45'], 'main', 'main moved and the old read answered');
+  assert.equal(moved.count('log'), 2);
+});
+
+test('a repository read keeps no subjects and goes on a timer, not with the next look', async () => {
+  const { keptRepos, sweepShipped, REPO_IDLE_MS } = await import('../src/shipped.js');
+  await traced('/api/shipped?project=demo');
+  const [read] = await keptRepos();
+  assert.ok(read.words instanceof Set && read.words.has('DM-44'), 'the words of main');
+  assert.ok(read.side.every((c) => Object.keys(c).sort().join() === 'hash,tip,words'), 'a side commit keeps more than it needs');
+  assert.ok(!('main' in read), 'the commits of main are kept one by one');
+  assert.equal(sweepShipped(Date.now() + 1000).repos, 1, 'a repository just read went');
+  assert.equal(sweepShipped(Date.now() + REPO_IDLE_MS + 1000).repos, 0, 'a repository nobody asked about stayed');
+});
+
+// Review of the audit fix: a read of a repository is kept while its refs stand, and the words of its commits are keys only
+// with a prefix of the board — a project added on the same folder never got its marks until a ref moved
+test('a project added on a folder already read finds its keys at once, its refs standing', async () => {
+  task(81);
+  commit('QX-1 the work of a project not on the board yet');
+  commit('DM-81 the work of a task of the board');
+  assert.equal((await traced('/api/shipped')).tasks['DM-81'], 'main');
+  const qx = db.prepare("INSERT INTO projects (slug, prefix, name, next_task_no, path) VALUES ('qx','QX','qx',100,?)").run(repo).lastInsertRowid;
+  db.prepare("INSERT INTO tasks (project_id, task_no, title, status, labels) VALUES (?, 1, 'T', 'review', '[]')").run(qx);
+  const after = await traced('/api/shipped', { lines: false, repos: false });
+  assert.equal(after.tasks['QX-1'], 'main', 'the read made before the project was kept for it');
+  db.prepare('DELETE FROM tasks WHERE project_id = ?').run(qx);
+  db.prepare('DELETE FROM projects WHERE id = ?').run(qx);
+});
+
+test('git not answering keeps the last good read: no tree is a failed read, and no refs answer with the read before', async () => {
+  const { failGitFor } = await import('../src/shipped.js');
+  task(82);
+  git('checkout', '-q', '-b', 'claude/DM-82');
+  commit('no key in it', 'dm-82-file');
+  git('checkout', '-q', 'main');
+  git('merge', '-q', '--squash', 'claude/DM-82');
+  git('commit', '-q', '-m', 'a squash with no key (#82)');
+  failGitFor(/\^\{tree\}/);
+  try { await traced('/api/shipped?project=demo'); } finally { failGitFor(null); }
+  const next = await traced('/api/shipped?project=demo', { repos: false }); // git answers again, the refs standing
+  assert.equal(next.tasks['DM-82'], 'main', 'a read without the tree of main was kept: the squash read as only in a branch');
+  // the refs not answering for a look: the marks stay as they were, not blank
+  failGitFor(/^for-each-ref/);
+  try {
+    const blank = await traced('/api/shipped?project=demo', { lines: false, repos: false });
+    assert.equal(blank.tasks['DM-82'], 'main', 'a git that did not answer blanked the marks of its repository');
+  } finally { failGitFor(null); }
+  git('branch', '-D', 'claude/DM-82');
 });
 
 test('a branch with no commit of its own is answered without git cherry', async () => {

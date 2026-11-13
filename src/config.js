@@ -27,9 +27,15 @@ export function expandPath(p) {
 
 export const DATA_DIR = expandPath(env('KB_DATA_DIR')) || defaultDataDir();
 export const PORT = Number(env('PORT') || 3100);
+/** Why `v` is no port the board can listen on, or null: a whole number 1…65535. Past that Node threw a RangeError at
+    listen, and the person got a JSON log line with a stack instead of a word. */
+export const portProblem = (v) => (/^\d+$/.test(String(v).trim()) && Number(v) >= 1 && Number(v) <= 65535 ? null
+  : `the port must be a whole number from 1 to 65535 — got «${v}»`);
 
 export const localRoot = () => expandPath(env('KB_LOCAL_ROOT'))
   || (env('KB_DATA_DIR') ? join(DATA_DIR, 'projects') : join(homedir(), 'claude-projects'));
+// pm2's own home (its PM2_HOME, ~/.pm2 by default): its pid file says whether a daemon runs to ask
+export const pm2Home = () => expandPath(env('PM2_HOME')) || join(homedir(), '.pm2');
 export const panelUrl = () => env('KB_PANEL_URL', 'PANEL_URL');
 export const panelInfo = () => env('KB_PANEL_INFO', 'PANEL_INFO');
 export const skillsExtra = () => env('KB_SKILLS_EXTRA').split(':').filter(Boolean);

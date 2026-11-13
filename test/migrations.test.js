@@ -203,9 +203,15 @@ test('pre-migrate rotation keeps the five newest — the one just taken always a
   const older = [1, 2, 3, 4, 5].map((n) => `kanban-v${from + 1}-2026-01-0${n}-00-00-00.db`);
   for (const f of older) writeFileSync(join(pre, f), 'x');
   writeFileSync(join(pre, 'notes.db'), 'not a snapshot');
+  // a snapshot opened with sqlite3 has its -wal and -shm beside it: they go with it, and a pair whose .db went before goes too
+  const orphan = 'kanban-v1-2025-12-01-00-00-00.db';
+  for (const f of [older[0], older[4], orphan, 'notes.db']) for (const s of ['-wal', '-shm']) writeFileSync(join(pre, f + s), 'x');
 
   migrateDir(dir);
-  const left = readdirSync(pre).filter((f) => f.startsWith('kanban-v'));
+  const files = readdirSync(pre);
+  assert.deepEqual(files.filter((f) => /-(wal|shm)$/.test(f)).sort(), [`${older[4]}-shm`, `${older[4]}-wal`, 'notes.db-shm', 'notes.db-wal'],
+    'the pair of a rotated snapshot, or of one gone before, was left — or the pair of a kept one or of another file was taken');
+  const left = files.filter((f) => f.startsWith('kanban-v') && f.endsWith('.db'));
   assert.ok(left.some((f) => f.startsWith(`kanban-v${from}-`)), `the snapshot just taken was rotated away: ${left.join(', ')}`);
   assert.equal(left.length, 5, `expected the five newest, got ${left.length}`);
   assert.ok(!left.includes(older[0]), 'the oldest snapshot should be the one to go');
@@ -497,4 +503,22 @@ test('v14: tasks take the status ready, every row and column kept, foreign keys 
   after.prepare('DELETE FROM tasks').run();
   assert.equal(after.prepare('SELECT COUNT(*) AS n FROM task_comments').get().n, 0, 'a comment outlived its task: the foreign key is gone');
   assert.ok(after.prepare("SELECT 1 FROM sqlite_master WHERE name = 'idx_tasks_proj_no'").get(), 'the indexes did not come back');
+});
+
+// The words waiting for a busy Claude outlive a restart: a board of v19 gets the table of the queue, empty
+test('v20: a board of v19 gets chat_queue, empty', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'kb-mig-queue-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  migrateDir(dir);
+  const db = new Database(join(dir, 'kanban.db'));
+  db.exec('DROP TABLE chat_queue');
+  db.pragma('user_version = 19');
+  db.close();
+  migrateDir(dir);
+  const after = new Database(join(dir, 'kanban.db'));
+  t.after(() => after.close());
+  assert.ok(after.pragma('user_version', { simple: true }) >= 20);
+  assert.equal(after.prepare('SELECT COUNT(*) AS n FROM chat_queue').get().n, 0);
+  after.prepare("INSERT INTO chat_queue (id, session_id, task_id, text, at, position) VALUES ('q1', 's', 1, 'words', 1, 0)").run();
+  assert.equal(after.prepare('SELECT images, tries FROM chat_queue').get().images, '[]');
 });

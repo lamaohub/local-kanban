@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import vm from 'node:vm';
 import Fastify from 'fastify';
-import { IMAGE_MAX_BYTES, imageTooLarge, refusalLine, refusalText } from '../public/js/unsaved.js';
+import { IMAGES_ONLY, IMAGE_MAX_BYTES, imageTooLarge, picturesIn, refusalLine, refusalText } from '../public/js/unsaved.js';
 
 let app, tmp, server;
 before(async () => {
@@ -56,7 +56,7 @@ test('the card says it before sending: an attachment, a comment image and an ima
   const take = takeFrom(drawer, 'drawer.js');
   const calls = { sent: [], alerts: [], autosave: 0, drawn: 0 };
   const box = {
-    state: { drawerKey: 'DM-1' }, tr, seg: (s) => s, refusalText, refusalLine, imageTooLarge,
+    state: { drawerKey: 'DM-1' }, tr, seg: (s) => s, refusalText, refusalLine, imageTooLarge, picturesIn, IMAGES_ONLY,
     apiBlob: async (path, blob) => { calls.sent.push({ path, size: blob.size }); return {}; },
     api: async () => ({ attachments: [] }),
     styledAlert: (m) => calls.alerts.push(m),

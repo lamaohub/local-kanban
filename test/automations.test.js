@@ -634,6 +634,22 @@ test('a start refused or failed leaves no record behind', async () => {
   await resumeOff(c.r);
 });
 
+// The board's Stop is the person's word: to the automation a session stopped by it looked like one a restart cut, and the
+// board brought back exactly the work the person had stopped. It waits for the person's own Continue.
+test('a session the person stopped is not brought back by the board until the person continues it', async () => {
+  const c = await resumeCase();
+  let calls = 0;
+  const counting = { inject: async (o) => { calls += 1; return app.inject(o); } };
+  c.r.stoppedByPerson(c.sid, T0);
+  for (let i = 0; i < 4; i += 1) await c.r.tickResume(counting, T0 + (i + 1) * MIN);
+  assert.equal(calls, 0, 'the board brought back a session the person stopped');
+  assert.equal(c.r.heldByPerson(c.sid, T0 + 5 * MIN), true);
+  c.r.continuedByPerson(c.sid);
+  await c.r.tickResume(counting, T0 + 6 * MIN);
+  assert.equal(calls, 1, 'after the person\'s Continue the session is the automation\'s again');
+  await resumeOff(c.r);
+});
+
 test('a start refused because tmux was slow takes no try, up to five of them; another refusal counts at once', async () => {
   const slow = await resumeCase();
   let calls = 0;

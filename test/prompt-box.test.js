@@ -72,3 +72,17 @@ test('a field taller than the window is read with the history over it, and only 
   const gone = rows([...SCREEN.slice(0, 5), ...Array(30).fill('  ⏺ later words')]);
   assert.equal(tallBox(gone, 30), null);
 });
+
+// A row of "─" in the words themselves (a piece of a table or of a program's output) was taken for the field's bottom: the
+// field held only the first row, the words "never showed", and the chat refused them `not-typed`. The field's rules start
+// at the first column; the rows of typed words are indented by two spaces (the shape of the audit's stand-in screen).
+test('a row of rules in the typed words is not the bottom of the field', () => {
+  const R = '\x1b[38;5;244m' + '─'.repeat(45) + '\x1b[39m';
+  const typed = ['⏺ Done.', '', R, '❯ Here is the output:', '  ────────────', '  why does the test fail?', R, '  auto mode on'];
+  const box = promptBox(rows(typed));
+  assert.deepEqual(box, { text: 'Here is the output:\n────────────\nwhy does the test fail?', rows: 3 });
+  assert.equal(inField(box.text, 'Here is the output:\n────────────\nwhy does the test fail?'), true);
+  // nor a "❯" typed right under such a row: it is not a field of its own
+  const twice = ['⏺ Done.', '', R, '❯ a list', '  ────────────', '  ❯ picked', R, '  auto mode on'];
+  assert.equal(promptBox(rows(twice)).text, 'a list\n────────────\n❯ picked');
+});

@@ -128,6 +128,13 @@ test('words left in a field taller than the window are cleared too, and the chat
   assert.equal(await phantom.fieldEmpty(f.sid), true);
 });
 
+test('words with a row of rules in them reach Claude — the row is not the field\'s bottom', { skip }, async () => {
+  const f = await field();
+  const text = 'Here is the output:\n────────────\nwhy does the test fail?';
+  assert.deepEqual(await phantom.deliverChat(f.sid, { text }), { err: null });
+  assert.deepEqual(f.sent(), [text]);
+});
+
 test('no field on the screen — nothing is typed', { skip }, async () => {
   const f = await field({}, ['sleep', '30']);
   assert.deepEqual(await phantom.deliverChat(f.sid, { text: 'to nobody' }), { refused: 'no-box' });

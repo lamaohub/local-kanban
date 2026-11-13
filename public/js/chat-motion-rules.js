@@ -18,13 +18,21 @@ export function freshBlocks(before, after, sent = []) {
   const out = [];
   after.forEach((t, ti) => {
     if (ti < first) return;
-    const old = was.get(t.at);
+    const old = was.get(t.at) || [];
+    let j = 0;
     t.blocks.forEach((b, bi) => {
+      const o = old[j];
+      const same = o?.kind === b.kind;
       // the person's words the bubble «sending…» showed already come in quietly: the same words, moved into the turn
-      if (fromSent(b) && !(old?.[bi]?.kind === b.kind)) return;
-      if (!old || bi >= old.length) { out.push({ turn: ti, block: bi, how: 'rise' }); return; }
-      if (old[bi].kind !== b.kind) out.push({ turn: ti, block: bi, how: 'fade' });
-      else if (flat(old[bi].label) !== flat(b.label)) out.push({ turn: ti, block: bi, how: 'label' });
+      if (fromSent(b) && !same) return;
+      if (!o) { out.push({ turn: ti, block: bi, how: 'rise' }); return; }
+      if (same) {
+        j += 1;
+        if (flat(o.label) !== flat(b.label)) out.push({ turn: ti, block: bi, how: 'label' });
+        return;
+      }
+      if (!t.blocks.slice(bi + 1).some((x) => x.kind === o.kind)) j += 1; // changed in place; else put in before it
+      out.push({ turn: ti, block: bi, how: 'fade' });
     });
   });
   return out;

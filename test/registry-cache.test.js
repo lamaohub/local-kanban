@@ -1,7 +1,7 @@
 // parsed every file again (1.7 s of a 27 s profile on the owner's board). A file is parsed again only when it changed,
 // and what a caller gets is its own; a change is seen at once (no read is shared: one already under way would hand out the
 // file as it was before the write — review).
-import { test, before } from 'node:test';
+import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -9,17 +9,20 @@ import { join } from 'node:path';
 
 const S1 = '11111111-2222-4333-8444-555555555555';
 const S2 = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
-let live, dir;
+let live, dir, temps = [];
 const reg = (name, d) => writeFileSync(join(dir, name), JSON.stringify(d));
 
 before(async () => {
   process.env.KB_DATA_DIR = mkdtempSync(join(tmpdir(), 'kb-reg-'));
   const claude = mkdtempSync(join(tmpdir(), 'kb-reg-claude-'));
   process.env.KB_CLAUDE_DIR = claude;
+  temps = [process.env.KB_DATA_DIR, claude];
   dir = join(claude, 'sessions');
   mkdirSync(dir);
   live = await import('../src/claude-live.js');
 });
+// at the top level: an `after` called inside `before` runs as soon as that hook ends, not after the tests
+after(() => { for (const d of temps) rmSync(d, { recursive: true, force: true }); });
 
 test('an unchanged file is not read again; a changed, a new and a removed one are seen at once', { skip: process.getuid?.() === 0 }, async () => {
   reg('1.json', { pid: process.pid, sessionId: S1, status: 'busy', statusUpdatedAt: 1000 });

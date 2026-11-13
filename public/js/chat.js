@@ -4,7 +4,7 @@ import { lookPause, timed } from './look-pace.js';
 import { attachAtPicker, chatItems } from './at-picker.js';
 import { SHORT_MONTHS, copyText, resumeOnBoard, usageFmt } from './sse.js';
 import { matchKey, plural, setClaudeView } from './settings.js';
-import { refusalLine } from './unsaved.js';
+import { IMAGES_ONLY, picturesIn, refusalLine } from './unsaved.js';
 import { drawerIsFull, openDoc, openDrawerFull, openLightbox, setDrawerFull, uploadAttachment } from './drawer.js';
 import { NARROW, popLayer, pushLayer, styledConfirm } from './sidebar.js';
 import { MODELS, modelLabel, sameModel } from './chat-models.js';
@@ -369,6 +369,13 @@ export function liveHTML(d, stuckSince = 0) {
 }
 
 // says it under itself
+/* Why queued words are marked not delivered — the server's `stuck` reasons (src/chat-queue.js), said on the mark's title */
+const STUCK_WHY = {
+  'no-box': 'Claude\'s input field did not show on its screen for minutes — nothing was typed',
+  'not-typed': 'the words did not show in Claude\'s input field, three times',
+  'not-sent': 'the words stood in Claude\'s input field, but Enter did not send them, three times',
+  tmux: 'tmux refused to type them, three times',
+};
 const STATE_NOTE = {
   question: 'Claude asks a question — answer it above; messages wait',
 };
@@ -768,13 +775,22 @@ export function mountChat(box, { key = null, session = null, scroller = null, fu
     }
     paintAsk(d);
     const waiting = d.queue || [];
+    /* Words the board could not type (`stuck`: no input field of Claude for minutes, or words that never arrived) are not
+       thrown away: they stay here marked «not delivered», with «Send again» and «Back to the field» */
+    const rowTools = (q) => (q.stuck
+      ? `<span class="chat-q-why" title="${esc(tr(STUCK_WHY[q.stuck] || STUCK_WHY.tmux))}">${esc(tr('not delivered'))}</span>`
+        + `<button type="button" class="chat-now-btn" data-again="${esc(q.id)}" title="${esc(tr('Send again — once Claude is free and its input field shows'))}">${esc(tr('Send again'))}</button>`
+        + `<button type="button" class="chat-now-btn" data-back="${esc(q.id)}" title="${esc(tr('Take the words out of the queue and put them back into the field'))}">${esc(tr('Back to the field'))}</button>`
+      : `<button type="button" class="chat-now-btn" data-now="${esc(q.id)}" title="${esc(tr('Send now — Claude takes it into the turn going on'))}">${esc(tr('Now'))}</button>`
+        + `<button type="button" class="chat-unq" data-q="${esc(q.id)}" title="${esc(tr('Take it back'))}" aria-label="${esc(tr('Take it back'))}">✕</button>`);
     queueEl.innerHTML = waiting.length ? `<div class="chat-q-h">${esc(tr('waits until Claude is free'))}: ${waiting.length}</div>`
-      + waiting.map((q) => `<div class="chat-q-row" title="${esc(q.text)}"><span class="chat-q-t">${esc(q.text)}</span>`
+      + waiting.map((q) => `<div class="chat-q-row${q.stuck ? ' chat-q-stuck' : ''}" title="${esc(q.text)}"><span class="chat-q-t">${esc(q.text)}</span>`
         + (q.images_n ? `<span class="chat-img">${ic('attach', 11)} ${q.images_n}</span>` : '')
-        + `<button type="button" class="chat-now-btn" data-now="${esc(q.id)}" title="${esc(tr('Send now — Claude takes it into the turn going on'))}">${esc(tr('Now'))}</button>`
-        + `<button type="button" class="chat-unq" data-q="${esc(q.id)}" title="${esc(tr('Take it back'))}" aria-label="${esc(tr('Take it back'))}">✕</button></div>`).join('') : '';
+        + `${rowTools(q)}</div>`).join('') : '';
     queueEl.querySelectorAll('[data-q]').forEach((b) => { b.onclick = () => unqueue(b.dataset.q); });
     queueEl.querySelectorAll('[data-now]').forEach((b) => { b.onclick = () => queuedNow(b.dataset.now, b); });
+    queueEl.querySelectorAll('[data-again]').forEach((b) => { b.onclick = () => queuedAgain(b.dataset.again, b); });
+    queueEl.querySelectorAll('[data-back]').forEach((b) => { b.onclick = () => queuedBack(b.dataset.back, b); });
     form.classList.toggle('hidden', !d.send);
     paintTools(d);
     stopBtn.classList.toggle('hidden', !(d.send && d.state === 'busy'));
@@ -1144,11 +1160,13 @@ export function mountChat(box, { key = null, session = null, scroller = null, fu
   // the chat takes a picture only while it can talk; else the card's own paste makes it an attachment, as before
   const pictures = (list) => [...(list || [])].filter((f) => f && f.type?.startsWith('image/'));
   input.addEventListener('paste', (e) => {
-    const files = pictures([...(e.clipboardData?.items || [])].filter((i) => i.kind === 'file').map((i) => i.getAsFile()));
-    if (!files.length || !c.data?.send) return;
+    // only the kinds the board takes: a clipboard carries one picture as a JPEG and a TIFF at once (picturesIn)
+    const { pictures: got, refused } = picturesIn([...(e.clipboardData?.items || [])].filter((i) => i.kind === 'file'));
+    if ((!got.length && !refused) || !c.data?.send) return;
     e.preventDefault();
     e.stopPropagation(); // the card would take it as well (onDrawerPaste)
-    addImages(files);
+    if (refused) { note.textContent = refusalLine('Could not attach', IMAGES_ONLY, tr); note.classList.remove('hidden'); return; }
+    addImages(got.map((i) => i.getAsFile()).filter(Boolean));
   });
   // WebKit does not name the type of a file while it is dragged: any file is let in, only pictures are taken on the drop —
   // a file dropped past a handler the browser would open in place of the board
@@ -1255,6 +1273,55 @@ export function mountChat(box, { key = null, session = null, scroller = null, fu
     }
     c.v = null;
     c.follow = true;
+    refresh();
+  }
+  // words marked not delivered go again: they wait for Claude's field as new words do
+  async function queuedAgain(id, btn) {
+    btn.disabled = true;
+    const key = c.key;
+    try {
+      await api('POST', `/api/tasks/${seg(key)}/chat/queue/${seg(id)}/again`, undefined, { quiet: true });
+      if (key === c.key) c.refused = '';
+    } catch (e) {
+      if (key !== c.key) { refusedFor.set(key, refusalLine('Not sent', e, tr)); return; }
+      c.refused = refusalLine('Not sent', e, tr);
+      say(c.refused);
+    }
+    c.v = null;
+    refresh();
+  }
+  /* words taken out of the queue go back into the field of THEIR task, after what is typed there, with their pictures
+     (attachments of the task, as the field's own) — nothing of them is lost */
+  async function queuedBack(id, btn) {
+    btn.disabled = true;
+    const key = c.key;
+    let r;
+    try {
+      r = await api('DELETE', `/api/tasks/${seg(key)}/chat/queue/${seg(id)}`, undefined, { quiet: true });
+    } catch (e) {
+      const why = refusalLine('Not taken back', e, tr);
+      if (key !== c.key) refusedFor.set(key, why); else { c.refused = why; say(why); }
+      c.v = null;
+      refresh();
+      return;
+    }
+    const shown = c.key === key ? c : [...mounted].find((o) => o.key === key);
+    const words = intoField(shown ? shown.input.value : drafts.get(key) || '', r?.text || '');
+    if (words) drafts.set(key, words); else drafts.delete(key);
+    for (const o of mounted) if (o.key === key) { o.input.value = words; o.grow(); }
+    const pics = (r?.images || []).map((p) => ({ uid: ++thumbSeq, id: p.id, url: p.url, full: p.url, up: Promise.resolve() }));
+    if (pics.length) {
+      draftImages.set(key, [...(draftImages.get(key) || []), ...pics].slice(0, IMAGES_MAX));
+      for (const o of mounted) if (o.key === key) o.paintImages();
+    }
+    if (key === c.key) {
+      // words of another task of the session: their pictures stay attachments of that task (this one's would be refused)
+      c.refused = r?.pictures_elsewhere ? tr('The words are back in the field; their pictures belong to another task and stay there.') : '';
+      if (c.refused) say(c.refused);
+      ready();
+      input.focus?.();
+    }
+    c.v = null;
     refresh();
   }
   async function unqueue(id) {

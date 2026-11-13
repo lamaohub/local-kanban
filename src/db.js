@@ -115,6 +115,8 @@ const MIGRATIONS = [
     const cols = db.prepare('PRAGMA table_info(epics)').all().map((c) => c.name);
     if (cols.length && !cols.includes('through')) db.exec('ALTER TABLE epics ADD COLUMN through INTEGER NOT NULL DEFAULT 0');
   } },
+  // The words waiting for a busy Claude outlive a restart of the board. A new table: schema.sql, which runs after the steps, makes it
+  { v: 20, name: 'chat-queue', up: () => {} },
 ];
 export const SCHEMA_VERSION = MIGRATIONS.at(-1).v;
 
@@ -129,10 +131,17 @@ function dieOnBrokenDatabase(e) {
   process.exit(1);
 }
 
+/** The size the WAL file is cut back to once a checkpoint resets it. */
+export const WAL_LIMIT_BYTES = 8 * 1024 * 1024;
+
 let db;
 try {
   db = new Database(join(DATA_DIR, 'kanban.db'));
   db.pragma('journal_mode = WAL');
+  /* The WAL file kept the size of the largest write it ever held (11 MB beside a 35 MB base on the live board), and
+     120 MB and more after a reader held it open — sqlite3 in a session next door — for good. With a limit, a checkpoint
+     that resets the log cuts the file back to it. */
+  db.pragma(`journal_size_limit = ${WAL_LIMIT_BYTES}`);
   db.pragma('foreign_keys = ON');
 } catch (e) { dieOnBrokenDatabase(e); }
 export { db };
@@ -183,7 +192,28 @@ function preMigrateBackup(fromVersion) {
     throw e;
   }
   const made = basename(target);
-  for (const f of preMigrateToDrop(readdirSync(dir))) if (f !== made) rmSync(join(dir, f), { force: true });
+  for (const f of preMigrateToDrop(readdirSync(dir))) if (f !== made) dropSnapshot(dir, f);
+  for (const f of sidecarOrphans(readdirSync(dir), (base) => preMigrateToDrop([base], 0).length > 0)) rmSync(join(dir, f), { force: true });
+}
+
+/* A snapshot someone opened with sqlite3 has its -wal and -shm beside it (the board itself checks a snapshot on a copy in
+   a temporary folder, so it never leaves them). The rotation took the .db and left the pair for good. The suffixes are a
+   function, not a module constant: the rotation runs while the base opens (`migrate()` above), before a constant down
+   here is declared. */
+function sidecars() { return ['-wal', '-shm', '-journal']; }
+/** Removes the snapshot `name` in `dir` with its -wal, -shm and -journal. */
+export function dropSnapshot(dir, name) {
+  for (const f of [name, ...sidecars().map((s) => name + s)]) rmSync(join(dir, f), { force: true });
+}
+/** The -wal, -shm and -journal among `names` whose .db is not there — of snapshots, by `ours(baseName)`. Pure. */
+export function sidecarOrphans(names, ours) {
+  const have = new Set(names);
+  return names.filter((f) => {
+    const s = sidecars().find((x) => f.endsWith(x));
+    if (!s) return false;
+    const base = f.slice(0, -s.length);
+    return ours(base) && !have.has(base);
+  });
 }
 
 export function preMigrateToDrop(names, keep = 5) {
@@ -405,6 +435,10 @@ export function enqueue(op, taskId, payload) {
   if (!syncConfigured()) return;
   if (taskId && ['set_status', 'set_priority', 'set_blocked', 'set_labels', 'update_issue'].includes(op)) {
     db.prepare('DELETE FROM sync_queue WHERE task_id = ? AND op = ?').run(taskId, op);
+  }
+  // A close and a reopen of one issue cancel out: only the latest of them still means anything.
+  if (taskId && (op === 'close_issue' || op === 'reopen_issue')) {
+    db.prepare("DELETE FROM sync_queue WHERE task_id = ? AND op IN ('close_issue', 'reopen_issue')").run(taskId);
   }
   db.prepare('INSERT INTO sync_queue (task_id, op, payload) VALUES (?, ?, ?)')
     .run(taskId, op, JSON.stringify(payload));

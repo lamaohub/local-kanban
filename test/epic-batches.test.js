@@ -47,8 +47,9 @@ test('the pure rules: stages, a batch through, the epic\'s own move', () => {
     { todo: 2, working: 1, ready: 1, review: 1, done: 1, cancelled: 1, total: 7 });
   assert.equal(epics.batchClosed([]), false);
   assert.equal(epics.batchClosed(['done', 'cancelled']), true);
-  assert.equal(epics.epicMove('todo', ['done', 'cancelled'], false), 'review');
-  assert.equal(epics.epicMove('backlog', ['done'], false), 'review');
+  assert.equal(epics.epicMove('todo', ['done', 'cancelled'], false, true), 'review');
+  assert.equal(epics.epicMove('backlog', ['done'], false, true), 'review');
+  assert.equal(epics.epicMove('todo', ['done'], false, false), null, 'nothing closed since it was placed: no work of the epic');
   assert.equal(epics.epicMove('todo', ['cancelled'], false), null, 'nothing accepted — nothing to accept');
   assert.equal(epics.epicMove('doing', ['done'], false), null, 'a Claude working on the epic itself keeps it');
   assert.equal(epics.epicMove('review', ['done', 'todo'], true), 'todo', 'a task opened again takes back the board\'s own Review');
@@ -150,6 +151,30 @@ test('a link taken off tells the epic: the last open task gone, the epic goes to
   assert.ok(r.by_hand.includes(M));
   assert.ok(!r.epics.includes(M));
   if (r.task) await status(r.task.key, 'todo');
+});
+
+test('a task accepted long ago, put into a batch, does not hand the epic in; one closed since it was placed does', async () => {
+  const old = await add('Accepted long ago');
+  await status(old, 'doing'); await status(old, 'review'); await status(old, 'done');
+  const X = await add('Gathered from old tasks');
+  const made = (await req('POST', `/api/tasks/${X}/batches`, { title: 'b' })).json();
+  assert.equal((await req('POST', `/api/tasks/${X}/epic/place`, { key: old, batch: made.batches[0].id })).statusCode, 200);
+  assert.equal((await card(X)).status, 'todo', 'the epic went to Review on the placing of a closed task');
+  assert.deepEqual((await card(X)).events.map((e) => e.status), []);
+  // moved to a second batch of the same epic: still nothing closed since it came into the epic
+  const second = (await req('POST', `/api/tasks/${X}/batches`, { title: 'c' })).json().batches[1].id;
+  await req('POST', `/api/tasks/${X}/epic/place`, { key: old, batch: second });
+  assert.equal((await card(X)).status, 'todo');
+  // reopened and closed again in the batch: that is work of the epic
+  await status(old, 'todo'); await status(old, 'doing'); await status(old, 'review'); await status(old, 'done');
+  assert.equal((await card(X)).status, 'review');
+  // a move between its batches keeps the mark: the close since it came into the epic still counts
+  await status(X, 'todo');
+  const first = (await view(X)).batches[0].id;
+  await req('POST', `/api/tasks/${X}/epic/place`, { key: old, batch: first });
+  await req('DELETE', `/api/tasks/${X}/batches/${second}`);
+  assert.equal((await card(X)).status, 'review', 'a move inside the epic forgot the close');
+  await status(X, 'todo');
 });
 
 test('a link taken off takes the place in the batch; a batch deleted leaves its tasks sub-tasks', async () => {

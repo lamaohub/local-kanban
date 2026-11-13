@@ -17,7 +17,7 @@ function page(saved = null) {
   const grip = node(); grip.setPointerCapture = () => {};
   const byId = { 'term-screen': pre, 'term-grip': grip };
   const box = {
-    $: (id) => byId[id], tr: (s) => `ru:${s}`, termFollow: true, termOwnTop: -1, innerHeight: 800,
+    $: (id) => byId[id], tr: (s) => `ru:${s}`, termFollow: true, termOwnTop: -1, innerHeight: 800, IMAGE_TYPES: [],
     localStore: { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, v), removeItem: (k) => store.delete(k) },
   };
   box.globalThis = box;

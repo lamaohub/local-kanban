@@ -9,9 +9,35 @@ const GH_CANDIDATES = [
 ];
 const GH_FOUND = GH_CANDIDATES.find((p) => existsSync(p)) || null;
 const ghBin = () => ghBinEnv() || GH_FOUND || bin('gh');
+
+/* A gh still running when the board stops is stopped with it. Left alone it outlived the board (a
+   hung call by up to its whole timeout), and the board started again ran the same op once more —
+   a comment could reach the issue twice. The handlers are armed only while a gh runs and leave
+   with the last one: a signal listener set on import cancels the normal exit of the process (see
+   restore.js), so each one ends the process itself, with the code the signal would have given. */
+const running = new Set();
+const stopRunning = () => { for (const child of running) { try { child.kill('SIGTERM'); } catch { /* already gone */ } } };
+const ON_SIGNAL = { SIGINT: () => { stopRunning(); process.exit(130); }, SIGTERM: () => { stopRunning(); process.exit(143); } };
+function runGh(args, options, callback) {
+  let child = null;
+  const settle = (...res) => {
+    if (child && running.delete(child) && !running.size) {
+      process.off('exit', stopRunning);
+      for (const [sig, fn] of Object.entries(ON_SIGNAL)) process.off(sig, fn);
+    }
+    callback(...res);
+  };
+  child = execFile(ghBin(), args, options, settle);
+  if (!running.size) {
+    process.on('exit', stopRunning);
+    for (const [sig, fn] of Object.entries(ON_SIGNAL)) process.on(sig, fn);
+  }
+  running.add(child);
+}
+
 export function ghAt(cwd, args, { timeout = 60000 } = {}) {
   return new Promise((done) => {
-    execFile(ghBin(), args, { cwd, timeout, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, GH_PROMPT_DISABLED: '1' } }, (err, out, errOut) => done({
+    runGh(args, { cwd, timeout, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, GH_PROMPT_DISABLED: '1' } }, (err, out, errOut) => done({
       err, code: err ? (typeof err.code === 'number' ? err.code : -1) : 0, out: String(out || '').trim(), text: `${errOut || out || ''}`.trim(),
     }));
   });
@@ -29,7 +55,7 @@ export function isPermanent(stderr) {
 
 export function gh(args, { timeout = 60000 } = {}) {
   return new Promise((resolve, reject) => {
-    execFile(ghBin(), args, { timeout, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+    runGh(args, { timeout, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) {
         const e = new Error((stderr || err.message || '').trim().slice(0, 500));
         e.permanent = isPermanent(String(stderr));
@@ -255,15 +281,27 @@ export async function addComment(payload) {
   await gh(['issue', 'comment', String(payload.gh_issue_number), '-R', ghRepo(), '--body', prefix + payload.comment_body]);
 }
 
-// done → closed completed; cancelled → closed not planned
+/* done → closed completed; cancelled → closed not planned.
+   The issue is closed BEFORE its card moves, as reopenIssue opens it before: moving the card to the
+   Done column can start the built-in workflow of Projects that closes the issue itself, and the two
+   closes collided — «Could not close the issue» on 5–10 % of the first tries, each one closed
+   anyway by the retry a minute later. When GitHub still answers so, the issue is asked for its
+   state: closed is what this op wanted. */
 export async function closeIssue(payload, project) {
-  await setItemStatus(project, payload.gh_item_id, payload.status);
   const reason = payload.status === 'cancelled' ? 'not planned' : 'completed';
+  const number = String(payload.gh_issue_number);
   try {
-    await gh(['issue', 'close', String(payload.gh_issue_number), '-R', ghRepo(), '--reason', reason]);
+    await gh(['issue', 'close', number, '-R', ghRepo(), '--reason', reason]);
   } catch (err) {
-    if (!/already closed/i.test(err.message)) throw err;
+    if (!/already closed/i.test(err.message) && !(/could not close the issue/i.test(err.message) && await issueClosed(number))) throw err;
   }
+  await setItemStatus(project, payload.gh_item_id, payload.status);
+}
+
+async function issueClosed(number) {
+  try {
+    return JSON.parse(await gh(['issue', 'view', number, '-R', ghRepo(), '--json', 'state'])).state === 'CLOSED';
+  } catch { return false; } // could not ask — the op stays failed and is retried
 }
 
 export async function reopenIssue(payload, project) {

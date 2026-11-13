@@ -1,4 +1,4 @@
-import { moveTyped } from './routes/tasks.js';
+import { moveTyped, wordsMoveFrom } from './routes/tasks.js';
 import { deliverChat, otherBoard, phantomScreen, phantomSend, questionOpen } from './phantom.js';
 import { isManual } from './task-shape.js';
 import { resolveSkillPath } from './skills.js';
@@ -29,10 +29,10 @@ export async function sayToTerminal(t, session, { text, key, chat = false, image
   // sign-in button types /login, and /exit typed in Review sent the task to Doing while its Claude left
   const said = typeof text === 'string' ? text.trim() : '';
   const words = (said || images.length) && !/^\d{1,2}$/.test(said) && (!said.startsWith('/') || (chat && chatSkill(said) !== null)) && !isManual(t.labels)
-    && ['backlog', 'todo', 'review'].includes(t.status) && !questionOpen((await phantomScreen(session, 0)) ?? '');
+    && Object.values(wordsMoveFrom(t)).flat().includes(t.status) && !questionOpen((await phantomScreen(session, 0)) ?? '');
   const r = chat ? await deliverChat(session, { text, images }) : await phantomSend(session, { text, key, paste: chat, images });
   if (r.refused) return { refused: r.refused };
-  if (r.err) return { err: r.err, text: r.text };
+  if (r.err) return { err: r.err, text: r.text, ...(r.entered ? { entered: true } : {}) };
   // the task goes to Preparation, by a move of this very session (as ▶ moves it, but not marked as a start), so its
   // Claude keeps it when it says `kb mv <key> prep` itself. Keys alone (Esc, arrows, a bare Enter) are not work, nor is
   const moved = words ? moveTyped(t, session) : { prep: [], doing: [] };

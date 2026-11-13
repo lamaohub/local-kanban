@@ -1,8 +1,8 @@
 // a minute at a time; a slow minute goes to the error log (at most once in LOG_EVERY_MS), «Health» shows the last minute,
 // the worst of the hour and the slowest routes. The real hook on real routes, a fake histogram and clock.
-import { test, before } from 'node:test';
+import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
@@ -12,6 +12,7 @@ before(async () => {
   process.env.KB_DATA_DIR = mkdtempSync(join(tmpdir(), 'kb-slow-'));
   W = await import('../src/slow-watch.js');
 });
+after(() => rmSync(process.env.KB_DATA_DIR, { recursive: true, force: true }));
 
 const fakeLoop = () => {
   let p95 = 0;
@@ -149,4 +150,50 @@ test('server.js times every answer with the watch, and a guest of the Wi-Fi does
   assert.match(server, /startSlowWatch\(\)/);
   const { ownerOnly } = await import('../src/share.js');
   assert.equal(ownerOnly('GET', '/api/health/load'), true);
+});
+
+// The audit of 14.11.2026: in the slow minutes everything answered slowly, the page's own files too, and the record could
+// not tell a busy board from a busy Mac; nor where the 10–25 s of a chat's answer went
+test('a slow minute says the load of the Mac and the board\'s share of a core, and the steps of its slowest answer', async () => {
+  let clock = 5_000_000;
+  let cpu = { user: 0, system: 0 };
+  const logged = [];
+  const watch = W.createSlowWatch({ now: () => clock, log: (...a) => logged.push(a), histogram: fakeLoop(), loadavg: () => [9.876, 5, 3], cores: 8,
+    cpuUsage: (was) => (was ? { user: cpu.user - was.user, system: cpu.system - was.system } : { ...cpu }) });
+  const app = Fastify();
+  app.addHook('onResponse', watch.onResponse);
+  let wait = 0;
+  app.get('/api/tasks/:id/chat', async (req) => {
+    await W.timed(req, 'sessions', Promise.resolve([]));
+    await W.timed(req, 'terminal', new Promise((r) => { setTimeout(r, wait); }));
+    await W.timed(req, 'screen', new Promise((r) => { setTimeout(r, 5); }));
+    await W.timed(req, 'screen', new Promise((r) => { setTimeout(r, 5); }));
+    return { ok: 1 };
+  });
+  await app.ready();
+  wait = 2100;
+  await app.inject('/api/tasks/CK-1/chat');
+  wait = 0;
+  await app.inject('/api/tasks/CK-2/chat'); // quicker: the steps kept are the slowest answer's
+  cpu = { user: 15_000_000, system: 3_000_000 }; // 18 s of a core in a minute
+  clock += 60_000;
+  const win = watch.tick();
+  assert.deepEqual(win.machine, { load: [9.88, 5, 3], cores: 8 });
+  assert.equal(win.cpu, 30);
+  const [route] = win.routes;
+  assert.equal(route.route, 'GET /api/tasks/:id/chat');
+  assert.ok(route.steps.terminal >= 2000 && route.steps.terminal < route.max + 1, JSON.stringify(route.steps));
+  assert.ok(route.steps.screen >= 9, 'a step that came twice is summed');
+  assert.equal(route.steps.sessions >= 0, true);
+  assert.equal(logged.length, 1);
+  assert.match(logged[0][2], /the Mac's load 9\.88 on 8 cores, the board took 30% of a core/);
+  assert.match(logged[0][3], /"steps":\{"sessions":\d+,"terminal":\d+,"screen":\d+\}/);
+  await app.close();
+});
+
+test('the chat and the terminal time their steps for the record', () => {
+  for (const f of ['../src/routes/chat.js', '../src/routes/terminal.js']) {
+    const src = readFileSync(new URL(f, import.meta.url), 'utf8');
+    assert.match(src, /await timed\(req, 'terminal', taskTerminal\(/, `${f} does not time its look at tmux`);
+  }
 });

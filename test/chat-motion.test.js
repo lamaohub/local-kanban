@@ -27,6 +27,20 @@ test('a block changed in place fades in, a run line with new words fades its wor
   assert.deepEqual(freshBlocks([turn('a', run('Ran  2 commands'))], [turn('a', run('Ran 2 commands'))]), []);
 });
 
+// rose again (dimmed to 0.45 at 30 ms in Chromium and WebKit); only the bar comes in
+test('the bar of a turn that ended comes in before its last words, and the words stay', () => {
+  const words = (w) => ({ kind: 'chat-claude', label: '', words: w });
+  const before = [turn('a', 'chat-user', words('Only words in this turn.'))];
+  const after = [turn('a', 'chat-user', 'chat-worked', words('Only words in this turn.'))];
+  assert.deepEqual(freshBlocks(before, after), [{ turn: 0, block: 1, how: 'fade' }]);
+  // a turn with steps folds its run into the bar: the bar fades in, the words stay
+  assert.deepEqual(freshBlocks([turn('a', 'chat-user', 'chat-run', 'chat-claude')], [turn('a', 'chat-user', 'chat-done', 'chat-claude')]),
+    [{ turn: 0, block: 1, how: 'fade' }]);
+  // and the words that come in after a run still rise
+  assert.deepEqual(freshBlocks([turn('a', 'chat-user', 'chat-claude')], [turn('a', 'chat-user', 'chat-claude', 'chat-run', 'chat-claude')]),
+    [{ turn: 0, block: 2, how: 'rise' }, { turn: 0, block: 3, how: 'rise' }]);
+});
+
 test('turns brought by «Show earlier» stay as they are', () => {
   const before = [turn('b', 'chat-user')];
   const after = [turn('a', 'chat-user', 'chat-claude'), turn('b', 'chat-user')];

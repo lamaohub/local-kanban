@@ -5,7 +5,8 @@ import { SESSION_ID_RE, taskSessions, transcriptNow } from '../claude-sessions.j
 import { DOC_MAX, PICTURE_MAX, PICTURE_TYPES, SHOT_RE, TURNS_DEFAULT, TURNS_MAX, chatDoc, chatHash, chatPicture, chatShot, isMarkdown, pictureKindOf, saidCommand, transcriptChat, watchChat } from '../chat-feed.js';
 import { createReadStream } from 'node:fs';
 import { open, readFile, realpath, stat } from 'node:fs/promises';
-import { enqueue, enqueueFirst, markSaid, queued, saidLately, takeQueued, typing, unqueue } from '../chat-queue.js';
+import { enqueue, enqueueFirst, markSaid, queued, saidLately, sendAgain, takeQueued, typing } from '../chat-queue.js';
+import { basename } from 'node:path';
 import { sayToTerminal } from '../terminal-say.js';
 import { emit } from '../bus.js';
 import { db, logError } from '../db.js';
@@ -17,6 +18,7 @@ import { launchDryRun } from '../config.js';
 import { fromBoardPage } from './claude.js';
 import { existsSync } from 'node:fs';
 import { plainScreen, wholeChoice } from '../question-screen.js';
+import { timed } from '../slow-watch.js';
 
 /** What the screen shows of an open question: its last QUESTION_LINES lines with words, the input box below them left out. */
 const QUESTION_LINES = 16;
@@ -103,28 +105,28 @@ export default async function chatRoutes(app) {
     if (asked !== undefined && !SESSION_ID_RE.test(asked)) return reply.code(400).send({ error: 'session: a session id' });
     const turns = q.values.turns === undefined ? TURNS_DEFAULT : Number(q.values.turns);
     if (!(Number.isInteger(turns) && turns >= 1 && turns <= TURNS_MAX)) return reply.code(400).send({ error: `turns: a whole number from 1 to ${TURNS_MAX}` });
-    const sessions = await taskSessions(t.id);
+    const sessions = await timed(req, 'sessions', taskSessions(t.id)); // the steps of a slow answer go to its record (slow-watch.js)
     const s = pickSession(sessions, asked);
     if (asked && !s) return reply.code(404).send({ error: 'no such session of this task' });
     const list = sessions.map((x) => ({ session_id: x.session_id, last_seen: x.last_seen, transcript: Boolean(x.transcript) }));
     if (!s) return { session: null, sessions: list, turns: [], earlier_n: 0, queue: [], send: false, state: null };
-    if (!s.transcript) s.transcript = await transcriptNow(t.id, s.session_id);
-    const chat = await transcriptChat(s.transcript, { turns });
+    if (!s.transcript) s.transcript = await timed(req, 'find transcript', transcriptNow(t.id, s.session_id));
+    const chat = await timed(req, 'transcript', transcriptChat(s.transcript, { turns }));
     watchChat(s.transcript, s.session_id);
     // did not answer about is still the board's — the chat said «does not run inside the board» over a Claude at work;
     // its state is not known this look (null), a word sent now is refused as tmux-slow
-    const term = await taskTerminal(t.id);
+    const term = await timed(req, 'terminal', taskTerminal(t.id));
     const send = Boolean(term && !term.dead && !foreign(term) && term.session === s.session_id);
-    const state = send && !term.unknown ? await claudeAtPrompt(s.session_id) : null;
+    const state = send && !term.unknown ? await timed(req, 'prompt', claudeAtPrompt(s.session_id)) : null;
     // terminal beside it must answer Claude's question itself: what the screen shows of it, and keys under it
-    const screen = state === 'question' ? (await phantomScreen(s.session_id, 0, { escapes: true })) ?? '' : null;
+    const screen = state === 'question' ? (await timed(req, 'screen', phantomScreen(s.session_id, 0, { escapes: true }))) ?? '' : null;
     const question = screen === null ? null : questionLines(plainScreen(screen));
-    const choice = screen === null ? null : await wholeChoice(screen, () => phantomScreen(s.session_id, QUESTION_HISTORY, { escapes: true }));
-    const regState = stateOf((await registry()).get(s.session_id));
+    const choice = screen === null ? null : await timed(req, 'screen', wholeChoice(screen, () => phantomScreen(s.session_id, QUESTION_HISTORY, { escapes: true })));
+    const regState = stateOf((await timed(req, 'registry', registry())).get(s.session_id));
     const working = ['busy', 'background'].includes(regState);
     // the person, with commands left running: the page says which. Only for a turn over (a turn going on is «working»
     // whatever runs), from the transcript the chat read
-    const own = working && chat.turns.length > 0 && !chat.turns.at(-1).open && await waitsOwnWork(s.session_id, Date.now(), s.transcript);
+    const own = working && chat.turns.length > 0 && !chat.turns.at(-1).open && await timed(req, 'own work', waitsOwnWork(s.session_id, Date.now(), s.transcript));
     // and does not say «not inside the board»
     const ownTerm = term && !term.unknown && !foreign(term) && term.session === s.session_id;
     // another board's terminal of this very session: the page says so in place of the field, «Stop» and «Continue»
@@ -133,13 +135,13 @@ export default async function chatRoutes(app) {
     // Claude not alive anywhere (a `claude --resume` the person ran in the Terminal is), and its conversation on disk.
     // Not while another Claude of the board works on the task (an older session picked in the chat): a second one on it
     const free = !term || (term.dead && !ownTerm && !other);
-    if (!ended && free && regState === 'gone') ended = await boardPaneEnded(s.session_id);
+    if (!ended && free && regState === 'gone') ended = await timed(req, 'ended', boardPaneEnded(s.session_id));
     // (it exited with them, or they went back to its field)
     if (!working) chat.waiting = [];
     const body = { session: s.session_id, sessions: list, ...chat, queue: queued(s.session_id), send, state, working, own, ...(other ? { other } : {}), ...(question ? { question } : {}), ...(choice ? { choice } : {}), ...(ended ? { ended } : {}) };
     const v = chatHash(body);
-    const pace = state === 'busy' ? paceOnScreen((await phantomScreen(s.session_id, 0)) ?? '') : null;
-    if (state === 'busy' && CHAT_COLS > (term.cols ?? 0) + 2 && !watched(s.session_id)) await phantomResize(s.session_id, CHAT_COLS);
+    const pace = state === 'busy' ? paceOnScreen((await timed(req, 'screen', phantomScreen(s.session_id, 0))) ?? '') : null;
+    if (state === 'busy' && CHAT_COLS > (term.cols ?? 0) + 2 && !watched(s.session_id)) await timed(req, 'resize', phantomResize(s.session_id, CHAT_COLS));
     const live = pace ? { pace } : {};
     if (seen === v) return { same: true, v, ...live };
     return { ...body, ...live, v };
@@ -276,7 +278,7 @@ export default async function chatRoutes(app) {
       emit('session.chat', { session: term.session });
       return { sent: true, session: term.session, prep: r.prep, doing: r.doing };
     }
-    const q = enqueue(term.session, t.id, text.trim(), images);
+    const q = enqueue(term.session, t.id, text.trim(), images, ids);
     if (q.full) return reply.code(409).send({ error: 'too many messages wait for this Claude already', reason: 'full' });
     return { queued: true, id: q.id, session: term.session };
   });
@@ -311,9 +313,23 @@ export default async function chatRoutes(app) {
     return reply.code(r.status).send(r.body);
   });
 
+  app.post('/api/tasks/:id/chat/queue/:itemId/again', async (req, reply) => {
+    const t = taskOr404(req, reply); if (!t) return reply;
+    for (const s of await taskSessions(t.id)) if (sendAgain(s.session_id, req.params.itemId)) return { ok: true };
+    return reply.code(404).send({ error: 'these words are not waiting any more — they went, or were taken back' });
+  });
+
   app.delete('/api/tasks/:id/chat/queue/:itemId', async (req, reply) => {
     const t = taskOr404(req, reply); if (!t) return reply;
-    for (const s of await taskSessions(t.id)) if (unqueue(s.session_id, req.params.itemId)) return { ok: true };
+    for (const s of await taskSessions(t.id)) {
+      const item = takeQueued(s.session_id, req.params.itemId);
+      // the words and their pictures (attachments of the task) come back, so «Back to the field» loses neither — pictures
+      // only into the chat of their own task: words said on another task of the session would be refused with them here
+      if (!item) continue;
+      const ids = item.ids || [];
+      if (item.task !== t.id) return { ok: true, text: item.text, images: [], ...(ids.length ? { pictures_elsewhere: ids.length } : {}) };
+      return { ok: true, text: item.text, images: ids.map((id, i) => ({ id, url: `/attachments/${item.task}/${basename(item.images[i] || '')}` })) };
+    }
     return reply.code(404).send({ error: 'these words are not waiting any more — they went, or were taken back' });
   });
 }
