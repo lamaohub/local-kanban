@@ -206,10 +206,12 @@ test('pre-migrate rotation keeps the five newest — the one just taken always a
   // a snapshot opened with sqlite3 has its -wal and -shm beside it: they go with it, and a pair whose .db went before goes too
   const orphan = 'kanban-v1-2025-12-01-00-00-00.db';
   for (const f of [older[0], older[4], orphan, 'notes.db']) for (const s of ['-wal', '-shm']) writeFileSync(join(pre, f + s), 'x');
+  // a pair whose .db is gone but is no snapshot of this rotation (a daily name, another file) is not its to take
+  for (const f of ['kanban-2025-12-01.db', 'other.db']) writeFileSync(join(pre, `${f}-wal`), 'x');
 
   migrateDir(dir);
   const files = readdirSync(pre);
-  assert.deepEqual(files.filter((f) => /-(wal|shm)$/.test(f)).sort(), [`${older[4]}-shm`, `${older[4]}-wal`, 'notes.db-shm', 'notes.db-wal'],
+  assert.deepEqual(files.filter((f) => /-(wal|shm)$/.test(f)).sort(), ['kanban-2025-12-01.db-wal', `${older[4]}-shm`, `${older[4]}-wal`, 'notes.db-shm', 'notes.db-wal', 'other.db-wal'],
     'the pair of a rotated snapshot, or of one gone before, was left — or the pair of a kept one or of another file was taken');
   const left = files.filter((f) => f.startsWith('kanban-v') && f.endsWith('.db'));
   assert.ok(left.some((f) => f.startsWith(`kanban-v${from}-`)), `the snapshot just taken was rotated away: ${left.join(', ')}`);

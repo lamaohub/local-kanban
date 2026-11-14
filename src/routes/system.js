@@ -306,6 +306,12 @@ export default async function systemRoutes(app) {
     // carried up to ~1 MB of each — 199 such messages held 200 MB until the 201st different one came. Both are cut where
     // logError cuts what it writes (and where the page cuts what it sends) — and copied: a slice of a long string in V8
     // keeps the whole string alive.
+    // the type before String(): an object whose toString is not a function threw there, and the report of an
+    // error became an error of its own — a 500 written into the very journal it was to go to
+    for (const k of ['message', 'scope']) {
+      const v = req.body?.[k];
+      if (v !== undefined && v !== null && typeof v !== 'string' && typeof v !== 'number') return reply.code(400).send({ error: `${k}: text`, field: k });
+    }
     const message = ownCopy(String(req.body?.message ?? '').trim().slice(0, CLIENT_ERR_MAX));
     const scope = req.body?.scope == null ? req.body?.scope : ownCopy(String(req.body.scope).slice(0, 200));
     if (!message) return reply.code(400).send({ error: 'message is required' });

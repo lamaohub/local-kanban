@@ -8,6 +8,16 @@ version it goes out as and opens an empty one again. Released sections are histo
 
 ## [Unreleased]
 
+## [2.0.0-beta.22]
+
+### Fixed
+
+- A category name or a browser error report that is not text is refused with a clear message instead of an internal error.
+- `kb mv`, `kb add -s` and `kb ls -s` refuse a status such as `constructor` instead of answering as if nothing were wrong; `kb pri`, `kb add -p` and the MCP tools do the same for a priority.
+- A question Claude Code draws above its input field is seen again when a row of `─` has been typed into the field.
+- The mark «recovered on retry» in «Settings → Errors» stays inside the window just over phone width too (641–655 px): it goes whole to the next line when the message leaves it no room.
+- A picture «not sent · retry» goes with its task when the task is moved to another project from the card itself, the right click or a selection, as it did for a move made elsewhere; before, it vanished from the card and the tab no longer reloaded itself to a new version. A half-typed comment goes along too, and a task moved or deleted elsewhere no longer keeps its unsent pictures in the tab under its old key, whether its card is open or closed.
+
 ## [2.0.0-beta.21]
 
 ### Fixed

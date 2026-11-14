@@ -411,6 +411,16 @@ test('an answer outlives the pause of the page, and a tab out of sight asks noth
   assert.deepEqual(asked, ['alpha']);
 });
 
+// test stayed green, and a tab out of sight went on starting a look at git every 30 s
+test('the board hands the asker its tab\'s visibility, and asks again as the tab comes back', () => {
+  const src = readFileSync(new URL('../public/js/board.js', import.meta.url), 'utf8');
+  const asker = /const askShipped = shipAsker\(\{([\s\S]*?)\n\}\);/.exec(src);
+  assert.ok(asker, 'board.js makes no askShipped with shipAsker');
+  assert.match(asker[1], /\bhidden: \(\) => Boolean\(globalThis\.document\?\.hidden\)/, 'the asker of the board is not told the tab is hidden');
+  assert.match(src, /addEventListener\?\.\('visibilitychange', \(\) => \{ if \(!document\.hidden[^}]*\) askShipped\(\); \}\)/,
+    'a tab come back into sight does not ask at once');
+});
+
 test('a branch is the task\'s by the key as a word of its name', async () => {
   const { branchesOf, cherryState } = await import('../src/shipped.js');
   const names = ['claude/CK-5', 'origin/claude/ck-5', 'claude/skill-ck-5-ab12', 'claude/CK-50', 'claude/xck-5', 'claude/ck-5x'];
@@ -562,6 +572,8 @@ test('git not answering keeps the last good read: no tree is a failed read, and 
   task(82);
   git('checkout', '-q', '-b', 'claude/DM-82');
   commit('no key in it', 'dm-82-file');
+  // two commits: a squash of one has its very patch, and `git cherry` alone would call it shipped without the tree of main
+  commit('nor in this one', 'dm-82-more');
   git('checkout', '-q', 'main');
   git('merge', '-q', '--squash', 'claude/DM-82');
   git('commit', '-q', '-m', 'a squash with no key (#82)');

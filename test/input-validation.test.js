@@ -228,6 +228,8 @@ test('an object String() cannot read and a moment past any date are a 400 naming
   const prof = (await call('POST', '/api/profiles', { name: 'fuzz' })).json();
   const cases = [
     ['PATCH', '/api/tasks/DM-2', { description: odd, description_base: 'd' }, 'description'],
+    // a base that is not the text now: only then is the edit's own text read for the conflict (String() of it)
+    ['PATCH', '/api/tasks/DM-2', { description: odd, description_base: 'not the text now' }, 'description'],
     ['PATCH', '/api/tasks/DM-2', { description: odd }, 'description'],
     ['POST', '/api/tasks/DM-2/links', { key: odd, rel: 'related' }, 'key'],
     ['POST', '/api/tasks/DM-3/epic/place', { key: 'DM-2', batch, before: odd }, 'before'],
@@ -236,6 +238,8 @@ test('an object String() cannot read and a moment past any date are a 400 naming
     ['POST', '/api/profiles', { name: 'p', model: odd }, 'model'],
     ['PATCH', `/api/profiles/${prof.id}`, { model: odd }, 'model'],
     ['PATCH', `/api/profiles/${prof.id}`, { effort: odd }, 'effort'],
+    ['POST', '/api/categories', { name: odd }, 'name'],
+    ['PATCH', '/api/categories/Some', { name: [odd] }, 'name'],
   ];
   for (const [method, url, payload, field] of cases) {
     const r = await call(method, url, payload);

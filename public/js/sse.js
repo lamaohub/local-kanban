@@ -2,7 +2,7 @@
 import { repaintHealth } from './health.js';
 import { applyLive, patchCard, renderBoard } from './board.js';
 import { $, ALL, ALL_STATUSES, AUTO, HEALTH, CALENDAR, CHAOS, DASH, DONE, HORIZON, LANG, NOW, REVIEW, SETTINGS, api, esc, fmtNum, ic, readyInUse, retryUnsaved, seg, setGhSyncOn, state, tr } from './core.js';
-import { applyChecklist, closeDrawer, commentArrived, openDrawer, openTerminalOf, peekTerminal, refreshWork, renderComments, renderIssueRow, syncOpenDrawerStatus } from './drawer.js';
+import { applyChecklist, closeDrawer, commentArrived, openDrawer, openTerminalOf, peekTerminal, refreshWork, renderComments, renderIssueRow, syncOpenDrawerStatus, taskKeyEvent } from './drawer.js';
 import { getSetting, pickedSetting, plural } from './settings.js';
 import { loadProjects, loadTasks, markNowEntry, overlayLayer, renderSidebar, renderTopbar, resumeSwitch, selectProject, styledAlert, styledConfirm } from './sidebar.js';
 import { applyEvents, eventQueue, oneFlight, SEARCH_DELAY_MS, silentTooLong } from './live-rules.js';
@@ -363,6 +363,7 @@ function streamMessage(data) {
   maybeReviewSound(ev);
   maybeReviewNotify(ev);
   maybeDoneSound(ev);
+  taskKeyEvent(ev);
   sseQueue.push(ev);
   clearTimeout(flushTimer);
   flushTimer = setTimeout(flushSseQueue, 150);

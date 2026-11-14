@@ -1174,6 +1174,17 @@ function forgetUnsent(key) {
   for (const p of unsentOf(key)) URL.revokeObjectURL(p.url);
   unsentPictures.delete(key);
 }
+function carryTaskMemory(from, to) {
+  if (!from || !to || from === to) return;
+  if (unsentPictures.has(from)) { unsentPictures.set(to, [...unsentOf(to), ...unsentPictures.get(from)]); unsentPictures.delete(from); }
+  if (commentDrafts.has(from)) { commentDrafts.set(to, commentDrafts.get(from)); commentDrafts.delete(from); }
+}
+export function taskKeyEvent(ev) {
+  const d = ev?.data;
+  if (!d?.key || d.key === state.drawerKey) return;
+  if (ev.type === 'task.moved' && d.old_key && d.old_key !== state.drawerKey) carryTaskMemory(d.old_key, d.key);
+  else if (ev.type === 'task.deleted') { forgetUnsent(d.key); commentDrafts.delete(d.key); }
+}
 const RETRY_STUCK_MS = 60_000; // a retry whose request never answered may be pressed again after this
 let attachShown = { key: null, list: [] }; // what the box draws from the board — redrawn with the unsent ones as they change
 function renderAttachments(list = attachShown.key === state.drawerKey ? attachShown.list : []) {
@@ -2147,6 +2158,7 @@ export function openMovePicker(keys) {
       return;
     }
     close();
+    carryTaskMemory(key, moved.key);
     if (key === state.drawerKey) openDrawer(moved.key, { quiet: true });
     await refresh();
   }
@@ -2180,15 +2192,17 @@ export function openMovePicker(keys) {
 export async function moveEach(keys, slug, { post, projectOf, openKey, why }) {
   const moved = [];
   const refused = [];
+  const renamed = []; // [old key, new key] of each moved task
   let reopen = null;
   for (const k of keys) {
     if (projectOf(k) === slug) continue; // there already
     let m;
     try { m = await post(k); } catch (e) { refused.push([k, why(e)]); continue; }
     moved.push(k);
+    if (m?.key) renamed.push([k, m.key]);
     if (k === openKey()) reopen = m.key;
   }
-  return { moved, refused, reopen };
+  return { moved, refused, reopen, renamed };
 }
 function openGroupMove(keys) {
   const projectOf = (k) => state.tasks.find((x) => x.key === k)?.project ?? null;
@@ -2216,7 +2230,8 @@ function openGroupMove(keys) {
     if (busy) return;
     busy = true;
     const post = (k) => api('POST', `/api/tasks/${seg(k)}/move`, { project: slug }, { quiet: true });
-    const { moved: went, refused, reopen } = await moveEach(keys, slug, { post, projectOf, openKey: () => state.drawerKey, why });
+    const { moved: went, refused, reopen, renamed } = await moveEach(keys, slug, { post, projectOf, openKey: () => state.drawerKey, why });
+    for (const [was, now] of renamed) carryTaskMemory(was, now);
     const moved = went.length;
     for (const k of went) {
       const id = state.tasks.find((x) => x.key === k)?.id;
@@ -2606,7 +2621,11 @@ export async function syncOpenDrawerStatus({ moved = false } = {}) {
     try {
       t = await api('GET', `/api/tasks/${seg(state.drawerKey)}`, undefined, { quiet: true });
     } catch (e) {
-      if (e?.status === 404 && state.drawerKey === key) { styledAlert(tr('This task no longer exists — it was deleted.')); closeDrawer(); }
+      if (e?.status === 404 && state.drawerKey === key) {
+        forgetUnsent(key);
+        styledAlert(tr('This task no longer exists — it was deleted.'));
+        closeDrawer();
+      }
       return;
     }
   }
@@ -2636,8 +2655,7 @@ export async function followMovedTask(from, to) {
   if (state.openingKey === to) return;
   if (autosaveTimer) { clearTimeout(autosaveTimer); autosaveTimer = null; await doAutosave(); }
   if (state.drawerKey !== from) return; // another card was opened meanwhile
-  if (commentDrafts.has(from)) { commentDrafts.set(to, commentDrafts.get(from)); commentDrafts.delete(from); }
-  if (unsentPictures.has(from)) { unsentPictures.set(to, unsentPictures.get(from)); unsentPictures.delete(from); }
+  carryTaskMemory(from, to);
   openDrawer(to, { quiet: true });
 }
 

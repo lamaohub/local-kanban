@@ -11,6 +11,11 @@
 const BASE = (process.env.KB_URL || 'http://127.0.0.1:3100').replace(/\/+$/, '');
 const VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 const PRIORITY = { none: 0, low: 1, med: 2, medium: 2, high: 3 };
+// a priority only from the table: PRIORITY['constructor'] is a function, and the task went out with no priority, answered as made
+function priorityOf(p) {
+  if (typeof p === 'string' && Object.hasOwn(PRIORITY, p)) return PRIORITY[p];
+  throw new ToolError('priority: one of none, low, med, high');
+}
 const PRI_NAME = ['none', 'low', 'med', 'high'];
 const KEY_RE = /^[A-Za-z0-9]{1,10}-\d+$/;
 const SEG_RE = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$/;
@@ -116,7 +121,7 @@ const TOOLS = [
       if (typeof a.title !== 'string' || !a.title.trim()) throw new ToolError('title: the words of the task');
       const t = await board('POST', '/api/tasks', {
         project: decodeURIComponent(seg(a.project, 'project')), title: a.title, description: String(a.description || ''),
-        priority: PRIORITY[a.priority || 'none'] ?? 0, status: a.status || 'backlog',
+        priority: priorityOf(a.priority ?? 'none'), status: a.status || 'backlog',
       });
       return `${t.key} created in ${t.status}`;
     },
@@ -141,7 +146,7 @@ const TOOLS = [
     run: async (a) => {
       const body = {};
       for (const f of ['title', 'description', 'status', 'labels_add', 'labels_remove']) if (a[f] !== undefined) body[f] = a[f];
-      if (a.priority !== undefined) body.priority = PRIORITY[a.priority] ?? 0;
+      if (a.priority !== undefined) body.priority = priorityOf(a.priority);
       if (['done', 'cancelled'].includes(body.status)) throw new ToolError('done and cancelled are the person\'s word — accept or cancel the task on the board');
       if (!Object.keys(body).length) throw new ToolError('nothing to change');
       const t = await board('PATCH', `/api/tasks/${key(a.key)}`, body);

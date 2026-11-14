@@ -1,12 +1,12 @@
 // repository with an origin, a worktree in each state the section tells apart, and the real routes over a database of its own.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { execFile, execFileSync, spawn } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
-import { bin as fullPath } from '../src/bin-path.js';
+import { bin as fullPath, onPath } from '../src/bin-path.js';
 
 let tmp, repo, app, db, stands, host, sleeper, objectsBefore;
 const wt = (name) => join(repo, '.claude', 'worktrees', name);
@@ -454,6 +454,24 @@ test('lsof is believed only whole: exit 0 with folders, or exit 1 with some', as
     process.env.PATH = path;
     stands.forgetStands();
   }
+});
+
+// a stand with a process in it as much as a free one. The walk looks for lsof after PATH too (bin(name, also)). A board
+// STARTED with such a PATH, in a process of its own: stands.js keeps the environment it was loaded with, so a PATH changed
+// here would not reach its calls, and the test of bin() alone stayed green with the walk calling bin('lsof') again
+test('a board started with a PATH without the folder of lsof still sees the process in a stand', { skip: !existsSync('/usr/sbin/lsof') && 'lsof is not in /usr/sbin here' }, async () => {
+  const path = process.env.PATH.split(':').filter((d) => d && !existsSync(join(d, 'lsof'))).join(':');
+  assert.equal(onPath('lsof', { PATH: path }), null, 'the PATH of the test still has lsof');
+  const script = `const s = await import(${JSON.stringify(new URL('../src/stands.js', import.meta.url).href)});
+    s.standsView(); await s.standsSettled();
+    const by = Object.fromEntries(s.standsView().stands.map((x) => [x.path.split('/').pop(), [x.state, x.why]]));
+    process.stdout.write(JSON.stringify(by), () => process.exit(0));`;
+  const out = await new Promise((resolve, reject) => {
+    execFile(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, PATH: path }, timeout: 120_000 }, (err, o, e) => (err ? reject(new Error(`${err.message}\n${e}`)) : resolve(o)));
+  });
+  const by = JSON.parse(out);
+  assert.deepEqual(by.served, ['busy', ['process']], 'lsof outside PATH was not found: the process in the folder went unseen');
+  assert.equal(by['STA-1'][0], 'free', 'lsof outside PATH was not found: a free stand read «unknown»');
 });
 
 // on another branch), a project of the board in a repository of its own nested inside a stand (dist/sub, node_modules/x:

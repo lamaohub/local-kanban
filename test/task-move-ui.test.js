@@ -23,7 +23,7 @@ function follow({ drawerKey = 'ALP-19', openingKey = null, pending = false, draf
     log,
   };
   box.doAutosave = async () => { log.push(['save', box.state.drawerKey]); await null; if (box.switchDuringSave) box.state.drawerKey = box.switchDuringSave; };
-  vm.runInNewContext(`${fnOf(drawer, 'export async function followMovedTask(from, to)')}\nthis.followMovedTask = followMovedTask;`, box);
+  vm.runInNewContext(`const unsentOf = (key) => unsentPictures.get(key) || [];\n${fnOf(drawer, 'function carryTaskMemory(')}\n${fnOf(drawer, 'export async function followMovedTask(from, to)')}\nthis.followMovedTask = followMovedTask;`, box);
   return box;
 }
 

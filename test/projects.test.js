@@ -173,7 +173,11 @@ test('pm2_services accepts both a JSON array and a comma-separated string', asyn
 test('the services of a project ask pm2 only when its daemon runs: no daemon, no pm2 started', async () => {
   const { pm2DaemonUp } = await import('../src/pm2-services.js');
   const home = mkdtempSync(join(tmpdir(), 'kb-pm2-'));
-  const was = { PM2_HOME: process.env.PM2_HOME, KB_PANEL_URL: process.env.KB_PANEL_URL, PANEL_URL: process.env.PANEL_URL };
+  // a pm2 of its own first in PATH: with the rule broken, the board would call the real one, and it would start a real
+  const fake = mkdtempSync(join(tmpdir(), 'kb-pm2-bin-'));
+  const calls = join(fake, 'calls');
+  writeFileSync(join(fake, 'pm2'), `#!/bin/sh\necho "$@" >> '${calls}'\necho '[]'\n`, { mode: 0o755 });
+  const was = { PM2_HOME: process.env.PM2_HOME, KB_PANEL_URL: process.env.KB_PANEL_URL, PANEL_URL: process.env.PANEL_URL, PATH: process.env.PATH };
   try {
     assert.equal(pm2DaemonUp(home), false, 'no pid file');
     writeFileSync(join(home, 'pm2.pid'), `${process.pid}\n`);
@@ -184,15 +188,17 @@ test('the services of a project ask pm2 only when its daemon runs: no daemon, no
     writeFileSync(join(home, 'pm2.pid'), 'garbage');
     assert.equal(pm2DaemonUp(home), false);
     rmSync(join(home, 'pm2.pid'));
-    Object.assign(process.env, { PM2_HOME: home, KB_PANEL_URL: '', PANEL_URL: '' });
+    Object.assign(process.env, { PM2_HOME: home, KB_PANEL_URL: '', PANEL_URL: '', PATH: `${fake}:${process.env.PATH}` });
     await create({ slug: 'pm2-none', name: 'no daemon', pm2_services: 'web' });
     const r = await app.inject({ method: 'GET', url: '/api/projects/pm2-none/status' });
     assert.equal(r.statusCode, 502);
     assert.match(r.json().error, /pm2 runs no daemon/);
     assert.deepEqual(readdirSync(home), [], 'pm2 was started and made its home');
+    assert.deepEqual(readdirSync(fake), ['pm2'], 'pm2 was called with no daemon running');
   } finally {
     for (const [k, v] of Object.entries(was)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
     rmSync(home, { recursive: true, force: true });
+    rmSync(fake, { recursive: true, force: true });
   }
 });
 

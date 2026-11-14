@@ -16,7 +16,8 @@ const SOCKET = ownSocket('kb-deliver');
 // A stand-in for Claude Code's input field, drawn as Claude Code draws it (a rule, "❯ " and the words, a rule, a faint
 // status row; a faint placeholder when empty), taking what tmux types: a bracketed paste (a paste that is the path of a
 // picture becomes "[Image #N]", one of many lines "[Pasted text #N +M lines]", as Claude Code folds them), Ctrl+K, Ctrl+U
-// and Enter. Every sent message is one JSON line in FAKE_LOG. FAKE_MODE: "nopaste" drops pastes, "noenter" ignores Enter.
+// and Enter. Every sent message is one JSON line in FAKE_LOG. FAKE_MODE: "nopaste" drops pastes, "noenter" ignores Enter,
+// "exitenter" takes the words on Enter and leaves at once (its terminal goes with it).
 // Kept here, not as a file of test/: node --test would run any .cjs there as a test.
 const FIELD_SRC = String.raw`const fs = require('fs');
 const mode = process.env.FAKE_MODE || '';
@@ -35,6 +36,7 @@ function key(ch) {
   if (ch === '\r') {
     if (mode === 'noenter') return;
     fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify(buf) + '\n');
+    if (mode === 'exitenter') process.exit(0);
     sent.push(buf);
     buf = '';
   } else if (ch === '\x15') buf = buf.endsWith('\n') ? buf.slice(0, -1) : buf.slice(0, buf.lastIndexOf('\n') + 1);
@@ -133,6 +135,21 @@ test('words with a row of rules in them reach Claude — the row is not the fiel
   const text = 'Here is the output:\n────────────\nwhy does the test fail?';
   assert.deepEqual(await phantom.deliverChat(f.sid, { text }), { err: null });
   assert.deepEqual(f.sent(), [text]);
+});
+
+// knows them only by `entered`, which the delivery and sayToTerminal pass on. Here Claude takes the words and its terminal
+// goes at once: the look after Enter fails.
+test('words whose terminal failed after Enter are said to have been entered, all the way to the chat\'s queue', { skip }, async () => {
+  const f = await field({ FAKE_MODE: 'exitenter' });
+  const r = await phantom.deliverChat(f.sid, { text: 'taken, then gone' });
+  assert.ok(r.err, 'the look after Enter did not fail');
+  assert.equal(r.entered, true, 'a failure after Enter was not told from one before it');
+  assert.deepEqual(f.sent(), ['taken, then gone']);
+  const { sayToTerminal } = await import('../src/terminal-say.js');
+  const g = await field({ FAKE_MODE: 'exitenter' });
+  const said = await sayToTerminal({ key: 'ODD-1', labels: '["noclaude"]', status: 'doing' }, g.sid, { text: 'once', chat: true, checked: true });
+  assert.equal(said.entered, true, 'sayToTerminal dropped `entered`: the queue would type the words again');
+  assert.deepEqual(g.sent(), ['once']);
 });
 
 test('no field on the screen — nothing is typed', { skip }, async () => {

@@ -114,6 +114,11 @@ test('the board\'s refusals and wrong arguments come back as tool errors, and th
   const bogus = await mcp.call('list_tasks', { project: 'mcp', status: 'bogus' });
   assert.equal(bogus.isError, true);
   assert.match(text(bogus), /^status: one of backlog, todo/);
+  for (const [tool, args] of [['update_task', { key: 'MC-1', priority: 'constructor' }], ['create_task', { project: 'mcp', title: 'proto', priority: 'toString' }]]) {
+    const r = await mcp.call(tool, args);
+    assert.equal(r.isError, true, `${tool} took a priority from the prototype`);
+    assert.match(text(r), /^priority: one of none, low, med, high/);
+  }
   assert.equal((await mcp.ask('tools/call', { name: 'rm_rf', arguments: {} })).error.code, -32602);
   mcp.child.stdin.write('not json\n');
   assert.match(text(await mcp.call('list_projects', {})), /^mcp /, 'a bad line stopped the server');

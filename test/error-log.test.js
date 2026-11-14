@@ -157,3 +157,23 @@ test('a huge browser error is kept no longer than the log writes it', async () =
   assert.ok(grew < 12, `40 huge errors still hold ${grew.toFixed(0)} MB of the board's memory (about 36 MB when kept whole)`);
   await app.close();
 });
+
+// String() — the report became a 500 of its own, written into the journal it was meant for
+test('a browser error report with a message or scope that is no text is a 400, and the journal stays empty', async () => {
+  clear();
+  const { default: Fastify } = await import('fastify');
+  const systemRoutes = (await import('../src/routes/system.js')).default;
+  const { errorHandler } = await import('../src/error-handler.js');
+  const app = Fastify();
+  app.setErrorHandler(errorHandler);
+  await app.register(systemRoutes);
+  await app.ready();
+  for (const payload of [{ message: { toString: 1 } }, { message: [{ toString: null }] }, { message: 'm', scope: { toString: 1 } }]) {
+    const r = await app.inject({ method: 'POST', url: '/api/errors', payload });
+    assert.equal(r.statusCode, 400, `${JSON.stringify(payload)}: ${r.body}`);
+    assert.match(r.json().error, /^(message|scope): text/);
+  }
+  assert.equal(rows().length, 0, 'a refused report wrote into the journal');
+  assert.equal((await app.inject({ method: 'POST', url: '/api/errors', payload: { message: 'a number scope', scope: 5 } })).statusCode, 200);
+  await app.close();
+});

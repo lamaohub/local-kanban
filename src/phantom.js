@@ -441,7 +441,7 @@ const QUESTION_END = /Esc to (cancel|exit)|Enter to (confirm|select)/;
 const BUSY_LINE = /esc to interrupt/i;
 const shownLines = (screen) => String(screen || '').split('\n').filter((l) => l.trim());
 const lastLines = (screen, n) => shownLines(screen).slice(-n).join(' ').replace(/\s+/g, ' ');
-const BOX_BORDER = /^\s*─{8,}/;
+const BOX_BORDER = /^─{8,}/;
 function abovePromptBox(lines, under = 4) {
   const bottom = lines.findLastIndex((l) => BOX_BORDER.test(l));
   if (bottom < 0 || lines.length - bottom - 1 > under) return lines;

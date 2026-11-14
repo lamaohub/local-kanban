@@ -58,6 +58,7 @@ process.stdin.on('data', (s) => {
   if (s.includes('MANY')) for (let i = 0; i < 1100; i++) process.stdout.write('row ' + String(i).padStart(4, '0') + '\\r\\n');
 });
 process.stdout.on('resize', () => log({ resized: process.stdout.columns }));
+log({ ready: process.pid }); // set up: bracketed paste on, raw input, the resize handler — a test may type or resize now
 `);
   chmodSync(fake, 0o755);
   Object.assign(process.env, {
@@ -669,6 +670,9 @@ async function launchOn(project, keys) {
   await until(() => alive(keys[0]), `the start on ${keys[0]}`);
   // the stand-in itself is up — tmux has the session a moment before the program inside it listens
   await until(() => entries().some((e) => e.argv?.includes(r.json().session)), `the stand-in on ${keys[0]}`);
+  // that typed or resized in between lost the resize or got its paste without the marks (2 of 25 runs under load)
+  const pid = entries().find((e) => e.argv?.includes(r.json().session)).pid;
+  await until(() => entries().some((e) => e.ready === pid), `the stand-in on ${keys[0]} set up`);
   return r.json().session;
 }
 
@@ -1346,6 +1350,7 @@ test('an open question is told from Claude at its prompt by the bottom of the sc
     '  ⏵⏵ auto mode on (shift+tab to cycle) · ←…'].join('\n');
   assert.equal(questionOpen(above), true, 'a question above the input box');
   assert.equal(questionOpen(above.replace('Enter to confirm · Esc to cancel', 'Enter to confirm · Esc to\ncancel')), true, 'its footer wrapped');
+  assert.equal(questionOpen(above.replace('\n❯ \n', `\n❯ вот вывод:\n  ${'─'.repeat(12)}\n`)), true, 'a row of rules typed into the field');
   assert.equal(questionOpen(`Do you want to proceed?\n❯ 1. Yes\n  2. No\nEsc to cancel\n● Done.\n${prompt('')}`), false, 'an answered question, one line of Claude after it');
   assert.equal(questionOpen(prompt('Enter to confirm')), false, 'the words typed into the input');
   const quoted = ['● Готово: вопрос с подвалом', '  «Enter to confirm · Esc to cancel» виден.', '─'.repeat(45), '❯ ', '─'.repeat(45), '  ? for shortcuts'].join('\n');

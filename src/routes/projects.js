@@ -259,7 +259,11 @@ export default async function projectRoutes(app) {
     return list;
   });
 
+  /* The type before String(): an object whose toString is not a function threw there — a 500 instead of a 400.
+     A number is kept as text, as it always was. */
+  const badCategory = (v) => v !== undefined && v !== null && typeof v !== 'string' && typeof v !== 'number';
   app.post('/api/categories', (req, reply) => {
+    if (badCategory(req.body?.name)) return reply.code(400).send({ error: 'name: the name of the category', field: 'name' });
     const name = String(req.body?.name || '').trim();
     if (!name) return reply.code(400).send({ error: 'name required' });
     if (name.length > 40) return reply.code(400).send({ error: 'category name: up to 40 characters' });
@@ -271,6 +275,7 @@ export default async function projectRoutes(app) {
 
   app.patch('/api/categories/:name', (req, reply) => {
     const from = req.params.name;
+    if (badCategory(req.body?.name)) return reply.code(400).send({ error: 'name: the name of the category', field: 'name' });
     const to = String(req.body?.name || '').trim();
     if (!to) return reply.code(400).send({ error: 'name required' });
     if (to.length > 40) return reply.code(400).send({ error: 'category name: up to 40 characters' });

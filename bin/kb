@@ -18,6 +18,10 @@ const ST_ALIAS = {
   rd: 'ready', ready: 'ready', dp: 'deploy', deploy: 'deploy', r: 'review', review: 'review', dn: 'done', done: 'done',
   c: 'cancelled', cancelled: 'cancelled', cancel: 'cancelled',
 };
+// a status by its name, only from the table: ST_ALIAS['constructor'] is a function of the prototype, and `kb mv X constructor`
+// sent a PATCH with no status, answered 200 — code 0 and the task's old status, read as a move made
+const statusOf = (v) => (typeof v === 'string' && Object.hasOwn(ST_ALIAS, v) ? ST_ALIAS[v] : undefined);
+const priOf = (v) => (typeof v === 'string' && Object.hasOwn(PRI_BY_NAME, v) ? PRI_BY_NAME[v] : undefined);
 
 // Exit codes are a contract for automation (scripts gate their moves on them):
 // 0 — success, 1 — the board is not responding, 2 — the request was rejected (4xx or an
@@ -479,7 +483,7 @@ const commands = {
     const q = new URLSearchParams({ project: proj });
     if (si >= 0) {
       // a status the board does not have used to print «empty» with code 0 — read as «nothing in that column»
-      const status = ST_ALIAS[args[si + 1]];
+      const status = statusOf(args[si + 1]);
       if (!status) die(`kb: status ${[...new Set(Object.values(ST_ALIAS))].join('|')}${args[si + 1] === undefined ? '' : ` — not «${args[si + 1]}»`}`);
       q.set('status', status);
     }
@@ -591,12 +595,12 @@ const commands = {
     const body = { project: proj, title };
     if (di >= 0) body.description = args[di + 1] || '';
     if (pi >= 0) {
-      const pr = PRI_BY_NAME[args[pi + 1]];
+      const pr = priOf(args[pi + 1]);
       if (pr === undefined) die('kb: priority high|med|low|none');
       body.priority = pr;
     }
     if (si >= 0) {
-      body.status = ST_ALIAS[args[si + 1]];
+      body.status = statusOf(args[si + 1]);
       if (!body.status) die('kb: status backlog|todo|prep|doing|ready|deploy|review|done');
     }
     const t = await api('POST', '/api/tasks', body, TASK);
@@ -611,7 +615,7 @@ const commands = {
 
   async mv() {
     const [id, st] = args;
-    const status = ST_ALIAS[st];
+    const status = statusOf(st);
     if (!id || !status) die('kb mv <key> backlog|todo|prep|doing|ready|deploy|review');
     const k = key(id);
     // started by the board runs only after asking (src/phantom.js), while its `kb mv` goes without asking. Before
@@ -639,7 +643,7 @@ const commands = {
 
   async pri() {
     const [id, p] = args;
-    const pr = PRI_BY_NAME[p];
+    const pr = priOf(p);
     if (!id || pr === undefined) die('kb pri <key> high|med|low|none');
     const t = await api('PATCH', `/api/tasks/${key(id)}`, { priority: pr }, TASK);
     console.log(`${t.key} ${PRI[t.priority] || 'p0'}`);

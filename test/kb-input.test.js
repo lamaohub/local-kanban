@@ -97,6 +97,21 @@ test('kb ls checks -s by the short names of kb mv and sends nothing on a wrong o
   assert.deepEqual(seen, ['GET /api/tasks?project=demo']);
 });
 
+// a status named after the prototype (ST_ALIAS['constructor'] is a function) went out as no status at all: kb mv answered
+// code 0 with the old status, kb add made the task in Backlog, and kb ls asked the board
+test('a status from the prototype is no status: kb ls, kb mv and kb add refuse it without asking the board', async () => {
+  for (const s of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+    for (const args of [['ls', 'demo', '-s', s], ['mv', 'DM-7', s], ['add', 'demo', 'a title', '-s', s],
+      ['pri', 'DM-7', s], ['add', 'demo', 'a title', '-p', s]]) {
+      fresh(() => ({ status: 200, body: task }));
+      const r = await run(args);
+      assert.equal(r.code, 2, `kb ${args.join(' ')}: ${r.stdout}${r.stderr}`);
+      assert.match(r.stderr, /^kb(:| mv| pri) /);
+      assert.deepEqual(seen, [], `kb ${args.join(' ')} asked the board`);
+    }
+  }
+});
+
 test('a name from the prototype is an unknown command, not "the board is not responding"', async () => {
   fresh(() => ({ status: 200, body: [] }));
   for (const c of ['constructor', 'toString', '__proto__', 'hasOwnProperty', 'valueOf']) {
