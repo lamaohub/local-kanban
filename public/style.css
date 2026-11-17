@@ -2982,6 +2982,11 @@ a.hl-name:hover { color: var(--accent); }
 .pf-env { resize: vertical; font-family: var(--mono, ui-monospace, monospace); font-size: 12px; }
 .pf-btns { display: flex; align-items: center; gap: 8px; }
 .pf-said { font-size: 12.5px; }
+.pf-mcp, .pf-plugins { font: inherit; font-size: 12.5px; color: var(--text); background: var(--input-bg); border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; min-width: 0; grid-column: 1 / -1; }
+.pf-mcp:disabled { opacity: .55; }
+.pf-label { grid-column: 1 / -1; font-size: 12.5px; }
+.pf-check { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
+.pf-default-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 12.5px; }
 .d-profile { font-size: 12.5px; }
 .attempts { display: flex; flex-direction: column; gap: 4px; }
 .attempt-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
@@ -3002,3 +3007,11 @@ a.hl-name:hover { color: var(--accent); }
 .pick-bookmark { cursor: grab; }
 .pick-note:empty { display: none; }
 .d-attempt-profile { font-size: 12.5px; }
+
+.hs-row { padding: 10px 0; border-top: 1px solid var(--border); }
+.hs-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; }
+.hs-name { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.hs-first { font-variant-numeric: tabular-nums; }
+.hs-skill, .hs-n { font-size: 12.5px; }
+.hs-parts { display: flex; flex-wrap: wrap; gap: 2px 14px; margin-top: 4px; font-size: 12.5px; }
+.hs-part { white-space: nowrap; font-variant-numeric: tabular-nums; }

@@ -226,3 +226,68 @@ test('kb show names the launch profile of the task — its own, or its project\'
   await app.inject({ method: 'PATCH', url: '/api/projects/pf', payload: { profile_id: null } });
   assert.doesNotMatch(await kb('show', 'PF-1'), /^profile:/m, 'a task with no profile printed one');
 });
+
+// The person's settings stay as they are — the list goes as a file of the board's data, never on the command line.
+test('a profile keeps its sessions to the servers it names and switches plugins off; the board\'s profile is the fallback', async () => {
+  const work = join(tmp, 'work');
+  writeFileSync(join(process.env.KB_CLAUDE_DIR, '.claude.json'), JSON.stringify({
+    mcpServers: { figma: { type: 'http', url: 'https://mcp.figma.com/mcp' }, playwright: { type: 'stdio', command: 'npx', env: { TOKEN: SECRET } }, blender: { type: 'stdio', command: 'uvx' } },
+    projects: { [work]: { mcpServers: { magic: { type: 'stdio', command: 'npx' } } }, '/elsewhere': { mcpServers: { roblox: { type: 'stdio', command: 'x' } } } },
+  }));
+  writeFileSync(join(process.env.KB_CLAUDE_DIR, 'settings.json'), JSON.stringify({ enabledPlugins: { 'figma@claude-plugins-official': true } }));
+  for (const [body, field] of [[{ name: 'x', mcp: 'playwright' }, 'mcp'], [{ name: 'x', mcp: ['-x'] }, 'mcp'], [{ name: 'x', mcp: [{}] }, 'mcp'],
+    [{ name: 'x', plugins_off: ['figma'] }, 'plugins_off'], [{ name: 'x', plugins_off: 'figma@official' }, 'plugins_off']]) {
+    const r = await post(body);
+    assert.equal(r.statusCode, 400, JSON.stringify(body));
+    assert.equal(r.json().field, field);
+  }
+  const lean = await post({ name: 'Lean', mcp: ['playwright', 'magic', 'not-there', 'playwright'], plugins_off: ['figma@claude-plugins-official'] });
+  assert.equal(lean.statusCode, 201, lean.body);
+  const pr = lean.json();
+  assert.deepEqual(pr.mcp, ['playwright', 'magic', 'not-there'], 'the list keeps one of each, in order');
+  assert.deepEqual(pr.plugins_off, ['figma@claude-plugins-official']);
+  const listed = (await app.inject('/api/profiles')).json();
+  assert.deepEqual(listed.servers, ['blender', 'figma', 'magic', 'playwright', 'roblox'], 'the editor is told the person\'s servers');
+  assert.deepEqual(listed.plugins, ['figma@claude-plugins-official']);
+  assert.equal(listed.default, null);
+  assert.ok(!JSON.stringify(listed).includes(SECRET), 'a server\'s settings went to the page');
+  // no profile on the project or the task: the board's own is taken
+  await app.inject({ method: 'PATCH', url: '/api/projects/pf', payload: { profile_id: null } });
+  await app.inject({ method: 'PUT', url: '/api/tasks/PF-2/profile', payload: { profile: null } });
+  assert.equal((await app.inject({ method: 'PUT', url: '/api/profiles/default', payload: { profile: 9999 } })).statusCode, 400);
+  assert.equal((await app.inject({ method: 'PUT', url: '/api/profiles/default', payload: { profile: pr.id } })).json().default, pr.id);
+  const card = (await app.inject('/api/tasks/PF-2')).json();
+  assert.equal(card.profile_name, 'Lean');
+  assert.equal(card.profile_from, 'board');
+  let r = (await app.inject({ method: 'POST', url: '/api/launch', payload: { mode: 'board', project: 'pf', keys: ['PF-2'], text: 'Do it' } })).json();
+  assert.ok(r.args.includes('--strict-mcp-config'), r.args.join(' '));
+  const file = r.args[r.args.indexOf('--mcp-config') + 1];
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(file, 'utf8')).mcpServers), ['playwright', 'magic'], 'only the servers named — the project folder\'s own among them; a name with no server is left out');
+  assert.equal(statSync(file).mode & 0o777, 0o600, 'a server\'s settings may hold its key');
+  assert.ok(!r.args.join(' ').includes(SECRET));
+  const settings = JSON.parse(readFileSync(r.args[r.args.indexOf('--settings') + 1], 'utf8'));
+  assert.deepEqual(settings.enabledPlugins, { 'figma@claude-plugins-official': false });
+  assert.ok(settings.hooks?.PermissionRequest, 'the hook of questions stays');
+  // the Terminal: the same, in its own files
+  const t = (await app.inject({ method: 'POST', url: '/api/launch', payload: { mode: 'terminal', project: 'pf', keys: ['PF-2'], text: 'Do it' } })).json();
+  assert.match(t.args.join(' '), /--strict-mcp-config --mcp-config .?.?[^ ]*mcp-\d+-p\d+-term-[0-9a-f]+\.json/);
+  // a profile with every server (mcp null): nothing of the kind
+  const all = (await post({ name: 'All of them' })).json();
+  assert.equal(all.mcp, null);
+  await app.inject({ method: 'PUT', url: '/api/tasks/PF-2/profile', payload: { profile: all.id } });
+  r = (await app.inject({ method: 'POST', url: '/api/launch', payload: { mode: 'board', project: 'pf', keys: ['PF-2'], text: 'Do it' } })).json();
+  assert.ok(!r.args.includes('--strict-mcp-config') && !r.args.includes('--mcp-config'), 'a profile with all servers kept them out');
+  assert.equal(JSON.parse(readFileSync(r.args[r.args.indexOf('--settings') + 1], 'utf8')).enabledPlugins, undefined);
+  await app.inject({ method: 'PUT', url: '/api/tasks/PF-2/profile', payload: { profile: null } });
+  // back to all servers: the next start has no list; the files of the list go with the edit and with the profile
+  assert.equal((await app.inject({ method: 'PATCH', url: `/api/profiles/${pr.id}`, payload: { mcp: null } })).json().mcp, null);
+  assert.ok(!existsSync(file), 'the list of an edited profile stayed on the disk');
+  await app.inject({ method: 'PATCH', url: `/api/profiles/${pr.id}`, payload: { mcp: ['playwright'] } });
+  r = (await app.inject({ method: 'POST', url: '/api/launch', payload: { mode: 'board', project: 'pf', keys: ['PF-2'], text: 'Do it' } })).json();
+  const again = r.args[r.args.indexOf('--mcp-config') + 1];
+  assert.ok(existsSync(again));
+  await app.inject({ method: 'DELETE', url: `/api/profiles/${pr.id}` });
+  assert.ok(!existsSync(again), 'a deleted profile left its list of servers');
+  assert.equal((await app.inject('/api/profiles')).json().default, null, 'the board\'s profile went with it');
+  assert.equal((await app.inject('/api/tasks/PF-2')).json().profile_name, null);
+});

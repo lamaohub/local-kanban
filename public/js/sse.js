@@ -12,7 +12,8 @@ import { applyAutomations, loadAutomations } from './automations.js';
 import { applyAskEvent, loadAsks } from './asks.js';
 import { callHears } from './call.js';
 import { usageLine } from './usage-rules.js';
-import { KB_DEFAULT_PORT, boardOnly, checksOnly, launchPick, manualRefusal, startEffort, withBoardAddress } from './launch-rules.js';
+import { resumeWords } from './resume-rules.js';
+import { KB_DEFAULT_PORT, boardOnly, checksOnly, launchPick, manualRefusal, startEffort, withBoardAddress, withFolders } from './launch-rules.js';
 import { refusalLine, refusalText } from './unsaved.js';
 import { repaintReview } from './review.js';
 import { setTerminalQuestions } from './attention.js';
@@ -584,9 +585,14 @@ function boardPort() {
   return String((launchAvail && launchAvail.port) || location.port || '');
 }
 const promptHere = (text) => withBoardAddress(text, boardPort(), tr);
+// of the project's instructions
+// a project by its slug, or by the prefix of a key (resumeOnBoard's «New session» knows only the key)
+const foldersOf = (slugs) => [...new Set(slugs.filter(Boolean))]
+  .map((slug) => { const p = (state.projects || []).find((x) => x.slug === slug || x.prefix === slug); return { slug, path: p?.path || '' }; });
+const copyHere = (text, slugs) => promptHere(withFolders(text, foldersOf(slugs), tr));
 
 export async function copyTodoPrompt(tasks, btn) {
-  const text = promptHere(todoPromptText(tasks));
+  const text = copyHere(todoPromptText(tasks), tasks.map((t) => t.project));
   const ok = await copyText(text);
   btn.textContent = ok ? '✓' : '✕';
   btn.classList.toggle('copied', ok);
@@ -661,6 +667,18 @@ const BOARD_WHY = {
 /** Continue the board's session `session` of the task `key` in its terminal; true — started. */
 export async function resumeOnBoard({ key, session, btn, again = false }) {
   if (!key || !session) return false;
+  if (!again) {
+    if (btn?.disabled) return false; // a second click while the advice is asked
+    if (btn) btn.disabled = true;
+    let advice = null;
+    try { advice = (await api('GET', `/api/tasks/${encodeURIComponent(key)}/resume-advice?session=${encodeURIComponent(session)}`, undefined, { quiet: true }))?.advice; } catch { /* no advice — continue as before */ }
+    if (btn) btn.disabled = false;
+    if (advice) {
+      const pick = await styledConfirm(resumeWords(advice, tr), { okLabel: tr('Continue'), alt: tr('New session') });
+      if (pick === false) return false;
+      if (pick === 'alt') { await launchInClaude({ text: taskPromptText(key), project: key.replace(/-\d+$/, ''), keys: [key], btn }); return false; }
+    }
+  }
   const keys = [key];
   const body = { mode: 'board', project: key.replace(/-\d+$/, ''), keys, resume: session, permission: getSetting('permission'),
     effort: startEffort(checksOnly(keys, state.tasks), getSetting('effort'), getSetting('effortCheck')) };
@@ -708,7 +726,7 @@ export async function launchInClaude({ text, project, keys, btn, again = false, 
       mode = await launchMode(true);
     }
   }
-  if (mode === 'copy') { flashButton(btn, await copyText(promptHere(text)), tr('copied — paste it into Claude')); return; }
+  if (mode === 'copy') { flashButton(btn, await copyText(copyHere(text, [project])), tr('copied — paste it into Claude')); return; }
   // the Claude app, where the person still has to send the prompt — that Claude moves them itself)
   await postLaunch({ mode, text: mode === 'desktop' ? promptHere(text) : text, project: project || undefined, keys: keys?.length ? keys : undefined, effort: mode === 'terminal' ? effort : undefined }, btn);
 }
@@ -768,7 +786,7 @@ export async function openSessionInClaude({ session, host, project, btn }) {
 export async function copyBacklogPrompt(tasks, btn) {
   const slug = state.slug === ALL ? null : state.slug;
   const head = slug ? `${tr('Groom the backlog of')} ${slug} ${tr('(grooming mode):')}` : tr('Groom the backlog (grooming mode):');
-  const text = promptHere([tr('Run the kanban skill'), head, ...tasks.map((t) => t.key)].join('\n'));
+  const text = copyHere([tr('Run the kanban skill'), head, ...tasks.map((t) => t.key)].join('\n'), tasks.map((t) => t.project));
   const ok = await copyText(text);
   btn.textContent = ok ? '✓' : '✕';
   btn.classList.toggle('copied', ok);

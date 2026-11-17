@@ -12,7 +12,7 @@ const STREAM = /^text\/event-stream/i;
 /* Answers that are held open on purpose — not slow: the stream of events (its headers go by `raw.writeHead`, so the reply
    does not know its type) and the long poll of a hook waiting for the person's answer (up to POLL_HOLD_MS, 25 s). */
 export const HELD_OPEN = new Set(['GET /api/events', 'GET /api/asks/:id/wait']);
-export const WAITS = new Set(['GET /api/health', 'GET /api/health/stands', 'GET /api/update-check', 'GET /api/whats-new',
+export const WAITS = new Set(['GET /api/health', 'GET /api/health/stands', 'GET /api/health/start', 'GET /api/update-check', 'GET /api/whats-new',
   'POST /api/update', 'POST /api/launch', 'POST /api/tasks/:id/chat', 'POST /api/tasks/:id/chat/queue/:itemId/now',
   // the branch of a task's copy asks GitHub of its pull request (gh, up to 20 s); a pull request pushes and asks gh
   'GET /api/tasks/:id/branch', 'POST /api/tasks/:id/pr',

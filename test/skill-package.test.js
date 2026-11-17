@@ -5,13 +5,17 @@
 // Run: node --test
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
 
 const PKG = (name) => readFileSync(new URL(`../skills/${name}/SKILL.md`, import.meta.url));
+const PKG_ALL = (name) => {
+  const root = fileURLToPath(new URL(`../skills/${name}/`, import.meta.url));
+  return Object.fromEntries(readdirSync(root, { recursive: true }).filter((rel) => !rel.endsWith('/') && existsSync(join(root, rel)) && !statSync(join(root, rel)).isDirectory()).sort().map((rel) => [rel, readFileSync(join(root, rel))]));
+};
 let tmp, skillsDir, skills, system, app;
 
 before(async () => {
@@ -54,7 +58,7 @@ const refresh = (name, payload) => app.inject({ method: 'POST', url: `/api/skill
 test('the board\'s skill against the package: the same, an old copy, a link, a file linked inside, missing, not shipped', () => {
   rmSync(join(skillsDir, 'kanban'), { recursive: true, force: true });
   assert.equal(skills.packagedSkillState('kanban'), 'missing');
-  put('kanban', { 'SKILL.md': PKG('kanban'), 'references/mine.md': 'a file of the person\'s own next to it\n' });
+  put('kanban', { ...PKG_ALL('kanban'), 'references/mine.md': 'a file of the person\'s own next to it\n' });
   assert.equal(skills.packagedSkillState('kanban'), 'same', 'a file of the person\'s own makes the copy differ');
   put('kanban', { 'SKILL.md': '# kanban, as an older version had it\n' });
   assert.equal(skills.packagedSkillState('kanban'), 'differs');
@@ -90,7 +94,7 @@ test('taking the board\'s version: the shipped files, the old one kept, the pers
   r = await refresh('kanban', { confirm_path: join(dir, 'SKILL.md') });
   assert.equal(r.statusCode, 200, r.body);
   const j = r.json();
-  assert.deepEqual([j.written, j.state, j.kept.length], [['SKILL.md'], 'same', 1]);
+  assert.deepEqual([[...j.written].sort(), j.state, j.kept.length], [Object.keys(PKG_ALL('kanban')), 'same', 1]);
   assert.ok(readFileSync(join(dir, 'SKILL.md')).equals(PKG('kanban')), 'the board\'s version is not in place');
   assert.equal(readFileSync(join(dir, 'references', 'mine.md'), 'utf8'), 'mine\n', 'a file of the person\'s own went away');
   assert.equal(snapshots().length, had + 1);
@@ -164,7 +168,7 @@ test('GET /api/skills says which copy is not the board\'s version', async () => 
 
 test('the board\'s update brings along the copies nobody changed, and leaves a changed one as it was', () => {
   // before the update: kanban exactly as the package put it, deploy changed by the person
-  const k = put('kanban', { 'SKILL.md': PKG('kanban') });
+  const k = put('kanban', PKG_ALL('kanban'));
   const d = put('deploy', { 'SKILL.md': '# my own deploy\n' });
   const before = system.skillStates();
   assert.deepEqual(before, { deploy: 'differs', kanban: 'same' });

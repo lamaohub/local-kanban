@@ -20,7 +20,13 @@ const NOTE_TASK = /<task-id>([^<\s]+)<\/task-id>/;
 const NOTE_STATUS = /<status>([^<\s]+)<\/status>/;
 const promptText = (p) => (typeof p === 'string' ? p
   : Array.isArray(p) ? p.filter((b) => b?.type === 'text' && typeof b.text === 'string').map((b) => b.text).join('\n') : null);
+const TASK_ENDS = new Set(['completed', 'failed', 'killed', 'stopped', 'cancelled']);
 export function notification(d) {
+  // own («<agent-message>») has no other end in the transcript
+  const st = d?.type === 'attachment' ? d.attachment : null;
+  if (st?.type === 'task_status' && typeof st.taskId === 'string' && st.taskId && TASK_ENDS.has(st.status)) {
+    return { task: st.taskId, status: st.status, record: true }; // written when Claude Code learns it, often late
+  }
   let text = null;
   let usage = null;
   if (d.type === 'queue-operation' && d.operation === 'enqueue') text = d.content;
@@ -448,6 +454,7 @@ export function chatTurns(items) {
       // Claude Code writes a notification when it takes it, with the moment it came: one from before the helper was
       // brought back ended the run before, not this one
       if (it.at < (call.resumed ?? -Infinity)) continue;
+      if (it.record && !call.running) continue;
       call.running = false;
       call.error = it.status === 'failed';
       call.ms = it.ms !== undefined ? (call.before || 0) + it.ms : runTime(call, it.at);

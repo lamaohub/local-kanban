@@ -6,7 +6,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, readFileSync, rmSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -97,6 +97,11 @@ test('prices: input, output, cache read and the two cache writes; the fast mode;
   close(usage.costOf('claude-opus-4-8', 1, M), 10 + 50 + 1 + 10 * 1.25 + 10 * 2, 'opus 4.8 has a fast mode too, at the price of Opus 5\'s');
   close(usage.costOf('claude-fable-5-1', 0, M), 10 + 50 + 0.25 + 12.5 + 20, 'fable 5.1 reads its cache at a quarter of fable 5');
   close(usage.costOf('claude-fable-5', 0, M), 10 + 50 + 1 + 12.5 + 20);
+  close(usage.costOf('claude-fable-5-2', 0, M), 8 + 40 + 0.2 + 10 + 16, 'fable 5.2 is cheaper than 5.1 and reads its cache at 0.025x');
+  close(usage.costOf('claude-fable-5-2', 1, M), 16 + 80 + 0.4 + 20 + 32, 'fable 5.2 has a fast mode');
+  close(usage.costOf('claude-mythos-5-2', 0, M), 8 + 40 + 0.2 + 10 + 16);
+  close(usage.costOf('claude-sonnet-5-5', 0, M), 2 + 10 + 0.1 + 2.5 + 4, 'sonnet 5.5 reads its cache at 0.05x, not 0.1x');
+  assert.equal(usage.costOf('claude-haiku-5-5', 0, M), null, 'haiku 5.5 is priced by the length of each prompt — the daily sums cannot carry that');
   close(usage.costOf('claude-haiku-4-5-20251001', 0, M), 1 + 5 + 0.1 + 1.25 + 2, 'a dated name is the model it names');
   close(usage.costOf('claude-opus-5-20260101', 0, M), 5 + 25 + 0.5 + 6.25 + 10, 'a dated opus 5 is not opus 5.5');
   close(usage.costOf('claude-opus-4-20250514', 0, M), 15 + 75 + 1.5 + 18.75 + 30, 'the first Claude 4 ids carry no -0');
@@ -105,7 +110,7 @@ test('prices: input, output, cache read and the two cache writes; the fast mode;
   assert.equal(usage.costOf('claude-sonnet-4-5', 1, M), null, 'a model without a fast price has no fast price');
   assert.equal(usage.costOf('claude-opus-5-1', 0, M), null, 'a model the table does not know is not priced as a neighbour');
   assert.equal(usage.costOf('claude-new-9', 0, M), null);
-  assert.equal(usage.PRICE_TABLE.asOf, '2026-09-25');
+  assert.equal(usage.PRICE_TABLE.asOf, '2026-11-17');
 });
 
 test('the memory window: 1M for 4.6+ and 5.x, 200k for Haiku 4.5 and older, 1M for a [1m] name, unknown — null', () => {
@@ -175,13 +180,13 @@ test('tokens in a short form never show a thousand of a unit', () => {
 
 test('the card\'s line: tokens first, then the money with ≈, then the memory; the tooltip says what the money means', () => {
   const line = usageLine(sample(), F);
-  assert.equal(line.text, 'Usage · 1.2M tokens · ≈ $4.12 · memory 37%');
+  assert.equal(line.text, 'Usage · 1.2M tokens · ≈ $4.12 · memory 37% · 35 requests');
   const notes = line.title.split('\n');
   assert.equal(notes[0], 'Input 3 · output 45.3k · cache read 1.1M · cache write 90k');
   assert.match(notes[1], /^≈ \$4\.12 — what these tokens cost on the API, at the prices of on 2026-09-25\. With a subscription the money is notional/);
   assert.match(line.title, /Conversation memory on the last answer: 370k of 1M \(claude-opus-5-5\)/);
   assert.match(line.title, /Answers of Claude counted, helpers included: 35$/m);
-  assert.equal(usageLine(sample({ cost: 0.004 }), F).text, 'Usage · 1.2M tokens · ≈ < $0.01 · memory 37%', 'less than a cent is not "$0.00"');
+  assert.equal(usageLine(sample({ cost: 0.004 }), F).text, 'Usage · 1.2M tokens · ≈ < $0.01 · memory 37% · 35 requests', 'less than a cent is not "$0.00"');
   assert.equal(moneyText(0.006, F), '$0.01');
   assert.equal(usageLine(sample({ total: 0, context: null }), F), null, 'nothing counted — no line');
   assert.equal(usageLine(null, F), null);
@@ -189,7 +194,7 @@ test('the card\'s line: tokens first, then the money with ≈, then the memory; 
 
 test('a model without a price is counted without money, and the card says so; not a silent zero', () => {
   const line = usageLine(sample({ cost: null, unpriced: 1_235_303, unpriced_models: ['claude-new-9'], context: { tokens: 1500, window: null, model: 'claude-new-9' } }), F);
-  assert.equal(line.text, 'Usage · 1.2M tokens · memory 1.5k', 'no money part, the memory in tokens when the window is not known');
+  assert.equal(line.text, 'Usage · 1.2M tokens · memory 1.5k · 35 requests', 'no money part, the memory in tokens when the window is not known');
   assert.match(line.title, /No price for claude-new-9: 1\.2M tokens counted without money\./);
   assert.equal(memoryText({ tokens: 250_000, window: 200_000 }, F), '125%', 'more than the window is shown as it is, not capped');
 });
@@ -471,7 +476,7 @@ test('the card carries the usage; a task no session worked on has none', async (
   const card = (await app.inject({ method: 'GET', url: `/api/tasks/${task.key}` })).json();
   assert.deepEqual(Object.keys(card.usage).sort(), ['answers', 'context', 'cost', 'models', 'partial_answers', 'prices_as_of', 'tokens', 'total', 'unpriced', 'unpriced_models']);
   assert.deepEqual(card.usage.tokens, { input: 2, output: 30, cache_read: 1000, cache_write: 500 });
-  assert.equal(card.usage.prices_as_of, '2026-09-25');
+  assert.equal(card.usage.prices_as_of, '2026-11-17');
   const lone = newTask('Lone');
   assert.equal((await app.inject({ method: 'GET', url: `/api/tasks/${lone.key}` })).json().usage, null);
   assert.deepEqual((await app.inject({ method: 'GET', url: `/api/tasks/${lone.key}/usage` })).json(), { usage: null });
@@ -582,7 +587,7 @@ test('kb show and kb take print the line the card shows, right under the session
   const out = r.stdout.split('\n');
   const i = out.findIndex((l) => l.startsWith('claude sessions:'));
   assert.ok(i >= 0, r.stdout);
-  assert.equal(out[i + 1], 'claude usage: 151.5k tokens (input 2, output 1.5k, cache read 120k, cache write 30k) · ≈$0.29 at API prices of 2026-09-25 · context 15% of 1M (claude-opus-5-5)');
+  assert.equal(out[i + 1], 'claude usage: 151.5k tokens (input 2, output 1.5k, cache read 120k, cache write 30k) · ≈$0.29 at API prices of 2026-11-17 · context 15% of 1M (claude-opus-5-5) · 1 request, grew to 150k');
   const lone = newTask('Kb lone');
   const none = await run(['show', lone.key]);
   assert.equal(none.stdout.split('\n').some((l) => l.startsWith('claude usage:')), false);
@@ -594,7 +599,7 @@ test('kb show and kb take print the line the card shows, right under the session
     .run(back, usage.localDay(Date.now()));
   const took = await run(['take', 'take-usage']);
   assert.equal(took.code, 0, took.stderr);
-  assert.ok(took.stdout.split('\n').includes('claude usage: 3k tokens (input 1k, output 2k, cache read 0, cache write 0) · ≈$0.02 at API prices of 2026-09-25'), took.stdout);
+  assert.ok(took.stdout.split('\n').includes('claude usage: 3k tokens (input 1k, output 2k, cache read 0, cache write 0) · ≈$0.02 at API prices of 2026-11-17 · 1 request'), took.stdout);
 });
 
 test('the card and the dashboard draw it through the shared rules, escaped, every word in the dictionary', () => {
@@ -615,4 +620,66 @@ test('the card and the dashboard draw it through the shared rules, escaped, ever
   assert.deepEqual(said.filter((s) => !has(s)), [], 'a word of the usage line stays English on the Russian board');
   const plurals = src('js/settings.js');
   assert.match(plurals, /\n\s+token: \[/, 'tokens are not declined in Russian');
+});
+
+test('the advice before «Continue»: only past an hour of quiet AND past 300k tokens; its cost; the route of a task\'s own session', async () => {
+  const { resumeAdvice, RESUME_IDLE_MS, RESUME_BIG_TOKENS } = await import('../src/resume-advice.js');
+  const now = Date.now();
+  assert.equal(resumeAdvice({ tokens: 400_000, model: 'claude-opus-5-5', at: now - RESUME_IDLE_MS + 60_000 }, now), null, 'a pause under the hour');
+  assert.equal(resumeAdvice({ tokens: RESUME_BIG_TOKENS - 1, model: 'claude-opus-5-5', at: now - 3 * RESUME_IDLE_MS }, now), null, 'a small conversation');
+  const a = resumeAdvice({ tokens: 400_000, model: 'claude-opus-5-5', at: now - 3 * RESUME_IDLE_MS }, now);
+  assert.deepEqual([a.tokens, a.idle_ms, a.cost], [400_000, 3 * RESUME_IDLE_MS, 3.2], 'opus 5.5: 0.4M × $4 × 2');
+  assert.equal(resumeAdvice({ tokens: 400_000, model: 'claude-new-9', at: now - 3 * RESUME_IDLE_MS }, now).cost, null, 'a model with no price has no cost');
+  assert.equal(resumeAdvice({ tokens: 400_000, model: 'claude-opus-5-5', at: now - 3 * RESUME_IDLE_MS, thirdParty: true }, now).cost, null, 'another provider\'s session priced at Anthropic\'s');
+  assert.equal(resumeAdvice({}, now), null);
+
+  const big = newTask('Quiet');
+  const sid = '76767676-7676-4767-8767-767676767676';
+  const t0 = now - 3 * 3600_000;
+  await move(big, 'doing', t0 - 1000, sid);
+  writeFileSync(file(sid), lines([say(t0, 'go'), reply(t0 + 1000, 'm1', U(10, 5, 400_000))]));
+  utimesSync(file(sid), new Date(t0 + 1000), new Date(t0 + 1000)); // the transcript was last written with that answer
+  const ask = (task, s) => app.inject({ method: 'GET', url: `/api/tasks/${task.key}/resume-advice?session=${s}` });
+  let r = await ask(big, sid);
+  assert.equal(r.statusCode, 200, r.body);
+  const adv = r.json().advice;
+  assert.equal(adv.tokens, 400_010);
+  assert.ok(adv.idle_ms >= 3 * 3600_000 - 2000, `idle ${adv.idle_ms}`);
+  assert.equal(adv.cost, 3.2);
+  assert.equal((await ask(big, 'nope')).statusCode, 400);
+  assert.equal((await ask(big, '12121212-1212-4121-8121-121212121212')).statusCode, 404, 'a session not of this task');
+  // the same size answered ten minutes ago — nothing to ask
+  const fresh = newTask('Fresh');
+  const sid2 = '78787878-7878-4787-8787-787878787878';
+  await move(fresh, 'doing', now - 20 * 60_000, sid2);
+  writeFileSync(file(sid2), lines([say(now - 11 * 60_000, 'go'), reply(now - 10 * 60_000, 'm2', U(10, 5, 400_000))]));
+  r = await ask(fresh, sid2);
+  assert.equal(r.json().advice, null);
+  // review: an answer no task owned (not in the counted `last`) still wrote the transcript — the session is not quiet
+  utimesSync(file(sid), new Date(), new Date());
+  assert.equal((await ask(big, sid)).json().advice, null, 'a session written a minute ago was called quiet for hours');
+});
+
+test('the words of the advice say the size, the quiet and the cost, all through the dictionary', async () => {
+  const { resumeWords, quietFor } = await import('../public/js/resume-rules.js');
+  const tr = (s) => `«${s}»`;
+  const w = resumeWords({ tokens: 420_000, idle_ms: 3 * 3600_000, cost: 3.36 }, tr);
+  assert.match(w, /^«The conversation is» 420k «tokens and has been quiet for» 3 «h»: «continuing writes all of it to the cache again» — ≈ \$3\.36\. «The task keeps its notes/);
+  assert.doesNotMatch(resumeWords({ tokens: 1_250_000, idle_ms: 3 * 86400_000, cost: null }), /\$/, 'no price — no money');
+  assert.match(resumeWords({ tokens: 1_250_000, idle_ms: 3 * 86400_000, cost: null }), /1\.3M .* 3 d:/);
+  assert.equal(quietFor(30 * 60_000), '1 h');
+});
+
+// for its size on every request, and the size at its end alone hides a peak before a /compact
+test('the peak of the conversation is kept across answers and goes to the card and kb', async () => {
+  const task = newTask('Peak');
+  const sid = '68686868-6868-4686-8686-686868686868';
+  const t0 = Date.now() - 600_000;
+  await move(task, 'doing', t0 - 1000, sid);
+  writeFileSync(file(sid), lines([say(t0, 'go'), reply(t0 + 1000, 'p1', U(10, 5, 300_000)), reply(t0 + 2000, 'p2', U(10, 5, 420_000)),
+    reply(t0 + 3000, 'p3', U(10, 5, 90_000))])); // a /compact in between: the last request is small again
+  const u = await usageOf(task);
+  assert.equal(u.answers, 3);
+  assert.deepEqual([u.context.tokens, u.context.peak], [90_010, 420_010]);
+  assert.match(usageLine(u, F).text, / · 3 requests · grew to 420k$/);
 });

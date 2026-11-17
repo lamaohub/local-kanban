@@ -38,6 +38,19 @@ export function normalizeLimits(rateLimits) {
   return out;
 }
 
+/** When a reading was taken, from what kb sends (ms): a time in the last 30 days and not ahead of now; else null. */
+export function readingTime(v, nowMs = Date.now()) {
+  const t = num(v);
+  return t !== null && t > nowMs - 30 * 86400_000 && t <= nowMs + 60_000 ? Math.round(t) : null;
+}
+// of two readings of one window: the later one when both say when they were taken; a timed one over a held one without
+// a time (kept before kb sent it — the 91% of an early reset would stay to the end of the week); the higher figure otherwise
+const newerOf = (a, b) => {
+  if (a.as_of && b.as_of) return b.as_of >= a.as_of ? b : a;
+  if (b.as_of && !a.as_of) return b;
+  return b.used >= a.used ? b : a;
+};
+
 /* Merge a new reading into what the board holds, window by window. Returns the merged windows. */
 export function mergeLimits(held = {}, incoming = {}, nowS = Date.now() / 1000) {
   const out = {};
@@ -45,7 +58,7 @@ export function mergeLimits(held = {}, incoming = {}, nowS = Date.now() / 1000) 
     const a = held[k] && held[k].resets_at > nowS ? held[k] : null; // a reset window is gone
     const b = incoming[k] && incoming[k].resets_at > nowS ? incoming[k] : null;
     if (!a || !b) { if (a || b) out[k] = a || b; continue; }
-    if (Math.abs(a.resets_at - b.resets_at) <= SAME_WINDOW_S) out[k] = b.used >= a.used ? b : a;
+    if (Math.abs(a.resets_at - b.resets_at) <= SAME_WINDOW_S) out[k] = newerOf(a, b);
     else out[k] = b; // a new window after a reset, or another account's (see the top of the file)
   }
   return out;
@@ -63,9 +76,11 @@ export function readLimits() {
 
 /* Take one reading. `at` is when the board received a reading last — the footer prints it. Returns
    { snapshot, changed } — `changed` when a figure or a window moved, so the page is told only then. */
-export function takeReading({ rate_limits: rateLimits, model } = {}, nowMs = Date.now()) {
+export function takeReading({ rate_limits: rateLimits, model, as_of: asOf } = {}, nowMs = Date.now()) {
   const incoming = normalizeLimits(rateLimits);
   if (!Object.keys(incoming).length) return { snapshot: readLimits(), changed: false, ignored: true };
+  const taken = readingTime(asOf, nowMs);
+  if (taken) for (const w of Object.values(incoming)) w.as_of = taken;
   const held = readLimits();
   const windows = mergeLimits(held?.windows, incoming, nowMs / 1000);
   const snapshot = { windows, at: new Date(nowMs).toISOString() };

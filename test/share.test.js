@@ -290,7 +290,8 @@ test('the computer itself stays the owner\'s: a guest reads, but does not change
     ['PUT', '/api/skills/kanban'], ['POST', '/api/backups/restore'], ['POST', '/api/projects/server-git'], ['PUT', '/api/projects/demo/docs/CLAUDE.md'],
     ['POST', '/api/sync/config'], ['PUT', '/api/share'], ['POST', '/api/share/reset'], ['POST', '/api/tasks/DM-1/chat/run'],
     ['POST', '/api/backups'], ['GET', '/api/backups'], ['GET', '/api/backups/kanban-2026-01-01.db'], ['GET', '/api/backups/restore'],
-    ['POST', '/api/import/vibe-kanban'], ['POST', '/api/import/vibe-kanban?dry=1']]) {
+    ['POST', '/api/import/vibe-kanban'], ['POST', '/api/import/vibe-kanban?dry=1'],
+    ['GET', '/api/health/start']]) {
     const r = await ask(path, { method });
     assert.equal(r.status, 403, `${method} ${path}`);
     assert.equal(r.json.reason, 'guest');

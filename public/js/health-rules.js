@@ -151,3 +151,7 @@ export function loadWords(v, { tr, fmtNum }) {
   const routes = slowest.length ? `${tr('Slowest answers this hour:')} ${slowest.map((r) => `${r.route} ${sec(r.max)}`).join(', ')}` : '';
   return { slow: Boolean(v.slow), text, routes };
 }
+
+const START_PARTS = [['instructions', 'instructions'], ['skills', 'list of skills'], ['mcp', 'MCP servers'], ['tools', 'built-in tools'],
+  ['system', 'system text'], ['kanban', 'kanban skill']];
+export const startParts = (parts, { tr }) => START_PARTS.filter(([key]) => Number.isFinite(parts?.[key]) && parts[key] > 0).map(([key, label]) => ({ key, label: tr(label), chars: parts[key] }));

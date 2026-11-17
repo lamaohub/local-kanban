@@ -251,3 +251,16 @@ test('a step with no word for over 2 h says so on the page, in both languages (C
   const words = RU['no word from it for over 2 h'];
   assert.ok(words && ru.includes(words) && /[\u0400-\u04ff]/.test(words), 'the Russian chat says it in English');
 });
+
+// stretch a run its notification already ended
+test('a task_status record ends a running helper, and a late one leaves an ended run as it was', async () => {
+  const status = (s, agent, st) => line({ type: 'attachment', timestamp: at(s), attachment: { type: 'task_status', taskId: agent, taskType: 'local_agent', status: st } });
+  const start = user(1, 'Go') + call(2, 'h1', 'Agent', { description: 'Check the app', prompt: 'x' }) + launched(3, 'h1', 'a1') + said(4, 'Waiting.') + end(5);
+  let c = await chat.transcriptChat(session(start + status(40, 'a1', 'completed'), { a1: ['h1', side(6, 'Bash', 'Open the page')] }));
+  assert.equal(agent(c).running, false, 'task_status completed did not end the helper');
+  assert.equal(agent(c).ms, 38_000);
+  c = await chat.transcriptChat(session(start + status(40, 'a1', 'running'), { a1: ['h1', side(6, 'Bash', 'Open the page')] }));
+  assert.equal(agent(c).running, true, 'a running status ended the helper');
+  c = await chat.transcriptChat(session(start + note(20, 'a1', 'completed', 'h1') + status(900, 'a1', 'completed'), { a1: ['h1', side(6, 'Bash', 'Open the page')] }));
+  assert.equal(agent(c).ms, 18_000, 'a late record stretched the run');
+});

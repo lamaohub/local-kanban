@@ -1,6 +1,8 @@
-import { readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { db, DATA_DIR } from './db.js';
+import { db, DATA_DIR, kvGet, kvSet } from './db.js';
+import { claudeConfigFile, claudeDir } from './config.js';
 import { EFFORT_LEVELS, EFFORT_VAR } from './launch.js';
 
 export const PROFILES_MAX = 30;
@@ -11,11 +13,19 @@ const ENV_KEY_RE = /^[A-Z_][A-Z0-9_]{0,63}$/;
 const ENV_REFUSED = /^(KB_\w*|PATH|HOME|SHELL|USER|LANG|LC_\w+|TERM|TMUX\w*|CLAUDE_CODE_SESSION_ID|CLAUDECODE|CLAUDE_CODE_SIMPLE|CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN|CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION)$/;
 const ENV_LOADER = /^(LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|DYLD_\w+|NODE_OPTIONS|BASH_ENV|ENV)$/;
 export const KEEP = '***'; // a value the page sends back unchanged: keep the one stored
+export const SERVERS_MAX = 50;
+// a server's name as Claude Code keeps it (`claude mcp add <name>`); a plugin's id — <plugin>@<marketplace>
+const SERVER_RE = /^[A-Za-z0-9][A-Za-z0-9 ._:@-]{0,63}$/;
+const PLUGIN_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}@[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 const parse = (s) => { try { const v = JSON.parse(s || '{}'); return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; } catch { return {}; } };
 
+const listOf = (s) => { try { const v = JSON.parse(s); return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : null; } catch { return null; } };
+/** The servers a profile keeps: null — all of the person's; a list — only these. */
+export const mcpOf = (p) => (p && p.mcp != null ? listOf(p.mcp) || [] : null);
+export const pluginsOffOf = (p) => (p ? listOf(p.plugins_off) || [] : []);
 /** A profile as a page sees it: its env with the names only. */
-export const shown = (p) => p && ({ id: p.id, name: p.name, model: p.model || '', effort: p.effort || '', env: Object.keys(parse(p.env)), third_party: thirdParty(p) });
+export const shown = (p) => p && ({ id: p.id, name: p.name, model: p.model || '', effort: p.effort || '', env: Object.keys(parse(p.env)), third_party: thirdParty(p), mcp: mcpOf(p), plugins_off: pluginsOffOf(p) });
 export const thirdParty = (p) => Boolean(p && Object.hasOwn(parse(p.env), 'ANTHROPIC_BASE_URL'));
 export const profileById = (id) => (Number.isInteger(id) ? db.prepare('SELECT * FROM launch_profiles WHERE id = ?').get(id) : null) || null;
 export const listProfiles = () => db.prepare('SELECT * FROM launch_profiles ORDER BY name COLLATE NOCASE, id').all().map(shown);
@@ -49,16 +59,48 @@ export function profileInput(body, was = null) {
     }
     if (Object.keys(env).length > ENV_MAX) return { error: `env: at most ${ENV_MAX} variables`, field: 'env' };
   }
-  return { row: { name, model, effort, env: JSON.stringify(env) } };
+  let mcp = was ? (was.mcp ?? null) : null;
+  if (b.mcp !== undefined) {
+    if (b.mcp === null) mcp = null;
+    else {
+      const bad = names(b.mcp, SERVER_RE, 'mcp', 'an MCP server\'s name (letters, digits, space . _ : @ -)');
+      if (bad.error) return bad;
+      mcp = JSON.stringify(bad.list);
+    }
+  }
+  let pluginsOff = was?.plugins_off || '[]';
+  if (b.plugins_off !== undefined) {
+    const bad = names(b.plugins_off, PLUGIN_RE, 'plugins_off', 'a plugin\'s id, <plugin>@<marketplace>');
+    if (bad.error) return bad;
+    pluginsOff = JSON.stringify(bad.list);
+  }
+  return { row: { name, model, effort, env: JSON.stringify(env), mcp, plugins_off: pluginsOff } };
+}
+function names(v, re, field, what) {
+  if (!Array.isArray(v)) return { error: `${field}: a list of names`, field };
+  if (v.length > SERVERS_MAX) return { error: `${field}: at most ${SERVERS_MAX}`, field };
+  const list = [];
+  for (const x of v) {
+    const n = typeof x === 'string' ? x.trim() : x;
+    if (typeof n !== 'string' || !re.test(n)) return { error: `${field}: ${String(typeof x === 'string' ? x : typeof x).slice(0, 40)} is not ${what}`, field };
+    if (!list.includes(n)) list.push(n);
+  }
+  return { list };
 }
 
-/** The profile a start of these tasks of `project` gets: the first task's own, else the project's, else none. */
+const DEFAULT_KEY = 'launch.profile';
+export const defaultProfileId = () => { const id = Number(kvGet(DEFAULT_KEY)); return Number.isInteger(id) && id > 0 && profileById(id) ? id : null; };
+export const setDefaultProfile = (id) => kvSet(DEFAULT_KEY, id == null ? '' : String(id));
+
+/** The profile a start of these tasks of `project` gets: the first task's own, else the project's, else the board's, else none. */
 export function profileFor(tasks, project) {
   for (const t of tasks) {
     const own = db.prepare('SELECT profile_id FROM task_profiles WHERE task_id = ?').get(t.id)?.profile_id;
     if (own) return profileById(own);
   }
-  return project?.profile_id ? profileById(project.profile_id) : null;
+  if (project?.profile_id) return profileById(project.profile_id);
+  const board = defaultProfileId();
+  return board ? profileById(board) : null;
 }
 
 let writes = 0;
@@ -70,15 +112,51 @@ function writeWhole(path, text) {
     renameSync(part, path);
   } catch (e) { rmSync(part, { force: true }); throw e; }
 }
-const settingsText = (base, env) => `${JSON.stringify({ ...base, ...(Object.keys(env).length ? { env } : {}) })}\n`;
+const settingsText = (base, env, off = []) => `${JSON.stringify({ ...base, ...(Object.keys(env).length ? { env } : {}),
+  ...(off.length ? { enabledPlugins: Object.fromEntries(off.map((id) => [id, false])) } : {}) })}\n`;
 export function settingsFile(profile, port, base = {}, kind = '') {
   const path = join(DATA_DIR, `launch-${port}-p${profile.id}${kind ? `-${kind}` : ''}.json`);
-  writeWhole(path, settingsText(base, parse(profile.env)));
+  writeWhole(path, settingsText(base, parse(profile.env), pluginsOffOf(profile)));
   return path;
+}
+
+const readJson = (path) => { try { const v = JSON.parse(readFileSync(path, 'utf8')); return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; } catch { return {}; } };
+const servers = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
+const real = (p) => { try { return realpathSync(p); } catch { return p; } };
+/** The person's MCP servers a session in `folders` would get, by name: the user's (~/.claude.json), the project's own
+    `.mcp.json`, the local ones of the folder (~/.claude.json `projects[<folder>]`) — later wins, as in Claude Code. */
+export function serversAt(folders = []) {
+  const conf = readJson(claudeConfigFile());
+  let all = { ...servers(conf.mcpServers) };
+  const dirs = [...new Set(folders.filter(Boolean).flatMap((f) => [f, real(f)]))];
+  for (const f of dirs) all = { ...all, ...servers(readJson(join(f, '.mcp.json')).mcpServers) };
+  for (const f of dirs) all = { ...all, ...servers(conf.projects?.[f]?.mcpServers) };
+  return all;
+}
+/** For the page: the names of the person's servers (the user's and every folder's local ones) and their plugins. */
+export function knownServers() {
+  const conf = readJson(claudeConfigFile());
+  const names = new Set(Object.keys(servers(conf.mcpServers)));
+  for (const p of Object.values(servers(conf.projects))) for (const n of Object.keys(servers(p?.mcpServers))) names.add(n);
+  const plugins = Object.keys(servers(readJson(join(claudeDir(), 'settings.json')).enabledPlugins));
+  return { servers: [...names].sort(), plugins: plugins.sort() };
+}
+/** The arguments that keep a Claude of this profile to its servers: [] for a profile with all of them; else the file of
+    the servers it keeps (written whole, 0600 — a server's settings may hold its key) and `--strict-mcp-config`. A name
+    the person has no server for is left out: the start goes on with the rest. */
+export function mcpArgs(profile, port, folders, kind = '') {
+  const keep = mcpOf(profile);
+  if (!keep) return [];
+  const all = serversAt(folders);
+  const picked = Object.fromEntries(keep.filter((n) => Object.hasOwn(all, n)).map((n) => [n, all[n]]));
+  const at = createHash('sha256').update(folders.filter(Boolean).join('\n')).digest('hex').slice(0, 10);
+  const path = join(DATA_DIR, `mcp-${port}-p${profile.id}-${kind || 'board'}-${at}.json`);
+  writeWhole(path, `${JSON.stringify({ mcpServers: picked })}\n`);
+  return ['--strict-mcp-config', '--mcp-config', path];
 }
 /** The settings files of profile `id` in the board's data — of every port and way of starting (temporary ones too). */
 export function profileFiles(id) {
-  const re = new RegExp(`^launch-\\d+-p${Number(id)}(-[a-z]+)?\\.json($|\\.)`);
+  const re = new RegExp(`^(launch-\\d+-p${Number(id)}(-[a-z]+)?|mcp-\\d+-p${Number(id)}-[a-z]+-[0-9a-f]+)\\.json($|\\.)`);
   try { return readdirSync(DATA_DIR).filter((f) => re.test(f)).map((f) => join(DATA_DIR, f)); } catch { return []; }
 }
 export function dropProfileFiles(id) {
@@ -88,11 +166,13 @@ export function refreshProfileFiles(profile) {
   const env = parse(profile.env);
   for (const f of profileFiles(profile.id)) {
     if (f.endsWith('.part')) continue;
+    if (/[\\/]mcp-[^\\/]+$/.test(f)) { rmSync(f, { force: true }); continue; }
     let base;
     try { base = JSON.parse(readFileSync(f, 'utf8')); } catch { base = null; }
     if (!base || typeof base !== 'object' || Array.isArray(base)) { rmSync(f, { force: true }); continue; }
     delete base.env;
-    try { writeWhole(f, settingsText(base, env)); } catch { rmSync(f, { force: true }); } // never the old keys left behind
+    delete base.enabledPlugins;
+    try { writeWhole(f, settingsText(base, env, pluginsOffOf(profile))); } catch { rmSync(f, { force: true }); } // never the old keys left behind
   }
 }
 

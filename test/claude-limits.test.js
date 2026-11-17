@@ -284,3 +284,31 @@ test('switching accounts shows the new account\'s figures with the time they cam
     'the footer shows the previous account\'s figures');
   assert.ok(Math.abs(Date.parse(g.at) - Date.now()) < 5000, `at: ${g.at}`);
 });
+
+// held 91% on the board for days. A reading carries when it was taken; of one window the later reading wins.
+test('an early reset lowers the figure of the same window: the later reading wins, an idle session\'s older one does not', () => {
+  const now = NOW_S;
+  const t = Date.now();
+  const before = { seven_day: { used: 91, resets_at: WEEK, as_of: t - 3600_000 } };
+  const after = { seven_day: { used: 9, resets_at: WEEK + 30, as_of: t - 60_000 } };
+  assert.equal(limits.mergeLimits(before, after, now).seven_day.used, 9, 'the figure after the reset lost to the one before it');
+  assert.equal(limits.mergeLimits(after, before, now).seven_day.used, 9, 'an idle session\'s reading from before the reset came back');
+  // review: a window held from before kb sent the time — the first timed reading takes its place, or 91% stays all week
+  assert.equal(limits.mergeLimits({ seven_day: { used: 91, resets_at: WEEK } }, after, now).seven_day.used, 9, 'the figure held from before the upgrade locked the window');
+  // without the time of the reading — the higher figure, as before
+  assert.equal(limits.mergeLimits({ seven_day: { used: 91, resets_at: WEEK } }, { seven_day: { used: 9, resets_at: WEEK } }, now).seven_day.used, 91);
+  assert.equal(limits.readingTime(t - 1000, t), t - 1000);
+  for (const bad of [t + 3600_000, t - 40 * 86400_000, '5', null]) assert.equal(limits.readingTime(bad, t), null, `taken: ${bad}`);
+});
+
+test('kb statusline tells the board when the reading was taken — the time its transcript was written last', async () => {
+  const { writeFileSync: write, utimesSync } = await import('node:fs');
+  const path = join(tmp, 'session.jsonl');
+  write(path, '{}\n');
+  const when = new Date(Date.now() - 120_000);
+  utimesSync(path, when, when);
+  const r = await kb(['statusline'], statusJson(77.5, 12, { transcript_path: path }));
+  assert.equal(r.code, 0, r.stderr);
+  const g = await reading((x) => x.windows.five_hour?.used === 77.5);
+  assert.equal(Math.abs(g.windows.five_hour.as_of - when.getTime()) < 1000, true, `as_of ${g.windows.five_hour?.as_of}`);
+});

@@ -3,10 +3,12 @@
 // Tasks are addressed by key (TIC-3) or by global id. One line of output per action.
 
 import { parsePm2Services } from '../src/pm2-services.js';
-import { closeSync, readFileSync, writeSync } from 'node:fs';
+import { closeSync, readFileSync, statSync, writeSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { memoryText, moneyText, tokensText } from '../public/js/usage-rules.js';
 import { HOOK_WAIT_MS } from '../src/claude-hooks.js';
+import { claudeDir } from '../src/config.js';
+import { foreignFolder, folderWarning, startFolder } from '../src/session-folder.js';
 
 // `//api/...`, and the board answered "Forbidden" or "Not Found" with code 2.
 const BASE = (process.env.KB_URL || 'http://127.0.0.1:3100').replace(/\/+$/, '');
@@ -152,6 +154,20 @@ function warn(w) {
   if (typeof w.key === 'string') warned.add(w.key);
   process.stderr.write(`kb: warning — ${w.text}\n`);
 }
+// session's folder is where it started (its transcript), not the shell's: Claude Code loads the instructions from there.
+const folderSaid = new Set();
+async function checkFolder(t) {
+  if (!SESSION || !t?.project || folderSaid.has(t.project)) return;
+  folderSaid.add(t.project);
+  try {
+    const cwd = startFolder(SESSION, claudeDir());
+    if (!cwd) return;
+    // not api(): a refusal there ends the command, and this is a word on the side — it never fails the command
+    const res = await fetch(`${BASE}/api/projects/${encodeURIComponent(t.project)}`, { signal: AbortSignal.timeout(3000) });
+    const p = res.ok ? await res.json() : null;
+    if (isObj(p) && typeof p.path === 'string' && p.path && foreignFolder(cwd, p.path)) process.stderr.write(`kb: warning — ${folderWarning(cwd, p.slug, p.path)}\n`);
+  } catch { /* the board did not answer it: nothing is said */ }
+}
 let TYPED_BACK = [];
 function typedBackOf(v) {
   if (!v) return [];
@@ -199,7 +215,7 @@ function printIssue(t) {
   else if (t.gh_issue_url) console.log(`issue: ${t.gh_issue_url}`);
   if (t.worktree) console.log(`worktree: ${t.worktree.path} (branch ${t.worktree.branch}) — work and commit there, not in the main checkout`);
   if (t.pr) console.log(`pr: ${t.pr.url} (${String(t.pr.state || '').toLowerCase()})`);
-  if (t.profile_name) console.log(`profile: ${t.profile_name}${t.profile == null ? " (the project's)" : ''}`);
+  if (t.profile_name) console.log(`profile: ${t.profile_name}${t.profile == null ? (t.profile_from === 'board' ? " (the board's)" : " (the project's)") : ''}`);
   if (t.plan) console.log(`plan: v${t.plan.version}, ${when({ created_at: t.plan.at }).slice(1, -2)}, ${t.plan.size} characters — kb plan ${t.key} prints it`);
   printEpic(t);
 }
@@ -255,6 +271,7 @@ function printUsage(t) {
   if (u.partial_answers) parts.push(`${u.partial_answers} answer${u.partial_answers === 1 ? '' : 's'} recorded without a final count (output under-recorded)`);
   const memory = memoryText(u.context, PLAIN);
   if (memory) parts.push(`context ${memory}${u.context.window ? ` of ${k(u.context.window)}` : ''} (${u.context.model})`);
+  if (u.answers) parts.push(`${u.answers} request${u.answers === 1 ? '' : 's'}${u.context?.peak ? `, grew to ${k(u.context.peak)}` : ''}`);
   console.log(`claude usage: ${parts.join(' · ')}`);
 }
 
@@ -399,8 +416,11 @@ async function statusline() {
   try { data = JSON.parse(raw); } catch { /* not JSON — passed on as it came */ }
   writeAndClose(args.includes('--line') ? `${statusLineText(data)}\n` : raw);
   if (!data?.rate_limits || typeof data.rate_limits !== 'object') return;
+  // is no earlier; the board takes the later of two readings of one window, not the higher (a reset lowers the figure)
+  let asOf;
+  try { if (typeof data.transcript_path === 'string' && data.transcript_path.endsWith('.jsonl')) asOf = Math.round(statSync(data.transcript_path).mtimeMs); } catch { /* none yet */ }
   // the board is down or slow — the status line does not care
-  await postAndGo(BASE + '/api/limits', JSON.stringify({ rate_limits: data.rate_limits, model: data.model?.id }));
+  await postAndGo(BASE + '/api/limits', JSON.stringify({ rate_limits: data.rate_limits, model: data.model?.id, ...(asOf ? { as_of: asOf } : {}) }));
 }
 
 // a question (AskUserQuestion) or a plan (ExitPlanMode) — and hands it the request as JSON on stdin. kb gives
@@ -517,6 +537,7 @@ const commands = {
     const { task: t, blocked_n: blocked, by_hand: byHand, epics } = await api('POST', '/api/tasks/take', { project: proj }, TAKEN);
     const keysOf = (v) => (Array.isArray(v) ? v.filter((k) => typeof k === 'string') : []);
     if (!t) return console.log(emptyLine(blocked, keysOf(byHand), keysOf(epics)));
+    await checkFolder(t);
     console.log(taskLine(t));
     if (t.description) console.log(t.description);
     printChecklist(t);
@@ -560,6 +581,7 @@ const commands = {
     });
     for (; at < ids.length; at++) {
       const t = await api('GET', `/api/tasks/${ids[at]}`, null, TASK);
+      await checkFolder(t);
       if (at) console.log('---');
       console.log(`${t.key} ${t.project} ${t.status}${t.pinned ? ' ' + PIN : ''}${t.blocked ? ` blocked: ${t.blocked_reason || ''}` : ''}${PRI[t.priority] ? ' ' + PRI[t.priority] : ''}${t.labels.length ? ' [' + t.labels.join(',') + ']' : ''}`);
       console.log(t.title);
@@ -624,6 +646,7 @@ const commands = {
       die(`kb mv does not close a task: done and cancelled are the person's word — kb ${status === 'done' ? 'done' : 'cancel'} ${id}`);
     }
     const t = await api('PATCH', `/api/tasks/${k}`, { status }, TASK);
+    if (status === 'prep') await checkFolder(t);
     console.log(`${t.key} ${t.status}`);
   },
 

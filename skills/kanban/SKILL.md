@@ -81,41 +81,10 @@ kb sync                       # state of the sync queue (or "sync is off" in loc
 
 ## A new project goes on the board FIRST (hard rule)
 
-**The moment you create or start a new project — a new folder, site, bot, service — register it
-on the board before writing any task or any code for it.** Otherwise the work happens off the
-board: it has no task key and no deploy metadata. The board does NOT register projects on its own:
-local folders under `LOCAL_ROOT` (`~/claude-projects`) appear in the sidebar with an "+ add" row,
-but a project living anywhere else has to be registered by hand.
-
-Register it through the API rather than raw SQL — the API emits an SSE event so the board updates
-live, and the GitHub project is provisioned on the first task:
-
-```python
-# python3, so quoting doesn't get in the way
-import json, urllib.request
-body = {
-  "slug": "myproj", "name": "myproj.com",
-  "path": "<path to the project's code>",
-  "deploy_skill": "deploy",        # or empty if there is no deployment
-  "server": "<host>", "domain": "myproj.com",
-  "category": "<sidebar group>",
-  "description": "…",
-}
-req = urllib.request.Request("http://localhost:3100/api/projects",
-    data=json.dumps(body).encode(), method="POST",
-    headers={"Content-Type": "application/json"})
-print(urllib.request.urlopen(req, timeout=10).read().decode())   # 201 + the object, including prefix
-```
-
-Registry fields (PATCHABLE): `name, prefix, path, server_path, deploy_skill, server,
-pm2_services, domain, category, description, pinned, archived`. `slug` and `name` are required;
-`prefix` (the `PREFIX-N` task key) is generated for you. Edit later with
-`PATCH /api/projects/:slug`. When a human registers a project by hand, their path is the
-"＋ Add project" wizard at the bottom of the sidebar; the API snippet above is yours.
-
-**Verify it landed (do not skip):** `kb info <slug>` (path/deploy_skill/server/domain filled in),
-`kb p | grep <slug>` (visible on the board), `kb sync` (the queue is not stuck). Only then create
-tasks (`kb add`) and start working.
+**The moment you create or start a new project — a new folder, site, bot, service — register it on the board before
+writing any task or any code for it**, through `POST /api/projects` (not raw SQL), and verify it landed with
+`kb info <slug>`, `kb p` and `kb sync`. Otherwise the work happens off the board, with no task key and no deploy
+metadata. How, with the fields and the checks — read [references/new-project.md](references/new-project.md) first.
 
 ## The working loop ("work through project X")
 
@@ -145,10 +114,14 @@ for each. Use `kb take X` only when asked to "work through project X" without sp
    `📎 <path>` — open the screenshot with Read.
 2. **HARD RULE — starting a task (never skip, even for a one-line change).** `kb info X` → go to
    `path`; its `description:` and `docs:` lines say what the owner wants you to know and which
-   documents the project has. Before any code you MUST read: (a) the project's `CLAUDE.md` if it has one — **and if
+   documents the project has. Before any code you MUST read the project's `CLAUDE.md` if it has one — **and if
    it does not, find where the project keeps its architecture or research document (`README.md`,
-   `EXPERIMENTS.md`, `docs/`) and read that; apply the "doc in the same commit" rule to it**;
-   (b) the deploy skill at `deploy_skill_path` from `kb info`, if one is set. The matching commit
+   `EXPERIMENTS.md`, `docs/`) and read that; apply the "doc in the same commit" rule to it**. **Do NOT read
+   the deploy skill at the start**: it would sit in the conversation for the whole task, and the session may
+   never ship at all — its time is step 4. **Earlier only when the task is about production** (a bug or an
+   incident on the server, its logs, a command over ssh, a server config or secret, or a change that takes a
+   file the server writes out of git): then load the skill at `deploy_skill_path` before the code and open
+   the procedure in its `references/` that fits, rather than inventing a git flow of your own. The matching commit
    rule: **if you change code whose behaviour is documented in the project's `CLAUDE.md`, update
    that section in the SAME commit.** When you edit a document with a script, gate the commit on
    the script succeeding in one chain (`python … && git add … && git commit …`): a script that
@@ -169,11 +142,12 @@ for each. Use `kb take X` only when asked to "work through project X" without sp
    committing in between.
 4. If `kb info` says "ships on the word": after the commit `kb mv <key> ready` and stop there — the deployment waits for the
    human's word; the board refuses `deploy` from anywhere but `ready`, and `doing` → `review`, also by way of `prep`, and
-   will not take `noclaude` or `check` on a task in `prep`, `doing` or `ready`. Once they say so, go on as
-   below. Nothing to ship after all: `kb review` from `ready`.
-   If the project has a `deploy_skill`: `kb mv <key> deploy` → run the deployment with that skill →
-   step 5. Without a deploy_skill, go straight to step 5. Take the skill from `deploy_skill_path`
-   in `kb info` (if the skill is not in the available list, just read its SKILL.md at that path).
+   will not take `noclaude` or `check` on a task in `prep`, `doing` or `ready`. Do not read the deploy skill before
+   that word. Once they say so, go on as below. Nothing to ship after all: `kb review` from `ready`.
+   If the project has a `deploy_skill`: `kb mv <key> deploy` → read the skill from `deploy_skill_path` in `kb info`
+   (if it is not in the available list, read its SKILL.md at that path) — whole, and BEFORE the first command of the
+   deployment, and the procedure in its `references/` your situation matches — then run the deployment with it →
+   step 5. Without a deploy_skill, go straight to step 5.
    The generic `deploy` skill ships with the board (`skills/deploy/`) and works purely off
    `kb info` data. Production commands (ssh/rsync) will ask for confirmation — that is expected.
 5. `kb review <key> "<two plain sentences: 1) what the problem was 2) how you solved it>"` → take
@@ -183,6 +157,7 @@ for each. Use `kb take X` only when asked to "work through project X" without sp
 6. Stuck, or the decision is the human's → `kb block <key> "reason"` and move on.
 7. At the end, a one-line summary: how many in review, how many went back to To do after a
    discussion (`ask`), how many blocked.
+
 
 ## Grooming the backlog
 
@@ -197,22 +172,16 @@ One line of summary at the end.
 
 ## User commands for a task in review
 
-- "accept TIC-3" → `kb done TIC-3`.
-- "send TIC-3 back: <what's wrong>" → `kb unblock` if needed, `kb mv TIC-3 doing`, fix it, then the
-  loop again from step 4. **First REPRODUCE the exact scenario from the note** (curl or a browser,
-  following the real flow) and confirm the actual cause — only then fix it. A second attempt at a
-  returned task often cures a plausible but wrong cause.
-- "cancel TIC-3" → `kb cancel TIC-3`.
-- **The user's words in your terminal bring the task you handed in back** from `review` to `doing` by
-  themselves, with no command from you (a note of yours moves nothing). Finished the turn those words
-  asked for → `kb review TIC-3 "…"` again (`kb mv TIC-3 ready` where `kb info` says "ships on the
-  word"). Words about something else, with nothing changed for this task, and the board puts it back in
-  `review` on its own. While it waits in `doing`, every `kb` command you run (on it or on any other
-  task — `kb add` then also offers `kb link`) prints `kb: warning — TIC-3 is in doing …` to stderr: hand
-  it in again, and name its status in your report from `kb show`, not from memory.
-- "do TIC-3" (a specific task in any status except done) → `kb show TIC-3` (the `👤` note comes
-  first; open `📎` screenshots with Read) and **`kb mv TIC-3 prep` right away**, then steps 2–6
-  (`already taken` means another Claude session holds it — see above).
+- "accept TIC-3" → `kb done TIC-3` · "cancel TIC-3" → `kb cancel TIC-3`.
+- "send TIC-3 back: …" → `kb mv TIC-3 doing` and fix it — **after reproducing the exact scenario of the note** and
+  confirming the real cause.
+- The user's words in your terminal bring a handed-in task back to `doing` by themselves: hand it in again when done,
+  and name its status from `kb show`, not from memory.
+- "do TIC-3" → `kb show TIC-3`, **`kb mv TIC-3 prep` right away**, then steps 2–6.
+
+The full text of these rules — read [references/human-commands.md](references/human-commands.md) when one of them
+comes up.
+
 
 ## Special cases
 
@@ -245,75 +214,29 @@ One line of summary at the end.
   `kb note <key> "..."`, then `kb mv <key> review`. **With the `ask` label it goes back to `todo`
   instead** (see above): there the discussion is a step before the work, not the work itself. You
   write no code and do not move it to done.
-- **A check task (the `check` label): the user hands acceptance over.** The board's *Claude review*
-  section makes one per project, titled in the board's language ("Check the tasks in Review with
-  different tests and simulate failures, then move them to Done"); its description lists the tasks in
-  Review at that moment. Tell it by the label, not by the title. It is the one case where you move
-  tasks to `done`, and only the ones listed. Do it, do not glance at it:
-  1. A check of your own for every task, tied to what the task was about: the page serves the right
-     HTML, the number on it matches the real one, the endpoint answers. The list comes from the
-     description, not from memory.
-  2. Simulate failures, not only the happy path: a 500 or a dropped connection wherever the code talks
-     to something — the page says so honestly and carries on. And walk the happy path at least once for
-     real, with nothing stubbed: a stubbed 200 only proves your stub works.
-  3. Break the code itself — in a scratch copy, one change at a time — and see the project's checks go
-     red. A green suite proves nothing until it is red on a restored bug.
-  4. What passes → `kb done <KEY>`, one command per task and the key exactly as the description
-     writes it, with nothing around it — no loop, no script, no `; echo` or redirection: a check the
-     board started may run exactly those commands without asking, and anything else goes to the
-     permission check of Claude Code, which may refuse it. The tool shows the return code of each. What fails stays in `review`: fix it and check again, or leave a `kb note`
-     on it when the fix is not yours to make.
-  5. The report goes on the check task, `kb review <check-key> "…"`: what you checked in each task and
-     what you found, in full — not "all good". The board then moves the check task itself to done:
-     `kb review` answers `<check-key> done 📝`.
+- **A check task (the `check` label): the user hands acceptance over** — the one case where you move tasks to `done`,
+  and only the ones its description lists, each with a check of its own, failures simulated and the code broken in a
+  copy. Read [references/check-task.md](references/check-task.md) before you start one.
 - A "check whether the service is alive" task → `kb svc <proj>` (one line per service, no ssh).
 - Work time is measured for you: doing/deploy runs the timer, review/done stops it.
-- Verifying the result: text and config changes — curl/grep (cheap). Compiled projects — **a build**
-  is the cheap check (`cargo build`, `go build ./...`, `tsc --noEmit`, …). **For layout and visual
-  changes a screenshot IS the cheap check** — curl and grep never catch a broken layout: serve the
-  project from its root and screenshot the page with a headless browser (playwright), on desktop
-  (1280) and on mobile (390/360). Mobile "cut off" bugs are horizontal overflow — compare
-  `scrollWidth` with `clientWidth` and find elements whose `getBoundingClientRect().right >
-  clientWidth`, ignoring those inside an `overflow-x:auto` ancestor.
-- **Driving the board's own UI in a browser** (drag & drop, drawer, SSE): use playwright directly,
-  `page.goto('http://localhost:3100', { waitUntil: 'domcontentloaded' })` — NOT `networkidle`, the
-  SSE connection never closes. Wait for `waitForSelector('#projects .proj')`. **The dashboard is
-  what opens on start**, so click a project in the sidebar first, then wait for `.col-body .card`.
-  Top-level functions are exposed on `window` (`openDrawer`, `getSetting`, …); `state` is not —
-  read state from the DOM. Test mutations on a throwaway task (`POST /api/tasks` → check →
-  `DELETE /api/tasks/<key>`); task numbers are not reused, which is normal. For copy buttons, grant
-  the clipboard permissions to the browser context or `readText()` silently returns empty. Call
-  actions that open a confirmation modal without returning the promise:
-  `page.evaluate((k) => { window.deleteTask(k); })` — returning it deadlocks; click the modal as a
-  separate step.
+- **Verifying the result:** text and config — curl/grep; compiled code — a build; **layout and anything visible — a
+  screenshot, desktop and mobile** (curl and grep never catch a broken layout). How — [references/verification.md](references/verification.md);
+  driving the board's own UI in a browser — [references/board-ui.md](references/board-ui.md).
+
 
 ## Token rules (hard)
 
 - Never dump the whole board into the chat. One action, one line of `kb` output, no retelling.
 - `kb show` only when you need the description in order to work.
-- **Going into the database directly: it is `data/kanban.db`, NOT a `kanban.db` in the repo root.**
-  Gotcha: `sqlite3 <path>` SILENTLY creates an empty file when nothing is there, so a typo leaves a
-  junk 0-byte `.db` in a clean repository. Check the path before running it, and look at
-  `git status` after any sqlite session.
-- Read task details with `kb show`/`kb take`, not `curl /api/tasks…|jq`: descriptions contain raw
-  newlines and a shell JSON parser chokes on them. If you truly need the API, save the response to
-  a file and parse it leniently (`python3 … strict=False`).
-- **Bulk-create tasks or comments with a script** (`subprocess.run([kb,'add',…])` / `execFile`)
-  rather than assembling shell commands: backticks, quotes and newlines get mangled by the shell.
-  `kb add` prints the key as the first word of its output — take it and attach labels with `kb lbl`.
-- **Bulk moves (`kb mv`/`kb review`) from a script must check `returncode`, not printed output**: a
-  rejected move exits non-zero. Verify with `kb p` at the end that the counts add up.
-- Removed an element from a page — verify with grep on **the text or markup**, not the class name
-  (the CSS rule of the same name stays behind).
 - The review comment is **exactly two plain sentences, no jargon**: (1) what the problem was,
   (2) how you solved it.
 - The final chat message is one line per task: `TIC-3 review — summary board is ready`.
-- `kb: board is not responding` → restart the board's server (`pm2 restart kanban` / `npm start`),
-  wait two seconds and retry once. **Exit codes are distinct: `1` — the board is down (a restart
-  and a retry make sense), `2` — the request was rejected (retrying is pointless, read the
-  message), `3` — `kb` itself broke (stack trace under `KB_DEBUG=1`), `4` — the board answered,
-  but with a failure of its own (5xx), with something that is not JSON, or it broke off in the middle
-  of the answer (what was asked may or may not have happened). Gate on the code, not on
-  the message text.** Code `4` is worth reading closely: it means the board falls over on this
-  request, or `KB_URL` points at something that is not the board at all.
+- Read task details with `kb show`/`kb take`, never `curl /api/tasks…|jq`; bulk work with `kb` — from a script that
+  passes arguments as a list and gates on `returncode`; removed an element from a page — grep the text or markup, not
+  the class name. The database is `data/kanban.db`, NOT a `kanban.db` in the repo root.
+- `kb` exit codes: `1` — the board is down (restart it and retry once), `2` — the request was rejected (read the
+  message, do not retry), `3` — `kb` broke (`KB_DEBUG=1`), `4` — the board failed on this request or `KB_URL` is not
+  the board. Gate on the code, not on the text.
 - The web board is for the human: http://localhost:3100 — do not open it, do not scrape it.
+
+Details of these rules (the database, scripts, exit codes) — [references/kb-tech.md](references/kb-tech.md).

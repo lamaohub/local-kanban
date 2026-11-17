@@ -1,5 +1,5 @@
 export const MODELS = [
-  { id: 'claude-fable-5-1', label: 'Fable 5.1', cost: '$$$$' },
+  { id: 'claude-fable-5-2', label: 'Fable 5.2', cost: '$$$$' },
   { id: 'claude-opus-5-5', label: 'Opus 5.5', cost: '$$$' },
   { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5', cost: '$$' },
   { id: 'claude-haiku-5-5', label: 'Haiku 5.5', cost: '$' },

@@ -5,6 +5,7 @@ import { cleanupTasks, knownStand, standDiff, standsView } from '../stands.js';
 import { healthView } from '../health.js';
 import { healthFixTask, openFixes } from '../auto-health.js';
 import { slowWatch } from '../slow-watch.js';
+import { startView } from '../start-set.js';
 
 let flight = null; // a second request while the folders are walked waits for the same walk
 let step = { done: 0, total: 0 };
@@ -38,6 +39,11 @@ export default async function healthRoutes(app) {
     const r = await cleanupTasks(app, paths, uiLang() === 'en' ? 'en' : 'ru', { host: `127.0.0.1:${PORT}` });
     if (r.code) { const { code, ...body } = r; return reply.code(code).send(body); }
     return r;
+  });
+  let starting = null;
+  app.get('/api/health/start', () => {
+    starting ||= startView().finally(() => { starting = null; });
+    return starting;
   });
   app.get('/api/health/fixes', () => ({ fixes: openFixes() }));
   app.post('/api/health/fix', async (req, reply) => {

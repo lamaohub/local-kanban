@@ -421,7 +421,7 @@ test('▶ sends the keys of its tasks whichever way Claude is started — and co
       api: async (method, path, body) => { calls.push({ method, path, body }); return path === '/api/launch' && method === 'GET' ? { board: true, desktop: true, terminal: true, cli: true } : { ok: true, keys: body?.keys }; },
       getSetting: (k) => ({ launch: setting, permission: 'auto' })[k], pickedSetting: (k) => ({ launch: setting, permission: 'auto' })[k], launchPick, boardOnly, effortOf, startEffort, checksOnly, state: {},
       copyText: async () => true, tr: (s) => s, styledAlert() {}, openTerminalOf() {}, askProjectFolder: async () => false,
-      setTimeout: () => 0, ic: () => '', promptHere: (s) => s,
+      setTimeout: () => 0, ic: () => '', promptHere: (s) => s, copyHere: (s) => s,
     };
     vm.runInNewContext([
       'var launchAvail = null;',

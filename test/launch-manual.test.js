@@ -145,7 +145,7 @@ test('the page says which check goes first, offers to open it, starts nothing el
       getSetting: (k) => ({ launch: setting, permission: 'auto' })[k], pickedSetting: (k) => ({ launch: setting, permission: 'auto' })[k], launchPick, boardOnly, effortOf, startEffort, checksOnly, state: {},
       copyText: async () => true, tr: (s) => `«${s}»`, styledAlert: (s) => asked.push(`alert ${s}`), openTerminalOf() {}, askProjectFolder: async () => false,
       styledConfirm: async (s, o) => { asked.push(`${s} [${o.okLabel}]`); return true; }, openDrawer: (k) => opened.push(k),
-      refresh: () => { refreshed += 1; }, manualRefusal, setTimeout: () => 0, promptHere: (s) => s,
+      refresh: () => { refreshed += 1; }, manualRefusal, setTimeout: () => 0, promptHere: (s) => s, copyHere: (s) => s,
     };
     vm.runInNewContext([
       'var launchAvail = null;',
@@ -226,7 +226,7 @@ test('the page says a start was refused for a task done by hand in its own words
         },
         getSetting: (k) => ({ launch: setting, permission: 'auto' })[k], pickedSetting: (k) => ({ launch: setting, permission: 'auto' })[k], launchPick, boardOnly, effortOf, startEffort, checksOnly, state: {},
         copyText: async () => true, tr: (s) => `«${s}»`, styledAlert: (s) => said.push(s), openTerminalOf() {}, askProjectFolder: async () => false,
-        refresh: () => { refreshed += 1; }, manualRefusal, setTimeout: () => 0, promptHere: (s) => s,
+        refresh: () => { refreshed += 1; }, manualRefusal, setTimeout: () => 0, promptHere: (s) => s, copyHere: (s) => s,
       };
       vm.runInNewContext([
         'var launchAvail = null;',

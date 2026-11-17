@@ -24,7 +24,7 @@ import { packagedSkillNames, packagedSkillState, refreshPackagedSkill } from '..
 import { isGuest } from '../share.js';
 import { bin } from '../bin-path.js';
 import { taskFolder } from '../worktrees.js';
-import { markSessionProfile, profileById, profileFor, settingsFile } from '../profiles.js';
+import { markSessionProfile, mcpArgs, profileById, profileFor, settingsFile } from '../profiles.js';
 import { attemptOf, resumeFolder } from '../attempts.js';
 import { continuedByPerson } from '../auto-resume.js';
 
@@ -560,7 +560,7 @@ export default async function systemRoutes(app) {
     let spec;
     const profile = b.mode === 'terminal' && p ? profileFor(picked.tasks, p) : null;
     let prof = {};
-    try { prof = profile ? { settings: settingsFile(profile, PORT, {}, 'term'), model: profile.model || null, effort: profile.effort || b.effort } : {}; } catch (e) {
+    try { prof = profile ? { settings: settingsFile(profile, PORT, {}, 'term'), mcp: mcpArgs(profile, PORT, [folder, p.path], 'term').at(-1) || null, model: profile.model || null, effort: profile.effort || b.effort } : {}; } catch (e) {
       logError('server', 'launch', `the settings of the launch profile were not written: ${e.message}`);
       return reply.code(500).send({ error: 'the settings of the launch profile could not be written' });
     }
@@ -660,7 +660,7 @@ export default async function systemRoutes(app) {
       // was the person's word for exactly those
       const profile = (attempt?.profile_id && profileById(attempt.profile_id)) || profileFor(tasks, p);
       let spec;
-      try { spec = phantomSpec({ sid, name, text: b.text, folder, permission: b.permission, port: PORT, allow: doneRules(tasks), effort: b.effort, profile }); } catch (e) {
+      try { spec = phantomSpec({ sid, name, text: b.text, folder, permission: b.permission, port: PORT, allow: doneRules(tasks), effort: b.effort, profile, home: p.path }); } catch (e) {
         logError('server', 'launch', `the settings of the launch profile were not written: ${e.message}`);
         return reply.code(500).send({ error: 'the settings of the launch profile could not be written' });
       }
@@ -726,7 +726,7 @@ export default async function systemRoutes(app) {
     const folder = await resumeFolder(sid, p, tasks);
     const profile = profileById(db.prepare('SELECT profile_id FROM session_profiles WHERE session_id = ?').get(sid)?.profile_id) || profileFor(tasks, p);
     let spec;
-    try { spec = phantomSpec({ sid, name, folder, permission: b.permission, port: PORT, allow: doneRules(tasks), effort: b.effort, resume: true, profile }); } catch (e) {
+    try { spec = phantomSpec({ sid, name, folder, permission: b.permission, port: PORT, allow: doneRules(tasks), effort: b.effort, resume: true, profile, home: p.path }); } catch (e) {
       logError('server', 'launch', `the settings of the launch profile were not written: ${e.message}`);
       return reply.code(500).send({ error: 'the settings of the launch profile could not be written' });
     }

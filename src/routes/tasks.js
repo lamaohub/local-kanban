@@ -14,9 +14,10 @@ import { LABELS } from '../sync/github.js';
 import { repoHttpsBase } from '../repo-base.js';
 import { STAT_FORMAT, mirrorName, namesTask, statCommit, wordsOf } from '../shipped.js';
 import { isManual, listShape, noclaudeFilter, notEpic, snapshot, taskEvent } from '../task-shape.js';
-import { requestSession, requestHostSession, bindSession, taskSessions, mayReprep, unclaimedLaunch, claimLaunch, markLaunch } from '../claude-sessions.js';
+import { SESSION_ID_RE, requestSession, requestHostSession, bindSession, taskSessions, mayReprep, unclaimedLaunch, claimLaunch, markLaunch } from '../claude-sessions.js';
 import { taskFeed } from '../work-feed.js';
-import { taskUsage } from '../claude-usage.js';
+import { sessionContext, taskUsage } from '../claude-usage.js';
+import { resumeAdvice } from '../resume-advice.js';
 import { currentWorkProjects, liveTasks, terminalQuestions } from '../claude-live.js';
 import { activeBoardSessions, doneRuns, nowRuns } from '../claude-now.js';
 import { closeFinishedTerminals, taskTerminal } from '../phantom.js';
@@ -178,7 +179,7 @@ async function fullTask(t) {
   const events = db.prepare('SELECT e.status, e.created_at, m.kind AS typed FROM task_events e LEFT JOIN typed_moves m ON m.event_id = e.id WHERE e.task_id = ? ORDER BY e.id').all(t.id);
   const moves = db.prepare(`SELECT (mp.prefix || '-' || mv.task_no) AS key, mv.moved_at FROM task_moves mv JOIN projects mp ON mp.id = mv.project_id
     WHERE mv.task_id = ? ORDER BY mv.moved_at, mv.rowid`).all(t.id);
-  return { ...t, labels: JSON.parse(t.labels || '[]'), events, moves, links: taskLinks(t.id), attachments: taskAttachments(t.id), checklist: taskChecklist(t.id), commit_url: await commitUrlFor(t), sessions: await taskSessions(t.id), usage: await taskUsage(t.id), terminal: await taskTerminal(t.id), worktree: worktreeOf(t.id), pr: knownPr(t.id), profile: db.prepare('SELECT profile_id FROM task_profiles WHERE task_id = ?').get(t.id)?.profile_id ?? null, profile_name: profileNameOf(t), plan: planMeta(t.id), ...epicOfCard(t) };
+  return { ...t, labels: JSON.parse(t.labels || '[]'), events, moves, links: taskLinks(t.id), attachments: taskAttachments(t.id), checklist: taskChecklist(t.id), commit_url: await commitUrlFor(t), sessions: await taskSessions(t.id), usage: await taskUsage(t.id), terminal: await taskTerminal(t.id), worktree: worktreeOf(t.id), pr: knownPr(t.id), profile: db.prepare('SELECT profile_id FROM task_profiles WHERE task_id = ?').get(t.id)?.profile_id ?? null, profile_name: profileNameOf(t), profile_from: profileFromOf(t), plan: planMeta(t.id), ...epicOfCard(t) };
 }
 function epicOfCard(t) {
   const sum = epicSummaries([t.id]).get(t.id);
@@ -192,6 +193,7 @@ function epicOfCard(t) {
   return out;
 }
 const profileNameOf = (t) => profileFor([t], db.prepare('SELECT profile_id FROM projects WHERE id = ?').get(t.project_id))?.name ?? null;
+const profileFromOf = (t) => (db.prepare('SELECT profile_id FROM projects WHERE id = ?').get(t.project_id)?.profile_id ? 'project' : 'board');
 
 function planPatch(t, b, sid = null, { undone = false, epic = false } = {}) {
   const updates = [];
@@ -722,6 +724,17 @@ export default async function taskRoutes(app) {
   app.get('/api/tasks/:id/work', async (req, reply) => {
     const t = taskOr404(req, reply); if (!t) return reply;
     return taskFeed(t.id, { count: req.query.count === '1' });
+  });
+
+  // offer a new session instead (src/resume-advice.js); only a session of this very task
+  app.get('/api/tasks/:id/resume-advice', async (req, reply) => {
+    const t = taskOr404(req, reply); if (!t) return reply;
+    const parsed = scalarQuery(req.query, ['session']);
+    if (parsed.error) return reply.code(400).send({ error: parsed.error });
+    const sid = String(parsed.values.session || '').toLowerCase();
+    if (!SESSION_ID_RE.test(sid)) return reply.code(400).send({ error: 'session: a session id', field: 'session' });
+    if (!db.prepare('SELECT 1 FROM task_sessions WHERE task_id = ? AND session_id = ?').get(t.id, sid)) return reply.code(404).send({ error: 'not a session of this task' });
+    return { advice: resumeAdvice(await sessionContext(sid) || {}) };
   });
 
   app.get('/api/tasks/:id/usage', async (req, reply) => {

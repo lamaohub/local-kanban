@@ -166,7 +166,9 @@ CREATE TABLE IF NOT EXISTS launch_profiles (
   model       TEXT NOT NULL DEFAULT '',
   effort      TEXT NOT NULL DEFAULT '',
   env         TEXT NOT NULL DEFAULT '{}',
-  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  mcp         TEXT,
+  plugins_off TEXT NOT NULL DEFAULT '[]'
 );
 CREATE TABLE IF NOT EXISTS task_profiles (
   task_id     INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
@@ -177,6 +179,7 @@ CREATE TABLE IF NOT EXISTS session_profiles (
   profile_id  INTEGER,
   third_party INTEGER NOT NULL DEFAULT 0
 );
+
 -- import of the same archive skips what is already here. Local-only; goes with the task.
 CREATE TABLE IF NOT EXISTS imported_tasks (
   source   TEXT NOT NULL,

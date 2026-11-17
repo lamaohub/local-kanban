@@ -8,6 +8,25 @@ version it goes out as and opens an empty one again. Released sections are histo
 
 ## [Unreleased]
 
+## [2.0.0-beta.23]
+
+### Added
+
+- «Health → Start set»: what a session of each project carries before its first step — the first request in tokens, the request once the kanban skill is loaded, and the parts (instructions, the list of skills, MCP servers, built-in tools, system text, the skill), from the transcripts of the last 14 days, with a norm. The usage line of a card also says how many requests the model got and how big the conversation grew.
+- «Continue» on a big conversation that has been quiet for more than an hour says what continuing costs — the whole conversation is written to the cache again — and offers a new session of the task instead.
+- A launch profile can keep the sessions it starts to some of your MCP servers («Only these MCP servers») and switch plugins off for them, without touching your own Claude Code settings; and the board can have a profile of its own for every project without one. Every server's description travels in each request of a session, so a lean profile makes the board's sessions cheaper.
+
+### Changed
+
+- The kanban skill reads a project's deploy skill before shipping instead of at the start of every task, and its core is a fifth shorter: rarely needed rules stay as one-line pointers, their full text is in `skills/kanban/references/`. A session carries the skill in every request, so this saves tokens on each one.
+
+### Fixed
+
+- The limits in the sidebar follow an early reset of a window: of two readings of one window the board keeps the later one, not the higher one, so a weekly figure that fell from 91% to 9% is no longer shown as 91% until the week ends.
+- A helper brought back with SendMessage that hands its report in as a message of its own, or that Claude Code records as completed, no longer leaves the header and the chat saying «commands in the background» for hours.
+- A copied prompt names the folder of its project, and `kb show`, `kb take` and `kb mv … prep` warn a Claude session opened outside that folder (or any copy of its repository): such a session has none of the project's instructions — CLAUDE.md, its rules, its memory.
+- The cost of a session on Claude Fable 5.2 (and Mythos 5.2) is shown with its price instead of «no price»; Sonnet 5.5 reads its cache at its own price, $0.10 per million tokens, not $0.20. The chat's model picker offers Fable 5.2 instead of 5.1.
+
 ## [2.0.0-beta.22]
 
 ### Fixed

@@ -9,10 +9,11 @@ import { openDrawer } from './drawer.js';
 import { STATUS_LABELS, launchInClaude, taskPromptText } from './sse.js';
 import { fileState, fixStage, fixable, healthCounts, healthGroups, loadWords, startTotal, walkBarHTML } from './health-rules.js';
 import { renderStands, stopStands } from './health-stands.js';
+import { renderStart, stopStart } from './health-start.js';
 import { localStore } from './store.js';
 
 const TAB_KEY = 'kb.ui.healthTab';
-const TABS = ['files', 'stands'];
+const TABS = ['files', 'stands', 'start'];
 let tab = 'files';
 try { const v = localStore.getItem(TAB_KEY); if (TABS.includes(v)) tab = v; } catch { /* private mode: the first one */ }
 let load = null;
@@ -40,7 +41,8 @@ function loadHTML() {
 function tabsHTML() {
   const b = (v, label, title) => `<button type="button" class="dr-btn${tab === v ? ' active' : ''}" data-hl-tab="${v}" role="tab" aria-selected="${tab === v}" title="${esc(tr(title))}">${esc(tr(label))}</button>`;
   return `<div class="now-bar hl-tabs"><div class="dash-range" role="tablist">${b('files', 'Instructions', 'How large the CLAUDE.md of each project is')}`
-    + `${b('stands', 'Stands', 'The git worktrees left behind by tasks, and their branches')}</div></div>${loadHTML()}`;
+    + `${b('stands', 'Stands', 'The git worktrees left behind by tasks, and their branches')}`
+    + `${b('start', 'Start set', 'What a session of each project carries before its first step — tokens, from the transcripts')}</div></div>${loadHTML()}`;
 }
 // one listener on the section for the switch: both sections draw it anew on every paint
 let tabsWired = false;
@@ -54,6 +56,7 @@ function wireTabs() {
     try { localStore.setItem(TAB_KEY, tab); } catch { /* the choice lives until reload */ }
     drawnSig = '';
     if (tab !== 'stands') stopStands();
+    if (tab !== 'start') stopStart();
     renderHealth().catch(() => {});
   });
 }
@@ -252,6 +255,7 @@ export async function renderHealth({ force = false } = {}) {
   wireTabs();
   loadLoad();
   if (tab === 'stands') return renderStands(tabsHTML());
+  if (tab === 'start') return renderStart(tabsHTML(), () => tab === 'start' && state.slug === HEALTH);
   if (last && !force && Date.now() - last.at < FRESH_MS) {
     await loadFixes();
     if (state.slug !== HEALTH || tab !== 'files') return;

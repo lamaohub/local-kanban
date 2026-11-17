@@ -6,7 +6,7 @@
 // by the environment (tmux and the Claude app are looked for in fixed places) is handed in as a probe.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import vm from 'node:vm';
 import { join } from 'node:path';
@@ -96,8 +96,7 @@ test('the Claude folder: which one, from which variable, and what the board read
   writeFileSync(join(dir, 'skills', 'kanban', 'SKILL.md'), '---\nname: kanban\n---\n');
   d = await setup.claudeSetup(NONE);
   assert.deepEqual([d.skill.exists, d.skill.symlink, d.skill.state], [true, false, 'differs']);
-  const shipped = readFileSync(new URL('../skills/kanban/SKILL.md', import.meta.url));
-  writeFileSync(join(dir, 'skills', 'kanban', 'SKILL.md'), shipped);
+  cpSync(fileURLToPath(new URL('../skills/kanban', import.meta.url)), join(dir, 'skills', 'kanban'), { recursive: true });
   writeFileSync(join(dir, 'skills', 'kanban', 'my-notes.md'), 'a file of the person\'s own does not make it differ');
   assert.equal((await setup.claudeSetup(NONE)).skill.state, 'same');
   rmSync(join(dir, 'skills', 'kanban'), { recursive: true });

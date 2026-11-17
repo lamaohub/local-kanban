@@ -524,3 +524,20 @@ test('v20: a board of v19 gets chat_queue, empty', (t) => {
   after.prepare("INSERT INTO chat_queue (id, session_id, task_id, text, at, position) VALUES ('q1', 's', 1, 'words', 1, 0)").run();
   assert.equal(after.prepare('SELECT images, tries FROM chat_queue').get().images, '[]');
 });
+
+test('v21: a board of v20 gets launch_profiles.mcp and plugins_off — all servers, no plugin off for its profiles', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'kb-mig-mcp-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  migrateDir(dir);
+  const db = new Database(join(dir, 'kanban.db'));
+  db.exec('ALTER TABLE launch_profiles DROP COLUMN mcp');
+  db.exec('ALTER TABLE launch_profiles DROP COLUMN plugins_off');
+  db.prepare("INSERT INTO launch_profiles (name) VALUES ('old')").run();
+  db.pragma('user_version = 20');
+  db.close();
+  migrateDir(dir);
+  const after = new Database(join(dir, 'kanban.db'));
+  t.after(() => after.close());
+  assert.ok(after.pragma('user_version', { simple: true }) >= 21);
+  assert.deepEqual({ ...after.prepare("SELECT mcp, plugins_off FROM launch_profiles WHERE name = 'old'").get() }, { mcp: null, plugins_off: '[]' });
+});

@@ -15,7 +15,7 @@ import { isCheck } from './review-check.js';
 import { clearKeys, inField, promptBox, tallBox, undim } from './prompt-box.js';
 import { HOOK_TIMEOUT_S, hookCommand, isOurs } from './claude-hooks.js';
 import { boardKb, readSettings } from './claude-settings.js';
-import { settingsFile } from './profiles.js';
+import { mcpArgs, settingsFile } from './profiles.js';
 
 /** Permission modes the board offers for a background start; never one that skips the checks. */
 export const PERMISSION_MODES = ['auto', 'acceptEdits', 'manual', 'plan'];
@@ -172,12 +172,13 @@ export function writeAskHook(port, text) {
 }
 
 export const SERVER_START = [['start-server'], ['set-option', '-s', 'exit-empty', 'off']];
-export function phantomSpec({ sid, name, text, folder, permission = 'auto', port, allow = [], effort, read, resume = false, profile = null }) {
+export function phantomSpec({ sid, name, text, folder, permission = 'auto', port, allow = [], effort, read, resume = false, profile = null, home = null }) {
   // of questions with it — as one settings file of the board (never on the command line: secrets)
   const lvl = profile?.effort || effort;
   const level = lvl ? ['-e', `${EFFORT_VAR}=${lvl}`] : [];
   const settings = profile ? ['--settings', settingsFile(profile, port, askHookSettings(port, read) || {})] : askHook(port, read);
   const model = profile?.model ? ['--model', profile.model] : [];
+  const mcp = profile ? mcpArgs(profile, port, [folder, home]) : [];
   return {
     cmd: tmuxBin(),
     cwd: folder,
@@ -188,7 +189,7 @@ export function phantomSpec({ sid, name, text, folder, permission = 'auto', port
       // terminal; it lives on while any of its sessions does, remain-on-exit) passed it to every Claude ▶ started after
       ...NOT_FOR_BOARD.map((k) => ['set-environment', '-g', '-u', k]),
       ['new-session', '-d', '-s', sessionName(sid), '-x', String(COLS), '-y', String(ROWS), '-e', `KB_URL=http://127.0.0.1:${port}`, '-e', `LANG=${cleanEnv().LANG}`, '-e', NO_SUGGESTIONS, '-e', NO_ALT_SCREEN, ...level,
-        '--', claudeCli(), ...settings, ...model, '--allowedTools', ...BOARD_ALLOWED, ...allow, '--permission-mode', permission, '--name', name, ...(resume ? ['--resume', sid] : ['--session-id', sid, ...promptArgs(text)])],
+        '--', claudeCli(), ...settings, ...mcp, ...model, '--allowedTools', ...BOARD_ALLOWED, ...allow, '--permission-mode', permission, '--name', name, ...(resume ? ['--resume', sid] : ['--session-id', sid, ...promptArgs(text)])],
     ]),
   };
 }

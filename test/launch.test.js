@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import Fastify from 'fastify';
-import { boardOnly, effortOf, startEffort, checksOnly, launchPick, withBoardAddress } from '../public/js/launch-rules.js';
+import { boardOnly, effortOf, startEffort, checksOnly, launchPick, withBoardAddress, withFolders } from '../public/js/launch-rules.js';
 import { osascriptWorks, osascriptReads, parseAppleString, readAppleString } from './apple-string.js';
 import { bin as fullPath } from '../src/bin-path.js'; // `bin` is a folder in some tests here
 
@@ -192,7 +192,7 @@ test('kb inside the Claude app also sends the app\'s id of the session, and the 
 
 test('the column starts Claude with the very prompt its copy button copies', () => {
   const sse = readFileSync(new URL('../public/js/sse.js', import.meta.url), 'utf8');
-  assert.match(sse, /export async function copyTodoPrompt\(tasks, btn\) \{\n  const text = promptHere\(todoPromptText\(tasks\)\);/);
+  assert.match(sse, /export async function copyTodoPrompt\(tasks, btn\) \{\n  const text = copyHere\(todoPromptText\(tasks\), tasks\.map\(\(t\) => t\.project\)\);/);
   const board = readFileSync(new URL('../public/js/board.js', import.meta.url), 'utf8');
   assert.match(board, /launchInClaude\(\{ text: todoPromptText\(mine\), project, keys: mine\.map\(\(t\) => t\.key\), btn: launch \}\)/,
     'the ▶ on To do builds its own prompt, and the two can drift apart');
@@ -262,14 +262,14 @@ test('the page puts the address into the prompt only for the app and a copy — 
       api: async (method, path, body) => { if (method === 'POST') posted.push(body); return method === 'GET' ? { board: true, desktop: true, terminal: true, cli: true } : { ok: true, keys: body?.keys }; },
       getSetting: (k) => ({ launch: setting, permission: 'auto' })[k], pickedSetting: (k) => ({ launch: setting, permission: 'auto' })[k], launchPick, boardOnly, effortOf, startEffort, checksOnly, state: {},
       copyText: async (t) => { copied.push(t); return true; }, tr: (s) => s, styledAlert() {}, openTerminalOf() {}, askProjectFolder: async () => false,
-      setTimeout: () => 0, ic: () => '', promptHere: (s) => `${s}\n<address>`,
+      setTimeout: () => 0, ic: () => '', promptHere: (s) => `${s}\n<address>`, copyHere: (s, slugs) => `${s}\n<folder of ${slugs}>\n<address>`,
     };
     vm.runInNewContext(['var launchAvail = null;', piece('export async function loadLaunchOptions('), piece('async function launchMode('),
       piece('function flashButton('), piece('async function postLaunch('), piece('const BOARD_WHY = {', '\n};\n'), piece('export async function launchInClaude(')].join('\n'), box);
     const btn = { innerHTML: '', title: '', textContent: '', classList: { toggle() {}, remove() {} } };
     await box.launchInClaude({ text: 'Do SIT-1', project: 'site', keys: ['SIT-1'], btn });
     const sent = setting === 'copy' ? copied : posted.map((b) => b.text);
-    const want = setting === 'desktop' || setting === 'copy' ? 'Do SIT-1\n<address>' : 'Do SIT-1';
+    const want = setting === 'copy' ? 'Do SIT-1\n<folder of site>\n<address>' : setting === 'desktop' ? 'Do SIT-1\n<address>' : 'Do SIT-1';
     assert.deepEqual(sent, [want], `${setting}: the prompt it was given`);
   }
 });
@@ -289,17 +289,17 @@ test('the copies of To do and Backlog and the copied resume line name the board,
   for (const [own, listens, port] of cases) {
     const copied = [];
     const box = {
-      location: { port: own }, withBoardAddress, KB_DEFAULT_PORT: '3100', ALL: '__all__', state: { slug: 'site' },
+      location: { port: own }, withBoardAddress, withFolders, KB_DEFAULT_PORT: '3100', ALL: '__all__', state: { slug: 'site', projects: [{ slug: 'site', path: '/code/site' }, { slug: 'other', path: '' }] },
       tr: (s) => s, ic: () => '', setTimeout: () => 0, copyText: async (t) => { copied.push(t); return true; },
       api: async () => ({ desktop: false, terminal: false, cli: false, ...(listens ? { port: listens } : {}) }), getSetting: () => 'copy', pickedSetting: () => 'copy', launchPick, boardOnly, effortOf, startEffort, checksOnly,
     };
-    vm.runInNewContext(['var launchAvail = null;', piece('function boardPort('), piece('const promptHere ', ';\n'), piece('export function todoPromptText('),
+    vm.runInNewContext(['var launchAvail = null;', piece('function boardPort('), piece('const promptHere ', ';\n'), piece('const foldersOf ', ';\n'), piece('const copyHere ', ';\n'), piece('export function todoPromptText('),
       piece('export async function loadLaunchOptions('), piece('async function launchMode('), piece('function flashButton('),
       piece('export async function copyTodoPrompt('), piece('export async function copyBacklogPrompt('), piece('export async function openSessionInClaude(')].join('\n'), box);
     const btn = () => ({ innerHTML: '', title: '', textContent: '', classList: { toggle() {}, remove() {} } });
     if (listens) await box.loadLaunchOptions(); // the board asks it in advance, at its load
-    await box.copyTodoPrompt([{ key: 'SIT-1' }], btn());
-    await box.copyBacklogPrompt([{ key: 'SIT-2' }], btn());
+    await box.copyTodoPrompt([{ key: 'SIT-1', project: 'site' }], btn());
+    await box.copyBacklogPrompt([{ key: 'SIT-2', project: 'other' }], btn());
     await box.openSessionInClaude({ session: '44444444-4444-4444-8444-444444444444', btn: btn() });
     const tail = port && port !== '3100' ? line(port) : '';
     if (listens) {
@@ -312,7 +312,7 @@ test('the copies of To do and Backlog and the copied resume line name the board,
       const copies = { ...box, copyText: async (t) => { copies.out.push(t); return true; }, out: [] };
       let up = false;
       copies.api = async () => { if (!up) throw new Error('offline'); return { port: listens }; };
-      vm.runInNewContext(['var launchAvail = null;', piece('function boardPort('), piece('const promptHere ', ';\n'), piece('export function todoPromptText('),
+      vm.runInNewContext(['var launchAvail = null;', piece('function boardPort('), piece('const promptHere ', ';\n'), piece('const foldersOf ', ';\n'), piece('const copyHere ', ';\n'), piece('export function todoPromptText('),
         piece('export async function loadLaunchOptions('), piece('export async function copyTodoPrompt(')].join('\n'), copies);
       await copies.copyTodoPrompt([{ key: 'SIT-1' }], btn());
       up = true;
@@ -321,7 +321,8 @@ test('the copies of To do and Backlog and the copied resume line name the board,
       await copies.copyTodoPrompt([{ key: 'SIT-1' }], btn());
       assert.ok(copies.out.at(-1).endsWith(line(port)) || port === '3100', `a copy never asked the port again: ${JSON.stringify(copies.out.at(-1))}`);
     }
-    assert.ok(copied[0].startsWith('Run the kanban skill\n') && copied[0].endsWith(`SIT-1${tail}`), `${port || 'no port'}: the copy of To do — ${JSON.stringify(copied[0])}`);
+    const folder = '\nProject folder: /code/site (Claude Code loads the project\'s instructions only in a session opened there)';
+    assert.ok(copied[0].startsWith('Run the kanban skill\n') && copied[0].endsWith(`SIT-1${folder}${tail}`), `${port || 'no port'}: the copy of To do — ${JSON.stringify(copied[0])}`);
     assert.ok(copied[1].endsWith(`SIT-2${tail}`), `${port || 'no port'}: the copy of Backlog — ${JSON.stringify(copied[1])}`);
     assert.equal(copied[2], `${tail ? `KB_URL=http://127.0.0.1:${port} ` : ''}claude --resume 44444444-4444-4444-8444-444444444444`, `${port || 'no port'}: the copied resume line`);
   }

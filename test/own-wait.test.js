@@ -253,3 +253,26 @@ test('a helper started more than 2 MB before the end is still found', async () =
     human('and?'), ...padding, says('Still waiting.'), system(), human('how long?'), says('A few minutes more.'), system()].join('\n')}\n`);
   assert.equal(await waitsOwnWork(sid, T0 + n * 1000 + 60_000), true, 'a helper 3 MB back was forgotten');
 });
+
+test('a helper brought back ends with its own message and the notification after it, or with Claude Code\'s task_status', () => {
+  const sendTo = (id, task) => [
+    JSON.stringify({ type: 'assistant', timestamp: at(), message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'SendMessage', input: { to: task, message: 'fix the review findings' } }] } }),
+    JSON.stringify({ type: 'user', timestamp: at(), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: [{ type: 'text', text: JSON.stringify({ success: true, message: 'Resuming agent a0267c9', resumedAgentId: task }) }] }] }, toolUseResult: { success: true, resumedAgentId: task } }),
+  ];
+  const task = 'a0267c93c8e7985e2';
+  const lines = [human('send it back to the helper'), ...sendTo('toolu_S', task), says('Sent; waiting for its fixes.'), system()];
+  assert.equal(ownWaitIn(lines)?.own, true, 'the helper brought back is at work');
+  const message = `Another Claude session sent a message: <agent-message from="${task}"> All six review findings are fixed. </agent-message>`;
+  // its message alone: a helper may write mid-work — still at work
+  assert.equal(ownWaitIn([...lines, human(message), says('Its message is in.')])?.own, true, 'a message mid-work ended the helper');
+  // the message, then the notification of the end of its turn (interim words and all): over
+  const after = JSON.stringify({ type: 'queue-operation', operation: 'enqueue', timestamp: at(), content: interim('toolu_S', task) });
+  assert.equal(ownWaitIn([...lines, human(message), says('Its fixes are in.'), system(), after])?.own, false, 'the helper that handed its report in still held Claude «at work»');
+  // the notification before its message is the old one: not this end
+  assert.equal(ownWaitIn([...lines, after, human(message), says('In.')])?.own, true);
+  // Claude Code's record that the work is through
+  const status = (s) => JSON.stringify({ type: 'attachment', timestamp: at(), attachment: { type: 'task_status', taskId: task, taskType: 'local_agent', status: s } });
+  assert.equal(ownWaitIn([...lines, status('completed')])?.own, false, 'task_status completed did not end the helper');
+  assert.equal(ownWaitIn([...lines, status('running')])?.own, true, 'a running status ended it');
+  assert.equal(ownWaitIn([...lines, JSON.stringify({ type: 'attachment', timestamp: at(), attachment: { type: 'task_status', taskId: 'another', status: 'completed' } })])?.own, true, 'another work\'s status ended it');
+});

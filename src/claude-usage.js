@@ -15,9 +15,11 @@ const M = 1_000_000;
     models that have one; `context` — the model's context window in tokens. The money the board shows
     is what these tokens would cost on the API: with a subscription it is notional. */
 export const PRICE_TABLE = {
-  asOf: '2026-09-25',
+  asOf: '2026-11-17',
   source: 'Anthropic API pricing reference',
   models: {
+    'claude-fable-5-2': { input: 8, output: 40, read: 0.2, fast: { input: 16, output: 80 }, context: M },
+    'claude-mythos-5-2': { input: 8, output: 40, read: 0.2, fast: { input: 16, output: 80 }, context: M },
     'claude-fable-5-1': { input: 10, output: 50, read: 0.25, context: M },
     'claude-mythos-5-1': { input: 10, output: 50, read: 0.25, context: M },
     'claude-fable-5': { input: 10, output: 50, read: 1, context: M },
@@ -30,7 +32,7 @@ export const PRICE_TABLE = {
     'claude-opus-4-5': { input: 5, output: 25, read: 0.5, context: 200_000 },
     'claude-opus-4-1': { input: 15, output: 75, read: 1.5, context: 200_000 },
     'claude-opus-4-0': { input: 15, output: 75, read: 1.5, context: 200_000 },
-    'claude-sonnet-5-5': { input: 2, output: 10, read: 0.2, context: M },
+    'claude-sonnet-5-5': { input: 2, output: 10, read: 0.1, context: M },
     'claude-sonnet-5': { input: 2, output: 10, read: 0.2, context: M },
     'claude-sonnet-4-6': { input: 3, output: 15, read: 0.3, context: M },
     'claude-sonnet-4-5': { input: 3, output: 15, read: 0.3, context: 200_000 },
@@ -205,7 +207,11 @@ async function countPass(sid) {
     for (const x of KINDS) r[x] += t[x];
   };
   const noteLast = (holder, key, at, model, t) => {
-    if (!holder[key] || at >= holder[key].at) holder[key] = { at, model, context: contextOf(t) };
+    const c = contextOf(t);
+    const p = holder[key];
+    const peak = Math.max(p?.peak ?? p?.context ?? 0, c);
+    if (!p || at >= p.at) holder[key] = { at, model, context: c, peak };
+    else p.peak = peak;
   };
 
   /* the parked stretch: answers in time nobody has the focus of — they go to the task that takes it next,
@@ -219,7 +225,11 @@ async function countPass(sid) {
         addRow(task, day, model, Number(fast), t, t.answers, t.partial || 0);
       }
       for (const id of p.calls) s.calls[id] = task;
-      if (p.last && (!last[task] || p.last.at >= last[task].at)) last[task] = p.last;
+      if (p.last) {
+        const peak = Math.max(p.last.peak ?? p.last.context, last[task]?.peak ?? last[task]?.context ?? 0);
+        if (!last[task] || p.last.at >= last[task].at) last[task] = { ...p.last, peak };
+        else last[task].peak = peak;
+      }
       if (s.cur?.to === 'park') Object.assign(s.cur, { to: 'task', task });
     } else {
       for (const id of p.calls) s.calls[id] = null;
@@ -263,7 +273,10 @@ async function countPass(sid) {
     if (cur.to === 'task') noteLast(last, cur.task, cur.at, cur.model, cur.seen);
     else if (cur.to === 'park') {
       const l = s.park.last;
-      if (!l || cur.at >= l.at) s.park.last = { at: cur.at, model: cur.model, context: contextOf(cur.seen) };
+      const c = contextOf(cur.seen);
+      const peak = Math.max(l?.peak ?? l?.context ?? 0, c);
+      if (!l || cur.at >= l.at) s.park.last = { at: cur.at, model: cur.model, context: c, peak };
+      else l.peak = peak;
     }
   };
   const answer = (a) => {
@@ -476,17 +489,31 @@ export function summarize(groups) {
 export function usageSummary(taskId) {
   const groups = db.prepare(`SELECT model, fast, ${SUM} FROM task_usage WHERE task_id = ? GROUP BY model, fast`).all(taskId);
   let ctx = null;
+  let peak = 0;
   for (const r of db.prepare(`SELECT r.last FROM claude_usage_reads r
     JOIN task_sessions s ON s.session_id = r.session_id AND s.task_id = ?`).all(taskId)) {
     const l = parse(r.last)?.[taskId];
     if (l && (!ctx || l.at > ctx.at)) ctx = l;
+    if (l) peak = Math.max(peak, l.peak ?? l.context ?? 0);
   }
   if (!groups.length && !ctx) return null;
   return {
     ...summarize(groups),
-    context: ctx ? { tokens: ctx.context, window: contextWindow(ctx.model), model: ctx.model, at: new Date(ctx.at).toISOString() } : null,
+    context: ctx ? { tokens: ctx.context, peak: Math.max(peak, ctx.context), window: contextWindow(ctx.model), model: ctx.model, at: new Date(ctx.at).toISOString() } : null,
     prices_as_of: PRICE_TABLE.asOf,
   };
+}
+
+export async function sessionContext(sid) {
+  try { await countSession(sid); } catch (e) { logError('server', 'claude-usage', `counting session ${sid}: ${e.message}`); }
+  const row = db.prepare('SELECT last, transcript FROM claude_usage_reads WHERE session_id = ?').get(sid);
+  let best = null;
+  for (const l of Object.values(parse(row?.last) || {})) if (l && Number.isFinite(l.at) && (!best || l.at > best.at)) best = l;
+  if (!best) return null;
+  // answers in a stretch no task owns are not in `last`: the transcript's last write says the session was quiet no longer
+  let wrote = 0;
+  try { if (row?.transcript) wrote = (await stat(row.transcript)).mtimeMs; } catch { /* gone: by the answers */ }
+  return { tokens: best.context, model: best.model, at: Math.max(best.at, wrote), thirdParty: thirdPartySession(sid) };
 }
 
 /** The task's usage, its sessions counted up to now first (each pass reads only what is new; a session

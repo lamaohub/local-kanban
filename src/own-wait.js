@@ -51,8 +51,27 @@ export function endsIn(raw, id, task) {
     if (named && !INTERIM.test(block)) return true;
   }
   // the raw line is JSON: the quotes of the tag come escaped
-  return Boolean(task) && raw.includes('[Subagent hand-back]')
-    && (raw.includes(`<agent-message from=\\"${task}\\"`) || raw.includes(`<agent-message from="${task}"`));
+  return Boolean(task) && raw.includes('[Subagent hand-back]') && fromHelper(raw, task);
+}
+const fromHelper = (raw, task) => raw.includes(`<agent-message from=\\"${task}\\"`) || raw.includes(`<agent-message from="${task}"`);
+const STATUS_ENDS = new Set(['completed', 'failed', 'killed', 'stopped', 'cancelled']);
+export function statusEnds(raw, task) {
+  if (!task || !raw.includes('"task_status"') || !raw.includes(task)) return false;
+  let d;
+  try { d = JSON.parse(raw); } catch { return false; }
+  const a = d?.type === 'attachment' ? d.attachment : null;
+  return a?.type === 'task_status' && a.taskId === task && STATUS_ENDS.has(a.status);
+}
+const notesOf = (raw, task) => [...String(raw).matchAll(NOTE_BLOCK)].some(([b]) => b.includes(`<task-id>${task}</task-id>`));
+/** Whether the lines `rest` (raw, oldest first) tell of the end of work `id` (its task `task`). */
+export function endedAmong(rest, id, task) {
+  let wrote = false;
+  for (const raw of rest) {
+    if (endsIn(raw, id, task) || statusEnds(raw, task)) return true;
+    if (task && wrote && notesOf(raw, task)) return true;
+    if (task && fromHelper(raw, task) && !raw.includes('"queue-operation"')) wrote = true;
+  }
+  return false;
 }
 /** Whether the answer `b` (a tool_result of the transcript line `d`) says its step runs on in the background: the id of
     that work ('' when the answer names none), or null. What Claude Code writes after a step is read only when the line
@@ -131,7 +150,7 @@ export function ownWaitIn(lines, { whole = true } = {}) {
   // its notification (or the one Claude Code queued while the turn went on) names the work that ended — by the step, or
   // it stopped, not for one started after it
   const running = [...launched].filter(([id, { at, task }]) => !(task && stopped.get(task) > at)
-    && !parsed.slice(at + 1).some((p) => endsIn(p.raw, id, task)));
+    && !endedAmong(parsed.slice(at + 1).map((p) => p.raw), id, task));
   const cut = deeper || (first === 0 && !woken(parsed[from].d));
   if (!running.length) return cut && !whole && !reachesBack(parsed, starts[0]) ? null : { own: false };
   return { own: true, at: turnEnd(Math.max(...running.map(([, l]) => l.at))) };

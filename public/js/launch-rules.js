@@ -56,3 +56,14 @@ export function withBoardAddress(text, port, tr = (s) => s) {
   const url = `http://127.0.0.1:${p}`;
   return `${text}\n${tr('This board is at')} ${url}, ${tr('so run kb as')} KB_URL=${url} kb …`;
 }
+
+/** The prompt with a line naming the folder of each project in `folders` ([{slug, path}]); projects with no folder add
+    nothing. */
+export function withFolders(text, folders, tr = (s) => s) {
+  const seen = new Set();
+  const list = (folders || []).filter((f) => f && typeof f.path === 'string' && f.path && !seen.has(f.path) && seen.add(f.path));
+  if (!list.length) return text;
+  const why = tr('Claude Code loads the project\'s instructions only in a session opened there');
+  if (list.length === 1) return `${text}\n${tr('Project folder:')} ${list[0].path} (${why})`;
+  return `${text}\n${tr('Project folders:')} ${list.map((f) => `${f.slug} — ${f.path}`).join('; ')} (${why})`;
+}

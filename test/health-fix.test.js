@@ -358,7 +358,7 @@ async function healthPage({ tr = (s) => s } = {}) {
     STATUS_LABELS: { backlog: 'Backlog', todo: 'To do', prep: 'Prep', doing: 'Doing', review: 'Review' },
     launchInClaude: async (o) => { launched.push({ keys: [...o.keys], project: o.project, text: o.text }); },
     taskPromptText: (k) => `Take ${k}`,
-    ...rules, renderStands: async () => {}, stopStands: () => {}, localStore: { getItem: () => null, setItem() {} },
+    ...rules, renderStands: async () => {}, stopStands: () => {}, renderStart: async () => {}, stopStart: () => {}, localStore: { getItem: () => null, setItem() {} },
   };
   const src = pageSrc('health.js');
   const imported = [...src.matchAll(/^import \{([^}]*)\} from '[^']+';$/gm)].flatMap((m) => m[1].split(',').map((n) => n.trim()).filter(Boolean));

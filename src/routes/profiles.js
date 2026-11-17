@@ -1,16 +1,25 @@
 import { db } from '../db.js';
 import { emit } from '../bus.js';
 import { resolveTask } from './tasks.js';
-import { PROFILES_MAX, dropProfileFiles, listProfiles, profileById, profileInput, refreshProfileFiles, shown } from '../profiles.js';
+import { PROFILES_MAX, defaultProfileId, dropProfileFiles, knownServers, listProfiles, profileById, profileInput, refreshProfileFiles, setDefaultProfile, shown } from '../profiles.js';
+import { isGuest } from '../share.js';
 
 export default async function profileRoutes(app) {
-  const changed = () => emit('profiles.updated', { profiles: listProfiles() });
-  app.get('/api/profiles', () => ({ profiles: listProfiles() }));
+  const changed = () => emit('profiles.updated', { profiles: listProfiles(), default: defaultProfileId() });
+  // names of the person's MCP servers and plugins, for the editor (not to a guest of Wi-Fi: the owner's setup)
+  app.get('/api/profiles', (req) => ({ profiles: listProfiles(), default: defaultProfileId(), ...(isGuest(req) ? {} : knownServers()) }));
+  app.put('/api/profiles/default', (req, reply) => {
+    const pid = req.body?.profile;
+    if (pid !== null && !(Number.isInteger(pid) && profileById(pid))) return reply.code(400).send({ error: 'profile: the id of a profile, or null', field: 'profile' });
+    setDefaultProfile(pid);
+    changed();
+    return { default: defaultProfileId() };
+  });
   app.post('/api/profiles', (req, reply) => {
     if (db.prepare('SELECT COUNT(*) AS n FROM launch_profiles').get().n >= PROFILES_MAX) return reply.code(409).send({ error: `at most ${PROFILES_MAX} profiles` });
     const r = profileInput(req.body);
     if (r.error) return reply.code(400).send(r);
-    const id = db.prepare('INSERT INTO launch_profiles (name, model, effort, env) VALUES (@name, @model, @effort, @env)').run(r.row).lastInsertRowid;
+    const id = db.prepare('INSERT INTO launch_profiles (name, model, effort, env, mcp, plugins_off) VALUES (@name, @model, @effort, @env, @mcp, @plugins_off)').run(r.row).lastInsertRowid;
     changed();
     return reply.code(201).send(shown(profileById(Number(id))));
   });
@@ -19,7 +28,7 @@ export default async function profileRoutes(app) {
     if (!was) return reply.code(404).send({ error: 'profile not found' });
     const r = profileInput(req.body, was);
     if (r.error) return reply.code(400).send(r);
-    db.prepare('UPDATE launch_profiles SET name = @name, model = @model, effort = @effort, env = @env WHERE id = @id').run({ ...r.row, id: was.id });
+    db.prepare('UPDATE launch_profiles SET name = @name, model = @model, effort = @effort, env = @env, mcp = @mcp, plugins_off = @plugins_off WHERE id = @id').run({ ...r.row, id: was.id });
     refreshProfileFiles(profileById(was.id));
     changed();
     return shown(profileById(was.id));

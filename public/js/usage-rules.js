@@ -74,6 +74,8 @@ export function usageLine(u, f) {
   if (money) parts.push(`≈ ${money}`);
   const memory = memoryText(u.context, f);
   if (memory) parts.push(`${f.tr('memory')} ${memory}`);
+  if (u.answers) parts.push(`${u.answers} ${f.plural(u.answers, 'request', 'requests')}`);
+  if (u.context?.peak) parts.push(`${f.tr('grew to')} ${tokensText(u.context.peak, f)}`);
   return { text: parts.join(' · '), title: usageNotes(u, f).join('\n') };
 }
 

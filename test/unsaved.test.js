@@ -269,7 +269,8 @@ test('the editors of the templates and of the launch profiles see a change typed
   assert.equal(ctx.out.templates(), false, 'an empty row just added counts as a change (Save drops it)');
 
   const pfRow = (vals) => {
-    const f = { '.pf-name': field(vals[0]), '.pf-model': field(vals[1]), '.pf-effort': { dataset: { value: vals[2] } }, '.pf-env': field(vals[3]) };
+    const f = { '.pf-name': field(vals[0]), '.pf-model': field(vals[1]), '.pf-effort': { dataset: { value: vals[2] } }, '.pf-env': field(vals[3]),
+      '.pf-mcp-only': { checked: false }, '.pf-mcp': field(''), '.pf-plugins': field('') };
     return { querySelector: (q) => f[q], f, dataset: {} };
   };
   assert.equal(ctx.out.profiles(), false, 'no editor of profiles is open');
@@ -283,6 +284,14 @@ test('the editors of the templates and of the launch profiles see a change typed
   pr.f['.pf-env'].value = 'ANTHROPIC_AUTH_TOKEN=•••';
   pr.f['.pf-effort'].dataset.value = 'high';
   assert.equal(ctx.out.profiles(), true, 'a new effort counts as saved');
+  pr.f['.pf-effort'].dataset.value = '';
+  pr.f['.pf-mcp-only'].checked = true;
+  assert.equal(ctx.out.profiles(), true, 'a profile kept to some MCP servers counts as saved');
+  pr.f['.pf-mcp-only'].checked = false;
+  pr.f['.pf-plugins'].value = 'figma@claude-plugins-official';
+  assert.equal(ctx.out.profiles(), true, 'a plugin switched off counts as saved');
+  pr.f['.pf-plugins'].value = '';
+  pr.f['.pf-effort'].dataset.value = 'high';
 });
 
 test('a comment that did not go waits per task, in the order typed', () => {

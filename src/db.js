@@ -117,6 +117,12 @@ const MIGRATIONS = [
   } },
   // The words waiting for a busy Claude outlive a restart of the board. A new table: schema.sql, which runs after the steps, makes it
   { v: 20, name: 'chat-queue', up: () => {} },
+  { v: 21, name: 'profile-mcp', up: () => {
+    const cols = db.prepare('PRAGMA table_info(launch_profiles)').all().map((c) => c.name);
+    if (!cols.length) return; // a fresh install: schema.sql makes the table with them
+    if (!cols.includes('mcp')) db.exec('ALTER TABLE launch_profiles ADD COLUMN mcp TEXT');
+    if (!cols.includes('plugins_off')) db.exec("ALTER TABLE launch_profiles ADD COLUMN plugins_off TEXT NOT NULL DEFAULT '[]'");
+  } },
 ];
 export const SCHEMA_VERSION = MIGRATIONS.at(-1).v;
 

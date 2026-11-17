@@ -1,6 +1,6 @@
 
 import { buildSelect, selVal } from './board.js';
-import { buildProfileSelect } from './profiles.js';
+import { boardProfile, buildProfileSelect } from './profiles.js';
 import { $, DASH, api, esc, ic, seg, state, tr } from './core.js';
 import { confirmDiscard, currentProject, overlayLayer, popLayer, pushLayer, renderSidebar, renderTopbar, selectProject, styledAlert, styledConfirm } from './sidebar.js';
 import { copyText, refresh } from './sse.js';
@@ -170,7 +170,8 @@ export async function renderProjectSettings(force) {
   $('ps-domain').value = p.domain || '';
   $('ps-wt').checked = !!p.worktrees;
   $('ps-profile').dataset.value = p.profile_id ?? '';
-  buildProfileSelect($('ps-profile'), p.profile_id ?? null, tr('None — as the page says'), (v) => { $('ps-profile').dataset.value = v ?? ''; });
+  buildProfileSelect($('ps-profile'), p.profile_id ?? null, () => (boardProfile() != null ? tr('The board\'s profile') : tr('None — as the page says')),
+    (v) => { $('ps-profile').dataset.value = v ?? ''; });
   $('ps-wt-files').value = p.worktree_files || '';
   $('ps-wt-setup').value = p.worktree_setup || '';
   buildSkillSelect(p, null);
