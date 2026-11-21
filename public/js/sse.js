@@ -11,7 +11,7 @@ import { applyLimits, loadLimits } from './limits.js';
 import { applyAutomations, loadAutomations } from './automations.js';
 import { applyAskEvent, loadAsks } from './asks.js';
 import { callHears } from './call.js';
-import { usageLine } from './usage-rules.js';
+import { checksLine, usageLine } from './usage-rules.js';
 import { resumeWords } from './resume-rules.js';
 import { KB_DEFAULT_PORT, boardOnly, checksOnly, launchPick, manualRefusal, startEffort, withBoardAddress, withFolders } from './launch-rules.js';
 import { refusalLine, refusalText } from './unsaved.js';
@@ -447,8 +447,12 @@ const usageHTML = (u) => {
   const line = usageLine(u, usageFmt);
   return line ? `<div class="dm-info dm-usage" title="${esc(line.title)}">${esc(line.text)}</div>` : '';
 };
+const checksHTML = (u) => {
+  const line = checksLine(u, usageFmt);
+  return line ? `<div class="dm-info dm-checks" title="${esc(line.title)}">${esc(line.text)}</div>` : '';
+};
 let cardClaude = { key: null, sessions: [], usage: null };
-/** The lines of the ⋯ menu about Claude of the open card: sessions, then usage; '' when there is nothing to say. */
+/** The lines of the ⋯ menu about Claude of the open card: sessions, usage, how the work was checked; '' when there is nothing to say. */
 export function claudeInfoHTML() {
   if (!cardClaude.key || cardClaude.key !== state.drawerKey) return '';
   const ss = cardClaude.sessions;
@@ -457,7 +461,7 @@ export function claudeInfoHTML() {
     ? `<div class="dm-info" title="${esc(ss.map((x) => x.session_id).join('\n'))}">`
       + `Claude · ${ss.length} ${plural(ss.length, 'session', 'sessions')} · ${tr('latest')} ${fmtDate(latest)}</div>`
     : '';
-  return sessions + usageHTML(cardClaude.usage);
+  return sessions + usageHTML(cardClaude.usage) + checksHTML(cardClaude.usage);
 }
 // the ⋯ menu lives in drawer.js, which imports this module: it hands its repaint in rather than this module reaching out
 let claudeInfoListener = null;
@@ -478,7 +482,6 @@ const usageFlight = oneFlight(async (key) => {
   repaintClaudeInfo();
 });
 export function refreshUsage(key) {
-  if (getSetting('showUsage') === false) return;
   if (!menuOpen()) return;
   const wait = usageAt + USAGE_EVERY_MS - Date.now();
   if (wait <= 0) { usageFlight(key); return; }

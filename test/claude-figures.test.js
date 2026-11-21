@@ -200,7 +200,7 @@ test('the dashboard draws the usage block only while the usage is switched on', 
   assert.match(dash.innerHTML, /data-title="Waiting for you"/, 'the rest of the dashboard went with the block');
 });
 
-test('a card shows no usage line and asks for none while switched off; switched on, the line comes back at once', () => {
+test('a card shows no usage line while switched off, yet its open menu still asks (the checks line); switched on, the line comes back at once', () => {
   let show = false;
   const flights = [];
   const loads = [];
@@ -219,25 +219,24 @@ test('a card shows no usage line and asks for none while switched off; switched 
     'this.usageHTML = usageHTML;'].join('\n'), box);
   assert.equal(box.usageHTML({ total: 3000 }), '', 'a switched-off usage line is drawn in the card');
   box.refreshUsage('CK-1');
-  assert.deepEqual(flights, [], 'a switched-off usage line is still fetched while Claude works');
-  assert.equal(box.usageTimer, null, 'a switched-off usage line is still fetched a little later');
+  assert.deepEqual(flights, ['CK-1'], 'switched off, the open menu stopped following the checks while Claude works');
   box.repaintUsage();
   assert.equal(removed.length, 1, 'switched off, the open card keeps its usage line');
   assert.equal(loads.length, 1, 'switched off, the dashboard behind the settings keeps the block');
-  assert.deepEqual(flights, [], 'switched off, the line is fetched all the same');
+  assert.deepEqual(flights, ['CK-1'], 'switching off fetched the line again');
   show = true;
   assert.match(box.usageHTML({ total: 3000 }), /^<div class="dm-info dm-usage" title="notes">Usage · 3k tokens<\/div>$/, 'the card lost its usage line');
   box.repaintUsage();
-  assert.deepEqual(flights, ['CK-1'], 'switched on, the open card does not get its line back');
+  assert.deepEqual(flights, ['CK-1', 'CK-1'], 'switched on, the open card does not get its line back');
   assert.equal(loads.length, 2, 'switched on, the dashboard behind the settings does not get the block back');
   assert.equal(removed.length, 1);
   box.state.slug = 'proj';
   box.state.drawerKey = null;
   box.repaintUsage();
   assert.equal(loads.length, 2, 'a board that is not the dashboard is loaded again');
-  assert.deepEqual(flights, ['CK-1'], 'a line is fetched with no card open');
+  assert.deepEqual(flights, ['CK-1', 'CK-1'], 'a line is fetched with no card open');
   box.refreshUsage('CK-2');
-  assert.deepEqual(flights, ['CK-1', 'CK-2'], 'switched on, the line is no longer refreshed while Claude works');
+  assert.deepEqual(flights, ['CK-1', 'CK-1', 'CK-2'], 'switched on, the line is no longer refreshed while Claude works');
 });
 
 test('every word of the footer and of the two switches has its Russian', () => {

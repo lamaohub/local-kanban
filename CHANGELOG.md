@@ -8,6 +8,12 @@ version it goes out as and opens an empty one again. Released sections are histo
 
 ## [Unreleased]
 
+## [2.0.0-beta.24]
+
+### Added
+
+- The card says how the work was checked: whether its Claude sessions ran tests, a code review or a browser (screenshots and clicks), and how many times — or «Not checked» when they ran none. It is read from the same transcripts as the usage, with no request to the model, and only shows that a check ran, not that it passed. `kb show` prints the same line.
+
 ## [2.0.0-beta.23]
 
 ### Added

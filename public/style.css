@@ -1228,7 +1228,7 @@ html[data-design="v3"] .drawer.drawer-full { padding-inline: max(18px, calc((100
 .dm-chev { color: var(--muted); font-size: 14px; }
 .dm-claude { max-width: 290px; padding: 4px 10px 5px; display: flex; flex-direction: column; gap: 3px; }
 .dm-info { color: var(--muted); font-size: 11.5px; line-height: 1.4; font-variant-numeric: tabular-nums; }
-.dm-usage { cursor: help; }
+.dm-usage, .dm-checks { cursor: help; }
 .card-menu { transform-origin: top left; min-width: 184px; }
 .cm-opt { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; }
 .cm-opt:hover { background: var(--hover); }

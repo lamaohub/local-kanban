@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
-import { memoryText, moneyText, tokenParts, tokensText, usageLine, usageNotes, usagePanel } from '../public/js/usage-rules.js';
+import { checksLine, memoryText, moneyText, tokenParts, tokensText, usageLine, usageNotes, usagePanel } from '../public/js/usage-rules.js';
 
 const KB = fileURLToPath(new URL('../bin/kb', import.meta.url));
 let app, base, tmp, claude, dir, db, usage, emit;
@@ -221,6 +221,62 @@ test('the dashboard block: totals, the tasks that cost the most as rows that ope
   assert.match(usagePanel({ ...u, total: 0, tasks: [] }, F), /No Claude usage counted in this period yet/);
   assert.doesNotMatch(html, /recorded only in part/);
   assert.match(usagePanel({ ...u, partial_answers: 2 }, F), /helpers&#39; output is recorded only in part, so their money is higher/);
+});
+
+const tool = (id, name, input) => [{ type: 'tool_use', id, name, input }];
+const bash = (id, command) => tool(id, 'Bash', { command, description: 'Run something' });
+
+test('checks: a test run is a command of its own, a review is the code-review skill, the browser is its tools and scripts', () => {
+  const tests = ['node --test test/a.test.js', 'cd /repo && node --test 2>&1 | tail -5', 'PATH=/opt/n/bin:$PATH node --test', '/opt/nvm/versions/node/v24/bin/node --test',
+    'rtk proxy npm test', 'npm run test', 'npm run test:ui', 'pnpm test', 'pnpm check', 'yarn test', 'npx vitest run', 'pytest -q', 'python3 -m pytest',
+    'cargo test', 'go test ./...', 'timeout 600 node --test --test-concurrency=1 test/', 'echo start; npm test', 'npx playwright test', 'script -q /dev/null npm run test:ui',
+    'pnpm -C apps/web test', 'npm --prefix web test', 'npm run test-unit', 'npx --yes vitest run', 'sudo npm test', 'make test', 'bash -c "npm test"',
+    'find test -name "*.test.js" | xargs node --test', 'yarn workspace web test', 'pnpm exec vitest', "bash <<'EOF'\nnpm test\nEOF"];
+  for (const c of tests) assert.equal(usage.commandCheck(c), 'tests', c);
+  for (const c of ['grep -rn "node --test" docs', 'npm install', 'npm run checkout', 'git commit -m "npm test passes"', 'cat package.json', 'ls test/',
+    'git commit -m "fix flaky; npm test passes now"', "git commit -F - <<'EOF'\nnode --test test/a.test.js: 40 pass\nEOF", 'echo "node --test"'])
+    assert.equal(usage.commandCheck(c), null, c);
+  for (const c of ['node ~/.claude/skills/kanban/scripts/shots.cjs http://127.0.0.1:3101', 'cd /repo && node layout.cjs 390', "node -e \"require('playwright')\"",
+    "node - <<'EOF'\nimport { webkit } from 'playwright';\nconst b = await webkit.launch();\nEOF", 'xcrun simctl io booted screenshot a.png',
+    "python3 - <<EOF\nfrom playwright.sync_api import sync_playwright\nEOF",
+    'S=/tmp/x; NODE_PATH=~/.claude/skills/playwright-skill/node_modules node $S/pf.cjs $S 2>&1 | head -8'])
+    assert.equal(usage.commandCheck(c), 'browser', c);
+  // a word in a search, a commit or a survey script is not a look through the browser
+  for (const c of ['grep -rn playwright src', 'git commit -m "playwright: shots.cjs at 390"', "python3 - <<'EOF'\nmcp = 'mcp__playwright'\nEOF", 'cat ~/.claude/skills/kanban/scripts/shots.cjs',
+    "cat > x.mjs <<'EOF'\nimport { chromium } from 'playwright'\nEOF", 'grep -rn "chromium.launch(" src'])
+    assert.equal(usage.commandCheck(c), null, c);
+  assert.equal(usage.toolCheck('Skill', { skill: 'code-review', args: 'low' }), 'review');
+  assert.equal(usage.toolCheck('Skill', { skill: 'some-plugin:security-review' }), 'review');
+  assert.equal(usage.toolCheck('Skill', { skill: 'kanban' }), null);
+  for (const n of ['mcp__claude-in-chrome__computer', 'mcp__Claude_Browser__navigate', 'mcp__plugin_playwright_playwright__browser_navigate', 'mcp__playwright__browser_take_screenshot', 'mcp__computer-use__screenshot', 'mcp__remote-devices__Claude_Browser__read_page'])
+    assert.equal(usage.toolCheck(n, {}), 'browser', n);
+  for (const n of ['mcp__figma__use_figma', 'Read', 'Edit', 'Agent']) assert.equal(usage.toolCheck(n, {}), null, n);
+  // a line: every call of an answer; the review the person typed; a main transcript's side-chain line only for a helper's own
+  assert.deepEqual(usage.lineChecks(reply(0, 'm', U(1, 1, 0), { content: [...bash('a', 'npm test'), ...tool('b', 'Skill', { skill: 'code-review' })] })), ['tests', 'review']);
+  assert.deepEqual(usage.lineChecks(say(0, '<command-name>/code-review</command-name>\n<command-args>low</command-args>')), ['review']);
+  assert.deepEqual(usage.lineChecks(say(0, 'please run npm test')), [], 'the person\'s words are not a check');
+  const side = reply(0, 'm', U(1, 1, 0), { side: true, content: bash('c', 'node --test') });
+  assert.deepEqual(usage.lineChecks(side), []);
+  assert.deepEqual(usage.lineChecks(side, true), ['tests']);
+});
+
+test('checks on screen: each kind its sessions ran, a count past one, «not checked» when none; nothing before Claude is counted', () => {
+  const F = { num: (n, d) => Number(n).toFixed(d), tr: (s) => `«${s}»`, plural: (n, one, many) => (n === 1 ? one : many), esc: String, date: String, gap: '' };
+  const u = { total: 10, context: null, checks: { tests: 3, review: 1, browser: 0 } };
+  const line = checksLine(u, F);
+  assert.equal(line.text, '«Checked»: «tests» ×3 · «code review»');
+  assert.match(line.title, /not that it passed/);
+  const none = checksLine({ ...u, checks: { tests: 0, review: 0, browser: 0 } }, F);
+  assert.equal(none.text, '«Not checked: no tests, code review or browser in its sessions»');
+  assert.deepEqual(none.parts, []);
+  assert.equal(checksLine(null, F), null, 'a task without Claude says nothing about checks');
+  assert.equal(checksLine({ total: 10, context: null }, F), null, 'an answer without the field (an older board) says nothing');
+  assert.equal(checksLine({ ...u, checks: null }, F), null, 'not known (a session counted before the checks were) is not «not checked»');
+});
+
+test('checks: the page knows every kind the server counts', async () => {
+  const { CHECK_WORDS } = await import('../public/js/usage-rules.js');
+  assert.deepEqual(CHECK_WORDS.map(([k]) => k), usage.CHECK_KINDS, 'a kind the server counts would be dropped by the card and kb');
 });
 
 /* ── the whole path: transcript → stretches → base → card ── */
@@ -474,7 +530,7 @@ test('the card carries the usage; a task no session worked on has none', async (
   await move(task, 'doing', t0 + 2000, sid);
   appendFileSync(file(sid), lines([reply(t0 + 4000, 'w1', U(2, 30, 1000, 0, 500))]));
   const card = (await app.inject({ method: 'GET', url: `/api/tasks/${task.key}` })).json();
-  assert.deepEqual(Object.keys(card.usage).sort(), ['answers', 'context', 'cost', 'models', 'partial_answers', 'prices_as_of', 'tokens', 'total', 'unpriced', 'unpriced_models']);
+  assert.deepEqual(Object.keys(card.usage).sort(), ['answers', 'checks', 'context', 'cost', 'models', 'partial_answers', 'prices_as_of', 'tokens', 'total', 'unpriced', 'unpriced_models']);
   assert.deepEqual(card.usage.tokens, { input: 2, output: 30, cache_read: 1000, cache_write: 500 });
   assert.equal(card.usage.prices_as_of, '2026-11-17');
   const lone = newTask('Lone');
@@ -570,6 +626,59 @@ test('a helper\'s answer written in several lines is counted once, as the sessio
   assert.equal(u.partial_answers, 0);
 });
 
+test('checks: counted in the task\'s own stretch, a helper\'s for its task, not after the hand-in; a recount keeps them', async () => {
+  const sid = 'c1081000-0000-4000-8000-000000001081';
+  const task = newTask('Checks');
+  const other = newTask('Checks other');
+  const t0 = Date.now() - 400_000;
+  const sub = join(dir, sid, 'subagents');
+  mkdirSync(sub, { recursive: true });
+  writeFileSync(file(sid), lines([say(t0, `Do ${task.key}`), reply(t0 + 500, 'c0', U(1, 1, 0), { content: bash('pre', 'node --test test/a.test.js'), stop: 'tool_use' })]));
+  await move(task, 'doing', t0 + 2000, sid);
+  appendFileSync(file(sid), lines([
+    reply(t0 + 4000, 'c1', U(1, 1, 0), { content: bash('t1', 'cd /repo && node --test test/a.test.js 2>&1 | tail -3'), stop: 'tool_use' }),
+    reply(t0 + 5000, 'c2', U(1, 1, 0), { content: bash('g1', 'grep -rn "node --test" docs'), stop: 'tool_use' }),
+    reply(t0 + 6000, 'c3', U(1, 1, 0), { content: tool('r1', 'Skill', { skill: 'code-review', args: 'low' }), stop: 'tool_use' }),
+    reply(t0 + 7000, 'c4', U(1, 1, 0), { content: tool('b1', 'mcp__claude-in-chrome__computer', { action: 'screenshot' }), stop: 'tool_use' }),
+    reply(t0 + 8000, 'c5', U(1, 1, 0), { content: call('h-check'), stop: 'tool_use' }),
+  ]));
+  writeFileSync(join(sub, 'agent-check.meta.json'), JSON.stringify({ toolUseId: 'h-check' }));
+  writeFileSync(join(sub, 'agent-check.jsonl'), lines([reply(t0 + 8100, 'hc1', U(1, 1, 0), { side: true, content: bash('t2', 'npm test') })]));
+  await move(task, 'review', t0 + 10_000, sid);
+  // after the hand-in: the tail waits for whoever takes the focus next — the other task, from the person's word
+  appendFileSync(file(sid), lines([
+    reply(t0 + 12_000, 'c6', U(1, 1, 0), { content: bash('t3', 'npm test'), stop: 'tool_use' }),
+    say(t0 + 13_000, `Now ${other.key}`),
+    reply(t0 + 14_000, 'c7', U(1, 1, 0), { content: bash('b2', 'node shots.cjs http://127.0.0.1:3101'), stop: 'tool_use' }),
+  ]));
+  await move(other, 'doing', t0 + 15_000, sid);
+  const u = await usageOf(task);
+  assert.deepEqual(u.checks, { tests: 3, review: 1, browser: 1 },
+    'the lead-in test run (from the person\'s word) and the helper\'s run belong to the task; a grep is no test; nothing after the hand-in');
+  const o = await usageOf(other);
+  assert.deepEqual(o.checks, { tests: 0, review: 0, browser: 1 }, 'the other task gets its lead-in from the person\'s word only');
+  // a session counted by a board of the version before: read anew once, its tokens the same, its checks there
+  const tokens = u.tokens;
+  db.prepare("UPDATE claude_usage_reads SET state = json_set(state, '$.v', 1) WHERE session_id = ?").run(sid);
+  db.prepare('DELETE FROM task_checks WHERE session_id = ?').run(sid);
+  const again = await usageOf(task);
+  assert.deepEqual(again.checks, u.checks);
+  assert.deepEqual(again.tokens, tokens, 'the recount changed the tokens');
+  // a session counted before the checks were, whose transcript is gone (Claude Code removes old ones): not known, never «not checked»
+  const gone = newTask('Checks gone');
+  const old = 'c1081000-0000-4000-8000-000000001082';
+  db.prepare('INSERT INTO task_sessions (task_id, session_id, transcript) VALUES (?, ?, ?)').run(gone.id, old, join(dir, 'gone.jsonl'));
+  db.prepare("INSERT INTO task_usage (task_id, session_id, day, model, fast, answers, input, output) VALUES (?, ?, '2026-10-01', 'claude-opus-5-5', 0, 3, 10, 20)").run(gone.id, old);
+  db.prepare(`INSERT INTO claude_usage_reads (session_id, transcript, state) VALUES (?, ?, '{"v":1,"offset":10}')`).run(old, join(dir, 'gone.jsonl'));
+  const g = await usageOf(gone);
+  assert.equal(g.answers, 3);
+  assert.equal(g.checks, null, 'a task counted before the checks is shown as not checked');
+  // and a pass that only reads on counts nothing twice
+  appendFileSync(file(sid), lines([reply(t0 + 16_000, 'c8', U(1, 1, 0), { content: bash('t4', 'pnpm check'), stop: 'tool_use' })]));
+  assert.deepEqual((await usageOf(task)).checks, u.checks);
+  assert.deepEqual((await usageOf(other)).checks, { tests: 1, review: 0, browser: 1 });
+});
+
 test('kb show and kb take print the line the card shows, right under the sessions line; no usage — no line', async () => {
   const sid = 'c0000000-0000-4000-8000-00000000000c';
   const task = newTask('Kb');
@@ -588,6 +697,10 @@ test('kb show and kb take print the line the card shows, right under the session
   const i = out.findIndex((l) => l.startsWith('claude sessions:'));
   assert.ok(i >= 0, r.stdout);
   assert.equal(out[i + 1], 'claude usage: 151.5k tokens (input 2, output 1.5k, cache read 120k, cache write 30k) · ≈$0.29 at API prices of 2026-11-17 · context 15% of 1M (claude-opus-5-5) · 1 request, grew to 150k');
+  assert.equal(out[i + 2], 'Not checked: no tests, code review or browser in its sessions', 'CK-1081: kb does not say how the work was checked, in the card\'s words');
+  appendFileSync(file(sid), lines([reply(t0 + 5000, 'q2', U(1, 1, 0), { content: [...bash('kt', 'node --test'), ...bash('kt2', 'npm test')], stop: 'tool_use' })]));
+  const checked = (await run(['show', task.key])).stdout.split('\n');
+  assert.ok(checked.includes('Checked: tests ×2'), checked.join('\n'));
   const lone = newTask('Kb lone');
   const none = await run(['show', lone.key]);
   assert.equal(none.stdout.split('\n').some((l) => l.startsWith('claude usage:')), false);
@@ -607,7 +720,9 @@ test('the card and the dashboard draw it through the shared rules, escaped, ever
   const sse = src('js/sse.js');
   assert.match(sse, /const line = usageLine\(u, usageFmt\);\s*return line \? `<div class="dm-info dm-usage" title="\$\{esc\(line\.title\)\}">\$\{esc\(line\.text\)\}<\/div>` : '';/,
     'the card\'s usage line is not drawn through usageLine, or not escaped');
-  assert.match(sse, /return sessions \+ usageHTML\(cardClaude\.usage\);/, 'the line is not under the sessions line');
+  assert.match(sse, /return sessions \+ usageHTML\(cardClaude\.usage\) \+ checksHTML\(cardClaude\.usage\);/, 'the line is not under the sessions line, or the checks are not under it');
+  assert.match(sse, /const checksHTML = \(u\) => \{\s*const line = checksLine\(u, usageFmt\);\s*return line \? `<div class="dm-info dm-checks" title="\$\{esc\(line\.title\)\}">\$\{esc\(line\.text\)\}<\/div>` : '';/,
+    'the checks line is not drawn through checksLine, or not escaped');
   assert.match(sse, /box\.innerHTML = toggle \+ rows\.join\(''\) \+ cycle;/, 'the log of statuses shows Claude again');
   assert.match(sse, /if \(open\) refreshUsage\(state\.drawerKey\);/, 'task.work no longer refreshes the open card\'s usage');
   assert.match(src('js/dash.js'), /dashPanel\(tr\('Claude usage'\), usagePanel\(d\.usage, usageFmt\), phRange\)/, 'the dashboard lost the block');

@@ -39,6 +39,7 @@ function page({ show = true } = {}) {
     fmtDate: (s) => `@${s}`, STATUS_LABELS: { todo: 'To do', doing: 'In progress' },
     getSetting: (k) => (k === 'showUsage' ? show : undefined),
     usageLine: (u) => (u ? { text: `Usage · ${u.total} tokens`, title: 'notes' } : null), usageFmt: {},
+    checksLine: (u) => (u?.checks ? { text: `Checked · tests ×${u.checks.tests}`, title: 'ran, not passed' } : null),
     oneFlight: (fn) => fn,
     usageAnswer: { usage: null },
     api: async () => box.usageAnswer, seg: (s) => s,
@@ -54,6 +55,7 @@ function page({ show = true } = {}) {
   vm.runInContext([
     lineOf(sse, 'const TL_KEEP = '), lineOf(sse, 'const TL_MAX = '),
     take(sse, 'const usageHTML = ', '\n};\n'),
+    take(sse, 'const checksHTML = ', '\n};\n'),
     lineOf(sse, 'let cardClaude = '),
     take(sse, 'export function claudeInfoHTML('),
     lineOf(sse, 'let claudeInfoListener = '),
@@ -76,7 +78,7 @@ function page({ show = true } = {}) {
 }
 const TASK = {
   key: 'CK-1', status: 'doing', created_at: 'c', events: [{ status: 'doing', created_at: 'e' }],
-  sessions: [{ session_id: 's-1', last_seen: '2026-10-08 15:57:00' }], usage: { total: 27 },
+  sessions: [{ session_id: 's-1', last_seen: '2026-10-08 15:57:00' }], usage: { total: 27, checks: { tests: 2 } },
 };
 
 test('the log of statuses no longer shows Claude; the ⋯ menu does, sessions first, then usage', () => {
@@ -88,6 +90,7 @@ test('the log of statuses no longer shows Claude; the ⋯ menu does, sessions fi
   const s = html.indexOf('Claude · 1 session · latest @2026-10-08 15:57:00');
   const u = html.indexOf('Usage · 27 tokens');
   assert.ok(s >= 0 && u > s, `the menu lacks the lines about Claude: ${html}`);
+  assert.ok(html.indexOf('Checked · tests ×2') > u, `the menu lacks how the work was checked, or not under the usage: ${html}`);
   assert.ok(html.indexOf('data-act="subtask"') > u, 'the lines about Claude are not on top of the actions');
   assert.match(html, /data-act="delete"/);
 });
@@ -126,6 +129,12 @@ test('the usage line of an open menu follows Claude at work; switched off, it is
   const off = page({ show: false });
   off.box.renderTimeline(TASK);
   assert.doesNotMatch(off.box.claudeInfoHTML(), /Usage/, 'a switched-off usage is in the menu');
+  assert.match(off.box.claudeInfoHTML(), /Checked · tests ×2/, 'CK-1081: switching the money off hid the evidence of the checks');
+  off.box.usageAnswer = { usage: { total: 40, checks: { tests: 5 } } };
+  off.box.openDrawerMenu(); // opening the menu asks for the line (askUsageNow → refreshUsage)
+  await new Promise((r) => setImmediate(r));
+  assert.match(off.box.menu().innerHTML, /Checked · tests ×5/, 'with the usage switched off, the checks line froze');
+  assert.doesNotMatch(off.box.menu().innerHTML, /Usage/);
 });
 
 test('lines that come after the menu opened show in it; a locked menu never goes blank', async () => {

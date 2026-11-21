@@ -109,6 +109,140 @@ export function answerOf(d, sidechain = false) {
   };
 }
 
+/* What a transcript says about checking the work: a test run, a code review, a look through a browser. Only that a
+   check was RUN — not whether it passed: the board shows the evidence, the person judges it (observe mode, nothing
+   is refused). Measured on 400 transcripts of the owner's machine (18.11.2026): tests are `node --test`, `npm test`,
+   `pnpm test`, `pnpm check`, `pytest`; a review is the Skill tool with `code-review`; the browser is the Chrome
+   extension, the app's own browser, playwright and computer use. */
+export const CHECK_KINDS = ['tests', 'review', 'browser'];
+const BROWSER_TOOL = /^mcp__(?:[\w-]*?_)?(?:claude-in-chrome|Claude_Browser|playwright|computer-use)__|^mcp__remote-devices__(?:Claude_Browser__|computer)/;
+const REVIEW_SKILL = /^(?:[\w-]+:)?(?:code-review|security-review|review)$/;
+const REVIEW_COMMAND = /<command-name>\/?(?:[\w-]+:)?(?:code-review|security-review|review)<\/command-name>/;
+// a script that drives a browser: playwright loaded by JavaScript or Python
+const PLAYWRIGHT_LOAD = /\brequire\(\s*['"](?:playwright|@playwright\/test)['"]|\bfrom\s+['"](?:playwright|@playwright\/test)['"]|\bimport\(\s*['"]playwright['"]|\bfrom\s+playwright(?:\.\w+)*\s+import\b|\bimport\s+playwright\b/;
+const WRAPPERS = new Set(['sudo', 'env', 'time', 'nice', 'command', 'exec', 'caffeinate', 'xargs', 'nohup']);
+const VALUE_FLAGS = new Set(['-C', '--dir', '--prefix', '--filter', '-F', '-w', '--workspace', '--cwd', '--cache']);
+const RUNNERS = new Set(['vitest', 'jest', 'mocha', 'ava', 'pytest']);
+const base = (w) => String(w).replace(/^.*\//, '');
+// the first word that is not a flag (nor a flag's value)
+function firstWord(args) {
+  for (let i = 0; i < args.length; i += 1) {
+    if (!args[i].startsWith('-')) return [args[i], args.slice(i + 1)];
+    if (VALUE_FLAGS.has(args[i])) i += 1;
+  }
+  return [null, []];
+}
+const runnerRuns = (args) => {
+  const [r, rest] = firstWord(args);
+  return Boolean(r) && (RUNNERS.has(base(r)) || (base(r) === 'playwright' && rest[0] === 'test'));
+};
+
+/** What one command of a shell line runs (quotes already blanked): 'tests', 'browser' or null. */
+function segmentCheck(seg) {
+  const w = seg.trim().split(/\s+/).filter(Boolean);
+  const env = [];
+  for (;;) {
+    if (!w.length) return null;
+    const h = base(w[0]);
+    if (/^[A-Za-z_]\w*=/.test(w[0])) env.push(w.shift());
+    else if (WRAPPERS.has(h)) { w.shift(); while (w[0]?.startsWith('-')) w.shift(); }
+    else if (h === 'rtk' && w[1] === 'proxy') w.splice(0, 2);
+    else if (h === 'timeout' || h === 'script') { w.shift(); while (w[0]?.startsWith('-')) w.shift(); w.shift(); }
+    else break;
+  }
+  const prog = base(w[0]);
+  const args = w.slice(1);
+  if (/^node\d*$/.test(prog)) {
+    if (args.some((x) => x === '--test' || x.startsWith('--test='))) return 'tests';
+    if (args.some((x) => /(?:^|\/)(?:shots|layout|form)\.cjs$/.test(x))) return 'browser';
+    return env.some((e) => /^NODE_PATH=\S*playwright/.test(e)) ? 'browser' : null;
+  }
+  if (['npm', 'pnpm', 'yarn', 'bun'].includes(prog)) {
+    let [sub, rest] = firstWord(args);
+    if (sub === 'workspace') [sub, rest] = firstWord(rest.slice(1));
+    if (sub === 'exec' || sub === 'dlx' || sub === 'x') return runnerRuns(rest) ? 'tests' : null;
+    if (sub === 'run' || sub === 'run-script') [sub] = firstWord(rest);
+    return /^(?:test|check)(?:[:-][\w:.-]*)?$/.test(sub || '') ? 'tests' : null;
+  }
+  if (prog === 'npx' || prog === 'bunx') {
+    if (runnerRuns(args)) return 'tests';
+    const [r, rest] = firstWord(args);
+    return r === 'playwright' && rest[0] === 'screenshot' ? 'browser' : null;
+  }
+  if (RUNNERS.has(prog) || (prog === 'playwright' && args[0] === 'test')) return 'tests';
+  if (/^python[\d.]*$/.test(prog)) { const m = args.indexOf('-m'); return m >= 0 && /^(?:pytest|unittest)$/.test(args[m + 1] || '') ? 'tests' : null; }
+  if ((prog === 'cargo' || prog === 'go') && firstWord(args)[0] === 'test') return 'tests';
+  if (prog === 'make' && args.some((x) => x === 'test' || x === 'check')) return 'tests';
+  if (prog === 'safaridriver' || prog === 'screencapture' || (prog === 'xcrun' && args[0] === 'simctl' && args[1] === 'io')) return 'browser';
+  return null;
+}
+const SCRIPT_HOSTS = /^(?:node\d*|bun|deno|python[\d.]*)$/;
+
+/** The check a shell command runs: 'tests', 'browser' or null. Only what the shell RUNS counts: a quoted string (a
+    commit message, a grep pattern), a heredoc written into a file, a word in a search are text. A heredoc or an `-e`
+    script fed to node or python counts when it loads playwright; `bash -c '…'` and a heredoc fed to a shell are read
+    as commands. Tests win over the browser when one command does both. */
+export function commandCheck(command, depth = 0) {
+  let text = String(command ?? '');
+  const found = new Set();
+  // heredocs: the body is cut out; fed to a script host it is a script, fed to a shell — commands
+  const lines = text.split('\n');
+  const kept = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    kept.push(lines[i]);
+    const m = /<<-?\s*(['"]?)([A-Za-z_]\w*)\1/.exec(lines[i]);
+    if (!m) continue;
+    const body = [];
+    let j = i + 1;
+    while (j < lines.length && lines[j].trim() !== m[2]) body.push(lines[j++]);
+    i = j;
+    const head = lines[i - body.length - 1].slice(0, m.index).split(/&&|\|\||[;|&]/).pop();
+    const host = segmentHost(head);
+    if (SCRIPT_HOSTS.test(host) && PLAYWRIGHT_LOAD.test(body.join('\n'))) found.add('browser');
+    else if (/^(?:ba|z)?sh$/.test(host) && depth < 3) { const k = commandCheck(body.join('\n'), depth + 1); if (k) found.add(k); }
+  }
+  text = kept.join('\n');
+  // `bash -c '…'` is commands; `node -e '…'` is a script
+  for (const m of text.matchAll(/\b(?:ba|z)?sh\s+-c\s+(['"])((?:(?!\1)[\s\S])*)\1/g)) { const k = depth < 3 && commandCheck(m[2], depth + 1); if (k) found.add(k); }
+  for (const m of text.matchAll(/\b(?:node\d*|bun|deno|python[\d.]*)\s+(?:--?[\w-]+(?:=\S+)?\s+)*?(?:-e|--eval|-p|--print|-c)\s+(['"])((?:(?!\1)[\s\S])*)\1/g)) {
+    if (PLAYWRIGHT_LOAD.test(m[2])) found.add('browser');
+  }
+  const bare = text.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, 'Q');
+  for (const seg of bare.split(/&&|\|\||[;|&\n(){}`]/)) { const k = segmentCheck(seg); if (k) found.add(k); }
+  return found.has('tests') ? 'tests' : found.has('browser') ? 'browser' : null;
+}
+// the program a command line starts (for the heredoc it feeds)
+function segmentHost(head) {
+  const w = String(head).trim().split(/\s+/).filter((x) => x && !/^[A-Za-z_]\w*=/.test(x));
+  while (w.length && (WRAPPERS.has(base(w[0])) || base(w[0]) === 'rtk' || w[0] === 'proxy' || w[0].startsWith('-'))) w.shift();
+  return base(w[0] || '');
+}
+
+/** The check a tool call is: 'tests', 'review', 'browser' or null. */
+export function toolCheck(name, input) {
+  if (name === 'Skill') return REVIEW_SKILL.test(String(input?.skill ?? '')) ? 'review' : null;
+  if (name === 'Bash') return commandCheck(input?.command);
+  return BROWSER_TOOL.test(String(name ?? '')) ? 'browser' : null;
+}
+
+/** The checks a transcript line makes, by kind: the tool calls of an answer (a helper's transcript passes `sidechain`),
+    or a review the person typed as a slash command. */
+export function lineChecks(d, sidechain = false) {
+  if (!d || typeof d !== 'object' || (d.isSidechain && !sidechain)) return [];
+  const c = d.message?.content;
+  if (d.type === 'user') {
+    const text = typeof c === 'string' ? c : Array.isArray(c) ? c.map((b) => (b?.type === 'text' ? b.text : '')).join(' ') : '';
+    return REVIEW_COMMAND.test(text) ? ['review'] : [];
+  }
+  if (d.type !== 'assistant' || !Array.isArray(c)) return [];
+  const out = [];
+  for (const b of c) {
+    const k = b?.type === 'tool_use' ? toolCheck(b.name, b.input) : null;
+    if (k) out.push(k);
+  }
+  return out;
+}
+
 /** How full the conversation memory was on an answer: everything it read, cached or not. */
 const contextOf = (t) => t.input + t.cache_read + t.cache_5m + t.cache_1h;
 
@@ -172,7 +306,7 @@ export function sameView(was, now) {
 // JSON has no -Infinity: the start of a session's first stretch is kept as null
 const encA = (a) => (a === -Infinity ? null : a);
 const decA = (a) => (a === null ? -Infinity : a);
-const STATE_V = 1;
+const STATE_V = 2;
 const blank = () => ({ v: STATE_V, offset: 0, until: null, fp: [], cur: null, park: null, calls: {}, helpers: {} });
 const parse = (s) => { try { return JSON.parse(s); } catch { return null; } };
 
@@ -206,6 +340,13 @@ async function countPass(sid) {
     r.partial += partial;
     for (const x of KINDS) r[x] += t[x];
   };
+  const checks = new Map();
+  const addCheck = (task, kind, n, at) => {
+    const k = `${task}\t${kind}`;
+    const c = checks.get(k) || checks.set(k, { task, kind, n: 0, at }).get(k);
+    c.n += n;
+    c.at = Math.max(c.at, at);
+  };
   const noteLast = (holder, key, at, model, t) => {
     const c = contextOf(t);
     const p = holder[key];
@@ -225,6 +366,7 @@ async function countPass(sid) {
         addRow(task, day, model, Number(fast), t, t.answers, t.partial || 0);
       }
       for (const id of p.calls) s.calls[id] = task;
+      for (const [kind, c] of Object.entries(p.checks || {})) addCheck(task, kind, c.n, c.at);
       if (p.last) {
         const peak = Math.max(p.last.peak ?? p.last.context, last[task]?.peak ?? last[task]?.context ?? 0);
         if (!last[task] || p.last.at >= last[task].at) last[task] = { ...p.last, peak };
@@ -261,13 +403,24 @@ async function countPass(sid) {
     let owner = null;
     if (r.kind === 'own') owner = r.task;
     else if (r.task !== null) {
-      if (!s.park) s.park = { a: encA(r.a), rows: {}, last: null, calls: [] };
+      if (!s.park) s.park = { a: encA(r.a), rows: {}, last: null, calls: [], checks: {} };
       if (decA(s.park.a) === r.a) owner = 'park';
     }
     for (const id of ids) {
       if (owner === 'park') { if (!s.park.calls.includes(id)) s.park.calls.push(id); }
       else s.calls[id] = owner;
     }
+  };
+  const check = (kind, at) => {
+    const r = regionAt(regions, at);
+    if (r.kind === 'own') { if (typeof r.task === 'number') addCheck(r.task, kind, 1, at); return; }
+    if (r.task === null) return;
+    if (!s.park) s.park = { a: encA(r.a), rows: {}, last: null, calls: [], checks: {} };
+    if (decA(s.park.a) !== r.a) return;
+    const p = s.park.checks || (s.park.checks = {});
+    const c = p[kind] || (p[kind] = { n: 0, at });
+    c.n += 1;
+    c.at = Math.max(c.at, at);
   };
   const remember = (cur) => {
     if (cur.to === 'task') noteLast(last, cur.task, cur.at, cur.model, cur.seen);
@@ -295,7 +448,7 @@ async function countPass(sid) {
     let to = 'none';
     if (r.kind === 'own') to = r.task === null ? 'none' : 'task';
     else if (r.task !== null) {
-      if (!s.park) s.park = { a: encA(r.a), rows: {}, last: null, calls: [] };
+      if (!s.park) s.park = { a: encA(r.a), rows: {}, last: null, calls: [], checks: {} };
       // an answer dated before the stretch parked now (lines out of order) is counted nowhere
       if (decA(s.park.a) === r.a) to = 'park';
     }
@@ -315,9 +468,11 @@ async function countPass(sid) {
         if (r && at >= r.a && at <= r.b) settle(null);
       }
       tick(at);
+      for (const k of lineChecks(d)) check(k, at);
       return;
     }
     tick(at);
+    for (const k of lineChecks(d)) check(k, at);
     const a = answerOf(d);
     if (!a) return;
     answer(a);
@@ -334,13 +489,16 @@ async function countPass(sid) {
     const r = parkRegion();
     if (r && r.task !== undefined) settle(r.task);
   }
-  const rewritten = await countHelpers(transcript, s, addRow);
+  const rewritten = await countHelpers(transcript, s, addRow, addCheck);
   // a helper's transcript that shrank was rewritten: what was counted from it cannot be taken back — count anew next time
   s.fp = rewritten ? null : regionsView(regions, s.until ?? NaN);
 
   try {
     db.transaction(() => {
-      if (fresh) db.prepare('DELETE FROM task_usage WHERE session_id = ?').run(sid);
+      if (fresh) {
+        db.prepare('DELETE FROM task_usage WHERE session_id = ?').run(sid);
+        db.prepare('DELETE FROM task_checks WHERE session_id = ?').run(sid);
+      }
       const up = db.prepare(`INSERT INTO task_usage (task_id, session_id, day, model, fast, answers, partial, input, output, cache_read, cache_5m, cache_1h)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (task_id, session_id, day, model, fast) DO UPDATE SET answers = answers + excluded.answers,
@@ -349,6 +507,9 @@ async function countPass(sid) {
       // Anthropic's prices: the model is kept with a mark no price matches (counted, shown, not priced)
       const tp = thirdPartySession(sid);
       for (const r of rows.values()) up.run(r.task, sid, r.day, tp ? `${r.model} ${THIRD_PARTY}` : r.model, r.fast, r.answers, r.partial, r.input, r.output, r.cache_read, r.cache_5m, r.cache_1h);
+      const upCheck = db.prepare(`INSERT INTO task_checks (task_id, session_id, kind, n, last_at) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT (task_id, session_id, kind) DO UPDATE SET n = n + excluded.n, last_at = MAX(last_at, excluded.last_at)`);
+      for (const c of checks.values()) upCheck.run(c.task, sid, c.kind, c.n, c.at);
       db.prepare(`INSERT INTO claude_usage_reads (session_id, transcript, state, last, updated_at) VALUES (?, ?, ?, ?, datetime('now'))
         ON CONFLICT (session_id) DO UPDATE SET transcript = excluded.transcript, state = excluded.state, last = excluded.last, updated_at = excluded.updated_at`)
         .run(sid, transcript, JSON.stringify(s), JSON.stringify(last));
@@ -364,7 +525,7 @@ async function countPass(sid) {
 /** Helpers started by calls in the task's stretches: each read on from where it stopped, all of it the
     task's. A helper started by a helper belongs where its starter does. One that cannot be read is left
     out, not the whole count. */
-async function countHelpers(transcript, s, addRow) {
+async function countHelpers(transcript, s, addRow, addCheck) {
   const dir = join(dirname(transcript), basename(transcript, '.jsonl'), 'subagents');
   let names = [];
   let rewritten = false;
@@ -407,9 +568,16 @@ async function countHelpers(transcript, s, addRow) {
       g.partial += partial;
       for (const x of KINDS) g[x] += t[x];
     };
+    const gotChecks = new Map(); // kind → { n, at } of this read
     let cur = h.cur && { ...h.cur, seen: { ...h.cur.seen } };
     try {
       await readTail(file, c, size, (d) => {
+        const when = Date.parse(d?.timestamp);
+        for (const k of lineChecks(d, true)) {
+          const g = gotChecks.get(k) || gotChecks.set(k, { n: 0, at: Number.isFinite(when) ? when : 0 }).get(k);
+          g.n += 1;
+          if (Number.isFinite(when)) g.at = Math.max(g.at, when);
+        }
         const a = answerOf(d, true);
         if (!a) return;
         if (cur && cur.id === a.id) {
@@ -425,6 +593,7 @@ async function countHelpers(transcript, s, addRow) {
       });
     } catch { continue; } // no rights, gone between stat and open, a folder in its place: left out
     for (const g of got.values()) addRow(task, g.day, g.model, g.fast, g, g.answers, g.partial);
+    for (const [kind, g] of gotChecks) addCheck(task, kind, g.n, g.at);
     h.cur = cur;
     h.offset = c.size - c.rest.length;
   }
@@ -497,8 +666,16 @@ export function usageSummary(taskId) {
     if (l) peak = Math.max(peak, l.peak ?? l.context ?? 0);
   }
   if (!groups.length && !ctx) return null;
+  // the task has usage from was counted before the checks were (not read anew yet, or its transcript is gone)
+  let checks = Object.fromEntries(CHECK_KINDS.map((k) => [k, 0]));
+  for (const r of db.prepare('SELECT kind, SUM(n) AS n FROM task_checks WHERE task_id = ? GROUP BY kind').all(taskId)) {
+    if (Object.hasOwn(checks, r.kind)) checks[r.kind] = r.n;
+  }
+  if (db.prepare(`SELECT 1 FROM task_usage u LEFT JOIN claude_usage_reads r ON r.session_id = u.session_id
+    WHERE u.task_id = ? AND (r.session_id IS NULL OR json_extract(r.state, '$.v') IS NOT ?) LIMIT 1`).get(taskId, STATE_V)) checks = null;
   return {
     ...summarize(groups),
+    checks,
     context: ctx ? { tokens: ctx.context, peak: Math.max(peak, ctx.context), window: contextWindow(ctx.model), model: ctx.model, at: new Date(ctx.at).toISOString() } : null,
     prices_as_of: PRICE_TABLE.asOf,
   };
@@ -560,8 +737,10 @@ export function startUsageWatch({ delayMs = 20_000, gapMs = 1_000 } = {}) {
   const later = (ms) => new Promise((r) => { const t = setTimeout(r, ms); t.unref?.(); });
   const backfill = async () => {
     await later(delayMs);
-    const sids = db.prepare(`SELECT DISTINCT s.session_id FROM task_sessions s
-      WHERE NOT EXISTS (SELECT 1 FROM claude_usage_reads r WHERE r.session_id = s.session_id)`).all().map((r) => r.session_id);
+    // opened soon after the upgrade does not wait for its whole transcript to be read in the request
+    const sids = db.prepare(`SELECT s.session_id FROM task_sessions s LEFT JOIN claude_usage_reads r ON r.session_id = s.session_id
+      WHERE r.session_id IS NULL OR json_extract(r.state, '$.v') IS NOT ?
+      GROUP BY s.session_id ORDER BY MAX(s.last_seen) DESC`).all(STATE_V).map((r) => r.session_id);
     for (const sid of sids) {
       await countSession(sid).catch(() => {});
       await later(gapMs);

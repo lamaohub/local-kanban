@@ -211,6 +211,15 @@ CREATE TABLE IF NOT EXISTS task_usage (
 );
 CREATE INDEX IF NOT EXISTS idx_task_usage_day ON task_usage(day);
 CREATE INDEX IF NOT EXISTS idx_task_usage_session ON task_usage(session_id);
+CREATE TABLE IF NOT EXISTS task_checks (
+  task_id     INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  session_id  TEXT NOT NULL,
+  kind        TEXT NOT NULL,                -- tests | review | browser (CHECK_KINDS)
+  n           INTEGER NOT NULL DEFAULT 0,
+  last_at     INTEGER NOT NULL,
+  PRIMARY KEY (task_id, session_id, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_task_checks_session ON task_checks(session_id);
 CREATE TABLE IF NOT EXISTS claude_usage_reads (
   session_id  TEXT PRIMARY KEY,
   transcript  TEXT NOT NULL,

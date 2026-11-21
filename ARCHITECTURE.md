@@ -301,6 +301,13 @@ the period's usage and the tasks that cost the most. How it reads on screen is d
 `public/js/usage-rules.js`, a module without imports or DOM, and `kb show` prints the same line through it.
 Claude Code often leaves a helper's answers without their final line, so a helper's output is under-recorded;
 the board counts such answers and says so instead of presenting the number as exact.
+The same pass notes how the work was checked: a test run (what the shell itself runs, such as `node --test`,
+`npm test`, `pytest` — a quoted commit message or a search for those words is text), a code review (the
+`code-review` skill or slash command) and a browser (its tools, the screenshot scripts, a script loading
+playwright), each placed by the time of its own line like a helper's call, and a helper's checks counted for its
+task. A session counted before the checks existed is read anew in the background; until then the card says
+nothing about its checks rather than «not checked». The card and `kb show` say which kinds ran and how often, or that none did — that a check ran, never
+that it passed; nothing is refused by it.
 
 **A call from Claude** (a trial, off by default) rings over the board on the same news as the sound of
 Review. `public/js/call.js` reads the event stream itself, through one call in the stream handler, so the

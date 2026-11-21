@@ -79,6 +79,21 @@ export function usageLine(u, f) {
   return { text: parts.join(' · '), title: usageNotes(u, f).join('\n') };
 }
 
+export const CHECK_WORDS = [['tests', 'tests'], ['review', 'code review'], ['browser', 'browser']];
+
+/** How the task's work was checked: `parts` — each kind its sessions ran, with how many times past one; `text` — the
+    card's line, «Not checked …» when they ran none; `title` — what it means. Null while nothing of Claude is counted
+    (no session), or not known (`checks` null: a session counted before the checks were). It says a check RAN, not
+    that it passed. `bin/kb` prints `text` as it is. */
+export function checksLine(u, f) {
+  if (!u || (!u.total && !u.context) || !u.checks) return null;
+  const parts = CHECK_WORDS.filter(([k]) => u.checks[k] > 0).map(([k, w]) => `${f.tr(w)}${u.checks[k] > 1 ? ` ×${u.checks[k]}` : ''}`);
+  const title = f.tr("Counted from the transcripts of the task's sessions: test runs, code review, the browser and screenshots. It shows that a check ran, not that it passed.");
+  return parts.length
+    ? { parts, text: `${f.tr('Checked')}: ${parts.join(' · ')}`, title }
+    : { parts, text: f.tr('Not checked: no tests, code review or browser in its sessions'), title };
+}
+
 /** The dashboard's usage block for the window: the totals, then the tasks that cost the most — each row
     opens its card (`data-key`). Titles and project names are the person's text: always escaped. */
 export function usagePanel(u, f) {

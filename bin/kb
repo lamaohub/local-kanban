@@ -5,7 +5,7 @@
 import { parsePm2Services } from '../src/pm2-services.js';
 import { closeSync, readFileSync, statSync, writeSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { memoryText, moneyText, tokensText } from '../public/js/usage-rules.js';
+import { checksLine, memoryText, moneyText, tokensText } from '../public/js/usage-rules.js';
 import { HOOK_WAIT_MS } from '../src/claude-hooks.js';
 import { claudeDir } from '../src/config.js';
 import { foreignFolder, folderWarning, startFolder } from '../src/session-folder.js';
@@ -273,6 +273,8 @@ function printUsage(t) {
   if (memory) parts.push(`context ${memory}${u.context.window ? ` of ${k(u.context.window)}` : ''} (${u.context.model})`);
   if (u.answers) parts.push(`${u.answers} request${u.answers === 1 ? '' : 's'}${u.context?.peak ? `, grew to ${k(u.context.peak)}` : ''}`);
   console.log(`claude usage: ${parts.join(' · ')}`);
+  const checked = checksLine(u, PLAIN);
+  if (checked) console.log(checked.text);
 }
 
 function printAttachments(t) {
