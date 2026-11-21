@@ -16,7 +16,7 @@ const piece = (head, end = '\n}\n') => {
 function page({ advice, pick }) {
   const calls = [];
   const box = {
-    calls, resumeWords, tr: (s) => s, getSetting: () => 'auto', startEffort: () => 'high', checksOnly: () => false, state: { tasks: [] },
+    calls, resumeWords, tr: (s) => s, AbortSignal, ADVICE_WAIT_MS: 5000, getSetting: () => 'auto', startEffort: () => 'high', checksOnly: () => false, state: { tasks: [] },
     api: async (method, path, body) => { calls.push([method, path.split('?')[0], body?.resume ? 'resume' : '']); if (method === 'GET') { if (advice instanceof Error) throw advice; return { advice }; } return { ok: true }; },
     styledConfirm: async (words, o) => { calls.push(['window', words, o.alt]); return pick; },
     launchInClaude: async (o) => { calls.push(['new session', o.text, o.keys.join()]); },
@@ -67,4 +67,44 @@ test('a big quiet conversation: the window names the cost; «Continue» resumes,
   b = page({ advice: big, pick: false });
   assert.equal(await b.resumeOnBoard({ key: 'CK-1', session: 's1', btn: btn() }), false);
   assert.deepEqual(b.calls.map((c) => c[0]), ['GET', 'window']);
+});
+
+// task in its project (by the key's prefix — the server takes a slug or a prefix)
+test('the window leaves the button enabled whatever is picked; «New session» names the project', async () => {
+  for (const pick of [false, 'alt', true]) {
+    const b = page({ advice: big, pick });
+    const starts = [];
+    b.launchInClaude = async (o) => { starts.push(o.project); };
+    const button = btn();
+    await b.resumeOnBoard({ key: 'CK-12', session: 's1', btn: button });
+    assert.equal(button.disabled, false, `${pick}: the button stayed disabled`);
+    if (pick === 'alt') assert.deepEqual(starts, ['CK'], 'the new session was started with no project');
+  }
+});
+
+// may be named `again`)
+test('every Continue of the page goes through resumeOnBoard and asks the advice', () => {
+  const files = { 'drawer.js': 1, 'chat.js': 1, 'now.js': 1, 'now-terms.js': 1 };
+  for (const [f, n] of Object.entries(files)) {
+    const src = readFileSync(new URL(`../public/js/${f}`, import.meta.url), 'utf8');
+    const calls = [...src.matchAll(/resumeOnBoard\(\{([^}]*)\}\)/g)].map((m) => m[1]);
+    assert.equal(calls.length, n, `${f}: ${calls.length} calls of resumeOnBoard`);
+    for (const c of calls) assert.doesNotMatch(c, /\bagain\s*:/, `${f}: a Continue that skips the advice — ${c}`);
+  }
+});
+
+// dropped connection the browser keeps waiting on) left the button disabled and the session not continued, for good
+test('the advice not answered at all — Continue still continues, and the button comes back', async () => {
+  const b = page({ advice: null });
+  b.ADVICE_WAIT_MS = 50; // the page's wait, shortened for the test
+  b.api = (method, path, body, opts = {}) => {
+    b.calls.push([method, path.split('?')[0], body?.resume ? 'resume' : '']);
+    if (method !== 'GET') return Promise.resolve({ ok: true });
+    return new Promise((_, reject) => opts.signal?.addEventListener('abort', () => reject(new Error('timed out'))));
+  };
+  const button = btn();
+  const r = await Promise.race([b.resumeOnBoard({ key: 'CK-1', session: 's1', btn: button }), new Promise((res) => { setTimeout(() => res('stuck'), 2000); })]);
+  assert.equal(r, true, 'Continue waited for the advice for good');
+  assert.equal(button.disabled, false);
+  assert.deepEqual(b.calls.map((c) => c[0]), ['GET', 'POST']);
 });

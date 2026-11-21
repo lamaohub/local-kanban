@@ -231,7 +231,8 @@ test('checks: a test run is a command of its own, a review is the code-review sk
     'rtk proxy npm test', 'npm run test', 'npm run test:ui', 'pnpm test', 'pnpm check', 'yarn test', 'npx vitest run', 'pytest -q', 'python3 -m pytest',
     'cargo test', 'go test ./...', 'timeout 600 node --test --test-concurrency=1 test/', 'echo start; npm test', 'npx playwright test', 'script -q /dev/null npm run test:ui',
     'pnpm -C apps/web test', 'npm --prefix web test', 'npm run test-unit', 'npx --yes vitest run', 'sudo npm test', 'make test', 'bash -c "npm test"',
-    'find test -name "*.test.js" | xargs node --test', 'yarn workspace web test', 'pnpm exec vitest', "bash <<'EOF'\nnpm test\nEOF"];
+    'find test -name "*.test.js" | xargs node --test', 'yarn workspace web test', 'pnpm exec vitest', "bash <<'EOF'\nnpm test\nEOF",
+    'for i in 1 2 3; do node --test test/a.test.js; done', 'while true; do npm test; done', 'if true; then npm test; fi', 'if pytest -q; then echo ok; fi', '! npm test'];
   for (const c of tests) assert.equal(usage.commandCheck(c), 'tests', c);
   for (const c of ['grep -rn "node --test" docs', 'npm install', 'npm run checkout', 'git commit -m "npm test passes"', 'cat package.json', 'ls test/',
     'git commit -m "fix flaky; npm test passes now"', "git commit -F - <<'EOF'\nnode --test test/a.test.js: 40 pass\nEOF", 'echo "node --test"'])
@@ -775,6 +776,20 @@ test('the advice before «Continue»: only past an hour of quiet AND past 300k t
   assert.equal((await ask(big, sid)).json().advice, null, 'a session written a minute ago was called quiet for hours');
 });
 
+test('the advice of a session on another provider has no price', async () => {
+  const now = Date.now();
+  const t = newTask('Third party');
+  const sid = '79797979-7979-4797-8797-797979797979';
+  const t0 = now - 3 * 3600_000;
+  await move(t, 'doing', t0 - 1000, sid);
+  writeFileSync(file(sid), lines([say(t0, 'go'), reply(t0 + 1000, 'm9', U(10, 5, 400_000))]));
+  utimesSync(file(sid), new Date(t0 + 1000), new Date(t0 + 1000));
+  db.prepare('INSERT INTO session_profiles (session_id, profile_id, third_party) VALUES (?, 1, 1)').run(sid);
+  const adv = (await app.inject({ method: 'GET', url: `/api/tasks/${t.key}/resume-advice?session=${sid}` })).json().advice;
+  assert.ok(adv, 'a big quiet session of another provider is still advised');
+  assert.equal(adv.cost, null, 'priced at Anthropic\'s');
+});
+
 test('the words of the advice say the size, the quiet and the cost, all through the dictionary', async () => {
   const { resumeWords, quietFor } = await import('../public/js/resume-rules.js');
   const tr = (s) => `«${s}»`;
@@ -797,4 +812,51 @@ test('the peak of the conversation is kept across answers and goes to the card a
   assert.equal(u.answers, 3);
   assert.deepEqual([u.context.tokens, u.context.peak], [90_010, 420_010]);
   assert.match(usageLine(u, F).text, / · 3 requests · grew to 420k$/);
+});
+
+// nobody had the focus is handed to the task later, and its small last request must not hide the big one before it
+test('the peak is kept when a parked lead-in is handed to the task', async () => {
+  const task = newTask('Peak park');
+  const sid = '68686868-6868-4686-8686-686868686869';
+  const t0 = Date.now() - 900_000;
+  await move(task, 'doing', t0 - 1000, sid);
+  writeFileSync(file(sid), lines([say(t0, 'go'), reply(t0 + 1000, 'q1', U(10, 5, 420_000))]));
+  await move(task, 'review', t0 + 2000, sid);
+  assert.equal((await usageOf(task)).context.peak, 420_010);
+  appendFileSync(file(sid), lines([say(t0 + 3000, `Back to ${task.key}`), reply(t0 + 4000, 'q2', U(10, 5, 50_000))]));
+  await usageOf(task); // read while nobody has the focus: the lead-in is parked
+  await move(task, 'doing', t0 + 5000, sid);
+  appendFileSync(file(sid), lines([reply(t0 + 6000, 'q3', U(10, 5, 60_000))]));
+  const u = await usageOf(task);
+  assert.equal(u.answers, 3);
+  assert.deepEqual([u.context.tokens, u.context.peak], [60_010, 420_010], 'the parked stretch hid the peak before it');
+});
+
+// the Fable the table prices newest — the picker's Fable 5.1 was what the task replaced
+test('Mythos 5.2 is priced in the fast mode too; the picker offers Fable 5.2, a model the table prices', async () => {
+  const M = { input: 1e6, output: 1e6, cache_read: 1e6, cache_5m: 1e6, cache_1h: 1e6 };
+  close(usage.costOf('claude-mythos-5-2', 1, M), 16 + 80 + 0.4 + 20 + 32, 'mythos 5.2 has a fast mode');
+  const { MODELS } = await import('../public/js/chat-models.js');
+  const fable = MODELS.find((m) => m.id.startsWith('claude-fable-'));
+  assert.equal(fable?.id, 'claude-fable-5-2');
+  assert.ok(usage.priceOf(fable.id), 'the picker offers a model with no price');
+});
+
+test('checks: the background pass reads anew a session counted by the version before, and replaces its checks rather than adding to them', async () => {
+  const sid = 'c1081000-0000-4000-8000-000000001083';
+  const task = newTask('Backfill');
+  const t0 = Date.now() - 300_000;
+  writeFileSync(file(sid), lines([say(t0, `Do ${task.key}`)]));
+  await move(task, 'doing', t0 + 1000, sid);
+  appendFileSync(file(sid), lines([reply(t0 + 2000, 'bf1', U(1, 1, 0), { content: bash('bf', 'npm test'), stop: 'tool_use' })]));
+  await usage.countSession(sid);
+  const v = () => db.prepare("SELECT json_extract(state, '$.v') AS v FROM claude_usage_reads WHERE session_id = ?").get(sid).v;
+  const tests = () => db.prepare("SELECT n FROM task_checks WHERE session_id = ? AND kind = 'tests'").get(sid)?.n;
+  assert.equal(tests(), 1);
+  // counted by the board of the version before: the rows stay until the session is read anew
+  db.prepare("UPDATE claude_usage_reads SET state = json_set(state, '$.v', 1) WHERE session_id = ?").run(sid);
+  const n = await usage.startUsageWatch({ delayMs: 0, gapMs: 0 });
+  assert.ok(n >= 1, `the background pass found nothing to read: ${n}`);
+  assert.equal(v(), 2, 'the background pass left a session of the version before unread: its card would say nothing about checks for good');
+  assert.equal(tests(), 1, 'a fresh read added its checks to those of the old count');
 });

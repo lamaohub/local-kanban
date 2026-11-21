@@ -667,6 +667,8 @@ const BOARD_WHY = {
   'tmux-slow': 'tmux did not answer in time, so the board cannot tell whether a Claude already works on these tasks — press ▶ again in a few seconds.',
   'tmux-broken': "tmux was updated while the board's terminals still run on the old one, and the new tmux cannot reach them. Close them with the command in Settings → Errors; the conversations are kept — «Continue» brings each one back.",
 };
+// the advice is a word on the side: a board that does not answer it in time does not hold «Continue»
+const ADVICE_WAIT_MS = 5000;
 /** Continue the board's session `session` of the task `key` in its terminal; true — started. */
 export async function resumeOnBoard({ key, session, btn, again = false }) {
   if (!key || !session) return false;
@@ -674,7 +676,7 @@ export async function resumeOnBoard({ key, session, btn, again = false }) {
     if (btn?.disabled) return false; // a second click while the advice is asked
     if (btn) btn.disabled = true;
     let advice = null;
-    try { advice = (await api('GET', `/api/tasks/${encodeURIComponent(key)}/resume-advice?session=${encodeURIComponent(session)}`, undefined, { quiet: true }))?.advice; } catch { /* no advice — continue as before */ }
+    try { advice = (await api('GET', `/api/tasks/${encodeURIComponent(key)}/resume-advice?session=${encodeURIComponent(session)}`, undefined, { quiet: true, signal: AbortSignal.timeout(ADVICE_WAIT_MS) }))?.advice; } catch { /* no advice in time — continue as before */ }
     if (btn) btn.disabled = false;
     if (advice) {
       const pick = await styledConfirm(resumeWords(advice, tr), { okLabel: tr('Continue'), alt: tr('New session') });

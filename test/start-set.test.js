@@ -79,3 +79,48 @@ test('a project gets the median of its sessions of the last days; over the norm 
   assert.equal(p.parts.skills, 300);
   // a guest of Wi-Fi gets none — test/share.test.js asks the route as a guest
 });
+
+// edge of a 256 KiB read, a <synthetic> answer, only the kanban skill, an archived project, the median of an even count
+test('servers after the second request, <synthetic> answers and other skills are not the start set', () => {
+  const noSkill = [
+    L({ type: 'attachment', attachment: { type: 'mcp_instructions_delta' }, rendered: 'M'.repeat(80) }),
+    L({ type: 'assistant', message: { id: 's0', model: '<synthetic>', usage: usage(5) } }),
+    L({ type: 'assistant', message: { id: 'a1', model: 'claude-opus-5-5', usage: usage(10_000) } }),
+    L({ type: 'attachment', attachment: { type: 'deferred_tools_delta' }, rendered: 'D'.repeat(20) }),
+    L({ type: 'assistant', message: { id: 'a2', model: 'claude-opus-5-5', usage: usage(11_000) } }),
+    L({ type: 'attachment', attachment: { type: 'deferred_tools_delta' }, rendered: 'Z'.repeat(5000) }),
+    L({ type: 'user', isMeta: true, message: { content: [{ type: 'text', text: 'Base directory for this skill: /h/.claude/skills/kanban-old\n\nX' }] } }),
+    L({ type: 'assistant', message: { id: 'a3', model: 'claude-opus-5-5', usage: usage(12_000) } }),
+  ];
+  const r = S.startOf(noSkill);
+  assert.equal(r.first, 10_003, 'a <synthetic> line taken for the first request');
+  assert.equal(r.parts.mcp, 100, 'a server added mid-work counted in the start set');
+  assert.equal(r.with_skill, null, 'another skill taken for the kanban skill');
+  assert.equal(r.parts.kanban, 0);
+});
+
+test('a letter cut by the edge of a read is whole; an archived project is left out; an even count has the middle of two', async () => {
+  const pid = Number(db.prepare("INSERT INTO projects (slug, prefix, name, next_task_no) VALUES ('edge', 'EDG', 'Edge', 2)").run().lastInsertRowid);
+  const tid = Number(db.prepare("INSERT INTO tasks (project_id, task_no, title, status) VALUES (?, 1, 'one', 'doing')").run(pid).lastInsertRowid);
+  const lines = transcript({ first: 60_000, skill: 80_000 });
+  const k = lines.findIndex((l) => l.includes('Base directory'));
+  const before = `${lines.slice(0, k).join('\n')}\n`;
+  const opening = L({ type: 'user', timestamp: at(2), isMeta: true, message: { role: 'user', content: [{ type: 'text', text: 'Base directory for this skill: /h/.claude/skills/kanban\n\n' }] } }).slice(0, -5);
+  const fill = 256 * 1024 - 1 - Buffer.byteLength(before + opening); // U+0436 (two bytes in UTF-8) starts one byte before the edge
+  const text = `Base directory for this skill: /h/.claude/skills/kanban\n\n${'K'.repeat(fill)}\u0436${'K'.repeat(99)}`;
+  lines[k] = L({ type: 'user', timestamp: at(2), isMeta: true, message: { role: 'user', content: [{ type: 'text', text }] } });
+  const body = `${lines.join('\n')}\n`;
+  assert.equal(Buffer.from(body).indexOf(Buffer.from('\u0436')), 256 * 1024 - 1, 'the fixture lost its edge');
+  const one = '55555555-5555-4555-8555-555555555555';
+  const two = '66666666-6666-4666-8666-666666666666';
+  writeFileSync(join(dir, `${one}.jsonl`), body);
+  writeFileSync(join(dir, `${two}.jsonl`), `${transcript({ first: 70_001, skill: 90_000 }).join('\n')}\n`);
+  for (const sid of [one, two]) db.prepare("INSERT INTO task_sessions (task_id, session_id, first_seen, last_seen) VALUES (?, ?, datetime('now', '-1 day'), datetime('now'))").run(tid, sid);
+  let p = (await app.inject('/api/health/start')).json().projects.find((x) => x.slug === 'edge');
+  assert.equal(p.sessions, 2);
+  assert.equal(p.parts.kanban, Math.round((text.length + 'Base directory for this skill: /h/.claude/skills/kanban\n\n'.length + 500) / 2), 'a letter on the edge of a chunk was broken');
+  assert.deepEqual([p.first, p.with_skill], [65_001, 85_000], 'the median of two is the middle of them');
+  db.prepare("UPDATE projects SET archived = 1 WHERE id = ?").run(pid);
+  p = (await app.inject('/api/health/start')).json().projects.find((x) => x.slug === 'edge');
+  assert.equal(p, undefined, 'an archived project is in the start set');
+});

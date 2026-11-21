@@ -62,6 +62,16 @@ export function statusEnds(raw, task) {
   const a = d?.type === 'attachment' ? d.attachment : null;
   return a?.type === 'task_status' && a.taskId === task && STATUS_ENDS.has(a.status);
 }
+/* the helper's message as Claude Code hands it in — a line of the user, or a command queued while Claude was at work —
+   not a quote of it in Claude's words or in a tool's answer (Claude reading its own transcript) */
+const helperWrote = (raw, task) => {
+  if (!fromHelper(raw, task) || raw.includes('"queue-operation"')) return false;
+  let d;
+  try { d = JSON.parse(raw); } catch { return false; }
+  if (d?.type === 'attachment') return d.attachment?.type === 'queued_command';
+  const c = d?.type === 'user' ? d.message?.content : null;
+  return typeof c === 'string' || (Array.isArray(c) && !c.some((b) => b?.type === 'tool_result'));
+};
 const notesOf = (raw, task) => [...String(raw).matchAll(NOTE_BLOCK)].some(([b]) => b.includes(`<task-id>${task}</task-id>`));
 /** Whether the lines `rest` (raw, oldest first) tell of the end of work `id` (its task `task`). */
 export function endedAmong(rest, id, task) {
@@ -69,7 +79,7 @@ export function endedAmong(rest, id, task) {
   for (const raw of rest) {
     if (endsIn(raw, id, task) || statusEnds(raw, task)) return true;
     if (task && wrote && notesOf(raw, task)) return true;
-    if (task && fromHelper(raw, task) && !raw.includes('"queue-operation"')) wrote = true;
+    if (task && helperWrote(raw, task)) wrote = true;
   }
   return false;
 }

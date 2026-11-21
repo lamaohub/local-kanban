@@ -307,3 +307,18 @@ test('a refused delete of a skill says why, and a save refused for a missing fol
   const save = settings.slice(saveAt, settings.indexOf('\n  };', saveAt));
   assert.match(save, /if \(e\.status === 409 && e\.body\?\.reason !== 'no-folder'\) loadSkillText\(/, 'a save refused for a missing folder reads the skill again');
 });
+
+test('the shipped kanban skill: every references/ link of the core resolves, the deploy skill waits for shipping, no copies or ports of the owner', () => {
+  const root = fileURLToPath(new URL('../skills/kanban/', import.meta.url));
+  const core = readFileSync(join(root, 'SKILL.md'), 'utf8');
+  const links = [...new Set([...core.matchAll(/\]\((references\/[\w.-]+\.md)\)/g)].map((m) => m[1]))];
+  assert.ok(links.length >= 6, `the core lost its pointers to references/: ${links}`);
+  assert.deepEqual(links.filter((l) => !existsSync(join(root, l))), [], 'the core points to a references/ file the package does not ship');
+  const step2 = core.slice(core.indexOf('2. **HARD RULE'), core.indexOf('\n3. '));
+  assert.match(step2, /\*\*Do NOT read\s+the deploy skill at the start\*\*/, 'step 2 asks for the deploy skill at the start again (CK-1072)');
+  assert.match(step2, /\*\*Earlier only when the task is about production\*\*/);
+  for (const rel of ['SKILL.md', ...links]) {
+    const text = readFileSync(join(root, rel), 'utf8');
+    assert.doesNotMatch(text, /:3101\b|sandbox/i, `${rel} tells strangers about the owner's copies of the board (CK-372)`);
+  }
+});

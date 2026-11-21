@@ -120,6 +120,7 @@ const REVIEW_SKILL = /^(?:[\w-]+:)?(?:code-review|security-review|review)$/;
 const REVIEW_COMMAND = /<command-name>\/?(?:[\w-]+:)?(?:code-review|security-review|review)<\/command-name>/;
 // a script that drives a browser: playwright loaded by JavaScript or Python
 const PLAYWRIGHT_LOAD = /\brequire\(\s*['"](?:playwright|@playwright\/test)['"]|\bfrom\s+['"](?:playwright|@playwright\/test)['"]|\bimport\(\s*['"]playwright['"]|\bfrom\s+playwright(?:\.\w+)*\s+import\b|\bimport\s+playwright\b/;
+const SHELL_WORDS = new Set(['do', 'then', 'else', 'elif', 'if', 'while', 'until', '!']); // a loop's or a condition's body
 const WRAPPERS = new Set(['sudo', 'env', 'time', 'nice', 'command', 'exec', 'caffeinate', 'xargs', 'nohup']);
 const VALUE_FLAGS = new Set(['-C', '--dir', '--prefix', '--filter', '-F', '-w', '--workspace', '--cwd', '--cache']);
 const RUNNERS = new Set(['vitest', 'jest', 'mocha', 'ava', 'pytest']);
@@ -147,6 +148,7 @@ function segmentCheck(seg) {
     if (/^[A-Za-z_]\w*=/.test(w[0])) env.push(w.shift());
     else if (WRAPPERS.has(h)) { w.shift(); while (w[0]?.startsWith('-')) w.shift(); }
     else if (h === 'rtk' && w[1] === 'proxy') w.splice(0, 2);
+    else if (SHELL_WORDS.has(w[0])) w.shift(); // a test run in a loop or a condition on one line: `for …; do npm test; done`
     else if (h === 'timeout' || h === 'script') { w.shift(); while (w[0]?.startsWith('-')) w.shift(); w.shift(); }
     else break;
   }

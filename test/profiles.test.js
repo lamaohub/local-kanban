@@ -291,3 +291,38 @@ test('a profile keeps its sessions to the servers it names and switches plugins 
   assert.equal((await app.inject('/api/profiles')).json().default, null, 'the board\'s profile went with it');
   assert.equal((await app.inject('/api/tasks/PF-2')).json().profile_name, null);
 });
+
+// own profile over the board's, an empty list keeping every server out, the names not given to a guest, kb's «(the board's)»
+test('a server is taken as Claude Code would; the project\'s profile wins over the board\'s; an empty list keeps all out', async () => {
+  const work = join(tmp, 'work');
+  writeFileSync(join(process.env.KB_CLAUDE_DIR, '.claude.json'), JSON.stringify({
+    mcpServers: { pw: { type: 'stdio', command: 'user' }, repo: { type: 'stdio', command: 'user' }, only: { type: 'stdio', command: 'user' } },
+    projects: { [work]: { mcpServers: { pw: { type: 'stdio', command: 'local' } } } },
+  }));
+  writeFileSync(join(work, '.mcp.json'), JSON.stringify({ mcpServers: { pw: { type: 'stdio', command: 'project' }, repo: { type: 'stdio', command: 'project' }, shared: { type: 'stdio', command: 'project' } } }));
+  const servers = (r) => JSON.parse(readFileSync(r.args[r.args.indexOf('--mcp-config') + 1], 'utf8')).mcpServers;
+  const start = async () => (await app.inject({ method: 'POST', url: '/api/launch', payload: { mode: 'board', project: 'pf', keys: ['PF-4'], text: 'Do it' } })).json();
+  const board = (await post({ name: 'Board keeps', mcp: ['pw', 'repo', 'only', 'shared'] })).json();
+  const own = (await post({ name: 'Project keeps none', mcp: [] })).json();
+  assert.deepEqual(own.mcp, [], 'a list left empty is «no server», not «every server»');
+  await app.inject({ method: 'PUT', url: '/api/profiles/default', payload: { profile: board.id } });
+  await app.inject({ method: 'PATCH', url: '/api/projects/pf', payload: { profile_id: null } });
+  let r = await start();
+  assert.deepEqual(Object.fromEntries(Object.entries(servers(r)).map(([k, v]) => [k, v.command])), { pw: 'local', repo: 'project', only: 'user', shared: 'project' });
+  const port = app.server.address().port;
+  const env = { ...process.env, KB_URL: `http://127.0.0.1:${port}` };
+  const kb = (...a) => new Promise((ok) => { execFile(process.execPath, [fileURLToPath(new URL('../bin/kb', import.meta.url)), ...a], { env }, (e, out) => ok(out)); });
+  assert.match(await kb('show', 'PF-4'), /^profile: Board keeps \(the board's\)$/m);
+  await app.inject({ method: 'PATCH', url: '/api/projects/pf', payload: { profile_id: own.id } });
+  assert.equal((await app.inject('/api/tasks/PF-4')).json().profile_name, 'Project keeps none', 'the board\'s profile was taken over the project\'s own');
+  r = await start();
+  assert.ok(r.args.includes('--strict-mcp-config'));
+  assert.deepEqual(servers(r), {}, 'an empty list let servers in');
+  assert.match(await kb('show', 'PF-4'), /^profile: Project keeps none \(the project's\)$/m);
+  const guest = (await app.inject({ url: '/api/profiles', headers: { 'x-kb-guest': '1' } })).json();
+  assert.equal(guest.servers, undefined, 'a guest of Wi-Fi was told the owner\'s MCP servers');
+  assert.equal(guest.plugins, undefined);
+  await app.inject({ method: 'PATCH', url: '/api/projects/pf', payload: { profile_id: null } });
+  await app.inject({ method: 'PUT', url: '/api/profiles/default', payload: { profile: null } });
+  rmSync(join(work, '.mcp.json'), { force: true });
+});

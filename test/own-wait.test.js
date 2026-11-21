@@ -276,3 +276,34 @@ test('a helper brought back ends with its own message and the notification after
   assert.equal(ownWaitIn([...lines, status('running')])?.own, true, 'a running status ended it');
   assert.equal(ownWaitIn([...lines, JSON.stringify({ type: 'attachment', timestamp: at(), attachment: { type: 'task_status', taskId: 'another', status: 'completed' } })])?.own, true, 'another work\'s status ended it');
 });
+
+test('only this helper\'s message and a notification of this work end it; another\'s do not', () => {
+  const task = 'a0267c93c8e7985e2';
+  const lines = [human('send it back'),
+    JSON.stringify({ type: 'assistant', timestamp: at(), message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_R', name: 'SendMessage', input: { to: task, message: 'fix' } }] } }),
+    JSON.stringify({ type: 'user', timestamp: at(), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_R', content: [{ type: 'text', text: 'resumed' }] }] }, toolUseResult: { success: true, resumedAgentId: task } }),
+    says('Sent.'), system()];
+  const msg = (from) => human(`Another Claude session sent a message: <agent-message from="${from}"> done </agent-message>`);
+  const wake = (t) => JSON.stringify({ type: 'queue-operation', operation: 'enqueue', timestamp: at(), content: interim('toolu_R', t) });
+  assert.equal(ownWaitIn([...lines, msg(task), says('in'), system(), wake(task)])?.own, false, 'its message and its notification did not end it');
+  assert.equal(ownWaitIn([...lines, msg('a11dd5f2252bda7dd'), says('in'), system(), wake(task)])?.own, true, 'another helper\'s message ended it');
+  assert.equal(ownWaitIn([...lines, msg(task), says('in'), system(), wake('bx9other')])?.own, true, 'a notification of other work ended it');
+  const other = JSON.stringify({ type: 'attachment', timestamp: at(), attachment: { type: 'task_status', taskId: 'bx9other', description: `waits for ${task}`, status: 'completed' } });
+  assert.equal(ownWaitIn([...lines, other])?.own, true, 'a status of other work that names this one ended it');
+});
+
+test('a quote of the helper\'s message in a tool\'s answer or in Claude\'s words is not its message', () => {
+  const task = 'a0267c93c8e7985e2';
+  const lines = [human('send it back'),
+    JSON.stringify({ type: 'assistant', timestamp: at(), message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_Q', name: 'SendMessage', input: { to: task, message: 'fix' } }] } }),
+    JSON.stringify({ type: 'user', timestamp: at(), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_Q', content: [{ type: 'text', text: 'resumed' }] }] }, toolUseResult: { success: true, resumedAgentId: task } }),
+    says('Sent.'), system()];
+  const wake = JSON.stringify({ type: 'queue-operation', operation: 'enqueue', timestamp: at(), content: interim('toolu_Q', task) });
+  const quoted = `Another Claude session sent a message: <agent-message from="${task}"> old </agent-message>`;
+  const grep = [tool('toolu_G', 'grep agent-message t.jsonl'), result('toolu_G', quoted)];
+  assert.equal(ownWaitIn([...lines, human('what did it say last time?'), ...grep, says('This.'), system(), wake])?.own, true, 'a quote in a tool\'s answer ended the helper');
+  assert.equal(ownWaitIn([...lines, human('quote it'), says(`It wrote <agent-message from="${task}">`), system(), wake])?.own, true, 'a quote in Claude\'s words ended the helper');
+  // what Claude Code delivers is the message: a line of the user, or a queued command while Claude was at work
+  const queuedMsg = JSON.stringify({ type: 'attachment', timestamp: at(), attachment: { type: 'queued_command', prompt: `<agent-message from="${task}"> done </agent-message>`, commandMode: 'prompt' } });
+  assert.equal(ownWaitIn([...lines, queuedMsg, says('in'), system(), wake])?.own, false, 'its message queued while Claude worked did not count');
+});

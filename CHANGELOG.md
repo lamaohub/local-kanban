@@ -8,6 +8,14 @@ version it goes out as and opens an empty one again. Released sections are histo
 
 ## [Unreleased]
 
+## [2.0.0-beta.25]
+
+### Fixed
+
+- «Continue» no longer stays greyed out for good when the board does not answer its question about the cost of continuing: it waits up to 5 seconds, then continues as before.
+- A helper brought back to work is no longer taken for finished by a quote of its old message in Claude's words or in a tool's answer: of its messages, only the one Claude Code hands in ends the wait.
+- The card's «Checked» line counts a test run inside a one-line loop or condition (`for …; do npm test; done`, `if …; then pytest; fi`).
+
 ## [2.0.0-beta.24]
 
 ### Added

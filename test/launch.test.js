@@ -328,6 +328,32 @@ test('the copies of To do and Backlog and the copied resume line name the board,
   }
 });
 
+// key's prefix) finds the project's folder by that prefix
+test('the copy of Backlog and a copy by a key\'s prefix name the project\'s folder', async () => {
+  const sse = readFileSync(new URL('../public/js/sse.js', import.meta.url), 'utf8');
+  const piece = (head, end = '\n}\n') => {
+    const at = sse.indexOf(head);
+    assert.ok(at >= 0, `${head} is gone from sse.js`);
+    return sse.slice(at, sse.indexOf(end, at) + end.length).replace(/^export /, '');
+  };
+  const copied = [];
+  const box = {
+    location: { port: '3100' }, withBoardAddress, withFolders, KB_DEFAULT_PORT: '3100', ALL: '__all__',
+    state: { slug: 'site', projects: [{ slug: 'site', prefix: 'SIT', path: '/code/site' }] },
+    tr: (s) => s, ic: () => '', setTimeout: () => 0, copyText: async (t) => { copied.push(t); return true; },
+    api: async () => ({ port: 3100 }), getSetting: () => 'copy', pickedSetting: () => 'copy', launchPick, boardOnly, effortOf, startEffort, checksOnly,
+  };
+  vm.runInNewContext(['var launchAvail = null;', piece('function boardPort('), piece('const promptHere ', ';\n'), piece('const foldersOf ', ';\n'),
+    piece('const copyHere ', ';\n'), piece('export async function loadLaunchOptions('), piece('async function launchMode('), piece('function flashButton('),
+    piece('export async function copyBacklogPrompt('), piece('export async function launchInClaude(')].join('\n'), box);
+  const btn = () => ({ innerHTML: '', title: '', textContent: '', classList: { toggle() {}, remove() {} } });
+  const folder = '\nProject folder: /code/site (Claude Code loads the project\'s instructions only in a session opened there)';
+  await box.copyBacklogPrompt([{ key: 'SIT-2', project: 'site' }], btn());
+  assert.ok(copied[0].endsWith(`SIT-2${folder}`), `the copy of Backlog — ${JSON.stringify(copied[0])}`);
+  await box.launchInClaude({ text: 'Do SIT-3', project: 'SIT', keys: ['SIT-3'], btn: btn() });
+  assert.equal(copied[1], `Do SIT-3${folder}`, 'a copy by the key\'s prefix (resumeOnBoard\'s «New session») lost the folder');
+});
+
 // person's own level of any kind (code.claude.com/docs/en/model-config). The owner's "effortLevel": "high" did not reach
 // Opus 5.5 (it ignores a top-level one of the user's settings) and the board's Claude ran at medium.
 test('the effort level picked on the page goes to Claude inside the board and in the Terminal, and only a known one', async () => {

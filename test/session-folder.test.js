@@ -79,6 +79,8 @@ test('in the folder, in a subfolder and in another copy of the repository — at
   assert.equal(foreignFolder(repo, project), false, 'the top of its own repository');
   assert.equal(foreignFolder(foreign, project), true);
   assert.equal(foreignFolder(join(root, 'gone'), project), false, 'a folder not on this machine — nothing is said');
+  mkdirSync(join(root, 'site'), { recursive: true }); mkdirSync(join(root, 'site-old'), { recursive: true });
+  assert.equal(foreignFolder(join(root, 'site-old'), join(root, 'site')), true, '/a/site-old was taken for a subfolder of /a/site');
 });
 
 test('kb warns a session opened elsewhere, once, with the right folder — on show, take and mv prep', async () => {
