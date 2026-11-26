@@ -252,9 +252,10 @@ let limited = new Map();
 let limitMissed = new Set(); // …that lost the warning line for one look: kept one look more, a redraw is no reset
 let overMissed = new Set();
 let boardLive = new Set();
+let boardDead = new Set();
 let workProjects = [];
 let questionsNow = [];
-let lastLook = { live: [], questions: [], background: [], over: [], limited: [] };
+let lastLook = { live: [], questions: [], background: [], over: [], limited: [], dead: [] };
 let screensRead = false;
 
 export const screensKnown = () => screensRead;
@@ -264,6 +265,7 @@ export const currentBackground = () => background;
 export const currentOver = () => over;
 export const currentLimited = () => limited;
 export const currentBoardLive = () => boardLive;
+export const currentBoardDead = () => boardDead;
 export const currentWorkProjects = () => workProjects;
 export const currentQuestions = () => questionsNow;
 async function activeProjects(isAlive, alive, bg, ov) {
@@ -309,6 +311,7 @@ export async function refreshLive(isAlive = alive, look = boardLook) {
   limitMissed = missed;
   overMissed = ovMissed;
   boardLive = alive;
+  boardDead = new Set(seen.dead || []);
   if (read) screensRead = true;
   if (json === currentJson) return false;
   current = next;

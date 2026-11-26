@@ -8,6 +8,12 @@ version it goes out as and opens an empty one again. Released sections are histo
 
 ## [Unreleased]
 
+## [2.0.0-beta.26]
+
+### Fixed
+
+- A board terminal killed from outside while its Claude waited for you with the work handed in to Review is no longer missing from «Claude now»: it shows under «Broken terminals» with «Continue» until you accept the work or the terminal is closed, and not under «Claude done» meanwhile.
+
 ## [2.0.0-beta.25]
 
 ### Fixed

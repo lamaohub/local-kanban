@@ -31,6 +31,7 @@ before(async () => {
     '  dead) echo "1|1|120|4242|4141";;',
     '  up) echo "0||120|4242|4141";;',
     `  chain) case "$*" in *list-panes*) echo "kb-${SID}|0";; *) echo "can't find pane: kb-x" >&2; exit 1;; esac;;`,
+    `  deadlist) echo "kb-${SID}|1"; echo "kb-99999999-9999-4999-8999-999999999999|1";;`,
     'esac',
     '',
   ].join('\n'));
@@ -82,6 +83,16 @@ test('a look whose capture tmux failed says so, and is not read as screens with 
   answer('noserver');
   const none = await phantom.boardLook();
   assert.deepEqual([none.failed, none.live], [undefined, []], 'no server of tmux is no terminals, not a failed look');
+});
+
+// the look names them, only the board's own
+test('a look names the board\'s own terminals whose Claude has exited', async () => {
+  sessions.markBoardSession(SID);
+  answer('deadlist');
+  const seen = await phantom.boardLook();
+  assert.deepEqual([seen.live, seen.dead], [[], [SID]]);
+  await live.refreshLive(() => false, async () => seen);
+  assert.deepEqual([...live.currentBoardDead()], [SID]);
 });
 
 // «no terminal». Only tmux's own word closes it; a silence is `unknown`, and the pages keep what they show.

@@ -788,17 +788,18 @@ export async function boardLook() {
   const r = await tmux(['list-panes', '-a', '-F', '#{session_name}|#{pane_dead}']);
   if (r.err) return NO_PANE.test(`${r.text} ${r.err.message}`) ? none : { ...none, failed: true }; // no server: no terminals
   const live = [];
+  const ended = [];
   for (const line of r.out.split('\n')) {
     const [name, dead] = line.trim().split('|');
     const sid = /^kb-(.+)$/.exec(name || '')?.[1];
-    if (sid && ours.has(sid) && dead !== '1') live.push(sid);
+    if (sid && ours.has(sid)) (dead === '1' ? ended : live).push(sid);
   }
-  if (!live.length) return none;
+  if (!live.length) return { ...none, dead: ended };
   // every screen in one call to tmux (as phantomView does): the watch runs every three seconds, and the owner keeps
   // twenty terminals and more
   const screens = await captureScreens(live);
   if (!screens) return { ...none, failed: true }; // a session closed in between: the next look sees the rest
-  const out = { live: [], questions: [], background: [], over: [], limited: [] };
+  const out = { live: [], questions: [], background: [], over: [], limited: [], dead: ended };
   live.forEach((sid) => {
     const screen = screens.get(sid);
     if (screen === undefined) return;

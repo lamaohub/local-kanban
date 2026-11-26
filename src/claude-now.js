@@ -1,6 +1,6 @@
 
 import { db } from './db.js';
-import { boardPaneEnded, boardPaneGone, currentBackground, currentBoardLive, currentLimited, currentOver, readRegistry, screenState, waitsPastTasks, worksPastTasks } from './claude-live.js';
+import { boardPaneEnded, boardPaneGone, currentBackground, currentBoardDead, currentBoardLive, currentLimited, currentOver, readRegistry, screenState, waitsPastTasks, worksPastTasks } from './claude-live.js';
 import { sessionEvents, sessionWindows } from './work-feed.js';
 import { WAIT_MAX_H, freshLaunchSessions, isBoardSession, waitingLaunches } from './claude-sessions.js';
 import { noclaudeFilter } from './task-shape.js';
@@ -105,13 +105,26 @@ export async function activeBoardSessions(isAlive, registryOf = () => readRegist
   return out;
 }
 
+/** The board's sessions, not among `active`, whose terminal stands with its Claude stopped from outside and whose tasks
+    wait on the person: Set sid. */
+export async function parkedBoardSessions(active = new Map(), paneOf = undefined) {
+  const sids = [...currentBoardDead()].filter((sid) => !active.has(sid));
+  const out = new Set();
+  if (!sids.length) return out;
+  for (const { session_id: sid } of db.prepare(WAITS_ON_PERSON).all(JSON.stringify(sids))) {
+    if ((await boardPaneEnded(sid, paneOf))?.interrupted) out.add(sid);
+  }
+  return out;
+}
+
 export async function nowRuns(isAlive, paneOf = undefined, ownWork = waitsOwnWork) { // paneOf: boardPaneGone's own default when not given
   let reg = null;
   const registryOf = async () => (reg ||= await readRegistry(isAlive));
   const active = await activeBoardSessions(isAlive, registryOf);
-  const rows = db.prepare(ROWS).all(JSON.stringify([...active.keys()]));
+  const parked = await parkedBoardSessions(active, paneOf);
+  const rows = db.prepare(ROWS).all(JSON.stringify([...active.keys(), ...parked]));
   const working = rows.filter((r) => WORKING.has(r.status)).length;
-  if (!rows.some((r) => HOLDS.has(r.status)) && !active.size) return { runs: [], tasks_n: 0 };
+  if (!rows.some((r) => HOLDS.has(r.status)) && !active.size && !parked.size) return { runs: [], tasks_n: 0 };
   const waiting = waitingLaunches();
   const bySession = new Map(); // session → its rows
   const loose = new Map();     // `${project} ${stale}` → rows in work that no session is tied to; `… start` — ▶'s
@@ -127,7 +140,7 @@ export async function nowRuns(isAlive, paneOf = undefined, ownWork = waitsOwnWor
   const fresh = bySession.size ? freshLaunchSessions() : new Set();
   const runs = [];
   for (const [sid, list] of bySession) {
-    if (!list.some((r) => HOLDS.has(r.status)) && !active.has(sid)) continue;
+    if (!list.some((r) => HOLDS.has(r.status)) && !active.has(sid) && !parked.has(sid)) continue;
     const entry = registry.get(sid);
     // turn over on the screen
     let claude = screenState(entry, { bg: currentBackground().has(sid), over: currentOver().has(sid) });

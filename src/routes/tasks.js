@@ -19,7 +19,7 @@ import { taskFeed } from '../work-feed.js';
 import { sessionContext, taskUsage } from '../claude-usage.js';
 import { resumeAdvice } from '../resume-advice.js';
 import { currentWorkProjects, liveTasks, terminalQuestions } from '../claude-live.js';
-import { activeBoardSessions, doneRuns, nowRuns } from '../claude-now.js';
+import { activeBoardSessions, doneRuns, nowRuns, parkedBoardSessions } from '../claude-now.js';
 import { closeFinishedTerminals, taskTerminal } from '../phantom.js';
 import { CHECK_LABEL, OPEN_CHECK, isCheck, leadCheck, openCheck, secondCheck } from '../review-check.js';
 import { treePrint, turnCommits } from '../tree-print.js';
@@ -719,7 +719,10 @@ export default async function taskRoutes(app) {
 
   app.get('/api/now', async () => nowRuns());
 
-  app.get('/api/done', async () => doneRuns({ active: [...(await activeBoardSessions()).keys()] }));
+  app.get('/api/done', async () => {
+    const active = await activeBoardSessions();
+    return doneRuns({ active: [...active.keys(), ...(await parkedBoardSessions(active))] });
+  });
 
   app.get('/api/tasks/:id/work', async (req, reply) => {
     const t = taskOr404(req, reply); if (!t) return reply;
